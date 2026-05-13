@@ -31,7 +31,9 @@
 //   title         ← positionName
 //   project       ← jobProjectName
 //   recruit_label ← jobType  (e.g. "大模型", "策略算法", "引擎"; null → "")
-//   bgs           ← duty (first 120 chars — full text is long)
+//   bgs           ← "" (Xiaohongshu does not expose a BU / business-line field
+//                       in the list or detail API; the raw entry has no department,
+//                       businessLine, team, or bu key — checked 2026-05-13)
 //   work_cities   ← workplace  (already a human-readable string, e.g. "北京市，上海市")
 //   apply_url     ← DETAIL_PAGE(positionId)
 
@@ -150,14 +152,14 @@ interface RawPositionListEntry {
 
 function summarizePosition(item: RawPositionListEntry): PositionSummary {
   const postId = String(item.positionId ?? "");
-  // duty can be very long; surface just the first 120 chars as a teaser in `bgs`
-  const bgsText = (item.duty ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
   return {
     post_id: postId,
     title: item.positionName ?? "",
     project: item.jobProjectName ?? "",
     recruit_label: (item.jobType ?? "").trim(),
-    bgs: bgsText,
+    // Xiaohongshu does not expose a BU / business-unit field in the list API.
+    // The raw entry contains no department, businessLine, team, or bu key.
+    bgs: "",
     work_cities: (item.workplace ?? "").trim(),
     apply_url: postId ? DETAIL_PAGE(postId) : CAMPUS_PAGE,
   };
@@ -205,6 +207,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
     };
   }
   const rows = response.data.list ?? [];
+  // The upstream API appears to ignore pageSize and always returns its default
+  // page size (~10). Enforce the caller's requested pageSize by slicing here.
+  const trimmed = rows.slice(0, pageSize);
   return {
     ok: true as const,
     source: "job.xiaohongshu.com",
@@ -212,7 +217,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
     page,
     page_size: pageSize,
     total: response.data.total ?? rows.length,
-    positions: rows.map(summarizePosition),
+    positions: trimmed.map(summarizePosition),
   };
 }
 
