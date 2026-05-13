@@ -13,7 +13,7 @@ import {
   memoryClear,
 } from "./memory.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 const HELP = `
 job-pro — query Chinese big-tech campus recruiting from your terminal
@@ -84,6 +84,59 @@ function popFlagValue(args: string[], name: string): { args: string[]; value?: s
   return { args: out, value };
 }
 
+// Generic flag harvester: walk the remaining args, pull every `--<flag> <value>`
+// pair into an options bag (kebab-case → camelCase), parse CSVs to arrays and
+// integer-looking values to numbers, and return the positional args left over.
+// This is what lets adapter-specific filters like `--bg-ids 956,29294`,
+// `--cities 北京,上海`, `--recruitment-id-list 201,202`, `--batch-id 100000560002`,
+// `--recruit-type social` flow straight into the adapter's SearchOptions.
+function kebabToCamel(s: string): string {
+  return s.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+function parseScalar(v: string): unknown {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (/^-?\d+$/.test(v)) return Number(v);
+  return v;
+}
+function parseValue(v: string): unknown {
+  if (v.includes(",")) return v.split(",").map((p) => parseScalar(p.trim()));
+  return parseScalar(v);
+}
+// Adapter SearchOptions whose names look like plurals / id lists must always
+// receive an array, so `--bg-ids 29294` (single value) becomes `[29294]`,
+// not `29294`. Multi-value via CSV (`--bg-ids 29294,956`) already arrays.
+function maybeArrayWrap(key: string, value: unknown): unknown {
+  if (Array.isArray(value)) return value;
+  if (/(?:Ids|IdList|List|Codes|Categories|Regions|Cities|Departments)$/.test(key)) {
+    return [value];
+  }
+  return value;
+}
+function popAllOpts(args: string[]): { args: string[]; opts: Record<string, unknown> } {
+  const out: string[] = [];
+  const opts: Record<string, unknown> = {};
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i];
+    if (a.startsWith("--") && a.length > 2) {
+      const key = kebabToCamel(a.slice(2));
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        opts[key] = maybeArrayWrap(key, parseValue(next));
+        i += 2;
+      } else {
+        opts[key] = true;
+        i += 1;
+      }
+    } else {
+      out.push(a);
+      i += 1;
+    }
+  }
+  return { args: out, opts };
+}
+
 function emit(value: unknown, compact: boolean) {
   if (compact) {
     console.log(JSON.stringify(value));
@@ -133,14 +186,12 @@ async function runCompany(
   const { args, compact } = popCompactFlag(rest);
 
   if (verb === "search") {
-    const { args: a, value: page } = popFlagValue(args, "--page");
-    const { args: a2, value: pageSize } = popFlagValue(a, "--page-size");
-    const keyword = a2.join(" ").trim();
+    const { args: positional, opts } = popAllOpts(args);
+    const keyword = positional.join(" ").trim();
     return emit(
       await adapter.searchPositions({
         keyword,
-        page: page ? Number(page) : undefined,
-        pageSize: pageSize ? Number(pageSize) : undefined,
+        ...opts,
       }),
       compact
     );
@@ -153,14 +204,12 @@ async function runCompany(
   }
 
   if (verb === "all") {
-    const { args: a, value: maxPages } = popFlagValue(args, "--max-pages");
-    const { args: a2, value: pageSize } = popFlagValue(a, "--page-size");
-    const keyword = a2.join(" ").trim();
+    const { args: positional, opts } = popAllOpts(args);
+    const keyword = positional.join(" ").trim();
     return emit(
       await adapter.fetchAllPositions({
         keyword,
-        maxPages: maxPages ? Number(maxPages) : undefined,
-        pageSize: pageSize ? Number(pageSize) : undefined,
+        ...opts,
       }),
       compact
     );

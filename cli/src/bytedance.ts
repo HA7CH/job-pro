@@ -334,11 +334,17 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const offset = (page - 1) * pageSize;
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
 
-  // Build optional filter arrays — undefined means "omit the key" (API returns all for that dim)
-  const recruitmentIdList =
-    opts.recruitmentIdList !== undefined
-      ? opts.recruitmentIdList
-      : ["201"]; // default: 正式/new-grad (matches site default 校园招聘 tab)
+  // Build optional filter arrays — undefined means "omit the key" (API returns
+  // all for that dim). The ByteDance server is strict: it expects every entry
+  // in *_id_list to be a string ("201", "CT_11", "7621018569480046853") and
+  // 400s when a number sneaks through, which happens easily when the CLI flag
+  // looks numeric. Stringify everything coming in.
+  const asStringList = (v: unknown): string[] | undefined => {
+    if (v === undefined) return undefined;
+    const arr = Array.isArray(v) ? v : [v];
+    return arr.map(String);
+  };
+  const recruitmentIdList = asStringList(opts.recruitmentIdList) ?? ["201"];
 
   const payload: Record<string, unknown> = {
     keyword,
@@ -353,14 +359,17 @@ export async function searchPositions(opts: SearchOptions = {}) {
   };
 
   // Inject optional filters only when caller explicitly provides them
-  if (opts.jobCategoryIdList?.length) {
-    payload.job_category_id_list = opts.jobCategoryIdList;
+  const jobCategoryIdList = asStringList(opts.jobCategoryIdList);
+  if (jobCategoryIdList?.length) {
+    payload.job_category_id_list = jobCategoryIdList;
   }
-  if (opts.cityIdList?.length) {
-    payload.location_code_list = opts.cityIdList;
+  const cityIdList = asStringList(opts.cityIdList);
+  if (cityIdList?.length) {
+    payload.location_code_list = cityIdList;
   }
-  if (opts.subjectIdList?.length) {
-    payload.subject_id_list = opts.subjectIdList;
+  const subjectIdList = asStringList(opts.subjectIdList);
+  if (subjectIdList?.length) {
+    payload.subject_id_list = subjectIdList;
   }
 
   const response = await call<RawSearchData>("/search/job/posts", payload);
