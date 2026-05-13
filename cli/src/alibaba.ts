@@ -12,6 +12,20 @@
 //
 // No public dictionary / notice endpoints were found; those exports are stubbed.
 //
+// DEFAULT BATCH SCOPE:
+//   batchId 100000540002 = "阿里巴巴2027届实习生" (Alibaba 2027 class internships only).
+//   All positions returned have categoryType: "internship" — this batch does NOT include
+//   full-time new-grad (校招正式) roles. The batch name is embedded in each result's
+//   batchName field. When a full-time new-grad batch opens it will have a different
+//   batchId; pass --batch-id explicitly to target it.
+//   As of 2026-05-13 the only other active batch is 100000560002 ("阿里巴巴日常实习生",
+//   225 roles, categoryType: "project").
+//
+// CHANNEL NOTE:
+//   The live site (window.__sysconfig.channelCodeMap.campus) now uses
+//   "new_campus_group_official_site". Both channel values return identical counts
+//   for batchId 100000540002 (474 total), so either works; the new name is canonical.
+//
 // PositionSummary field mapping (Alibaba → canonical):
 //   post_id        ← String(item.id)                (numeric, e.g. 199903220038)
 //   title          ← item.name
@@ -30,7 +44,7 @@ const DETAIL_PAGE = (id: string | number) =>
   `${API_ROOT}/campus/positionDetail?positionId=${encodeURIComponent(String(id))}`;
 
 const DEFAULT_BATCH_ID = 100000540002;
-const DEFAULT_CHANNEL = "campus_group_official_site";
+const DEFAULT_CHANNEL = "new_campus_group_official_site";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
