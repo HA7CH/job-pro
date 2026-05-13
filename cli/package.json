@@ -27,6 +27,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
+    "test": "tsx test/smoke.ts",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
