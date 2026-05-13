@@ -41,7 +41,7 @@ export { extractResumeSignals, scoreOverlap };
 const API_ROOT = "https://campus-talent.alibaba.com";
 const CAMPUS_PAGE = `${API_ROOT}/campus/position`;
 const DETAIL_PAGE = (id: string | number) =>
-  `${API_ROOT}/campus/positionDetail?positionId=${encodeURIComponent(String(id))}`;
+  `${API_ROOT}/campus/position/${encodeURIComponent(String(id))}`;
 
 const DEFAULT_BATCH_ID = 100000540002;
 const DEFAULT_CHANNEL = "new_campus_group_official_site";
