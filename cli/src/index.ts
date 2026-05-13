@@ -18,6 +18,7 @@ import * as minimax from "./minimax.js";
 import * as huawei from "./huawei.js";
 import * as weibo from "./weibo.js";
 import * as mihoyo from "./mihoyo.js";
+import * as pingan from "./pingan.js";
 import {
   memoryList,
   memoryGet,
@@ -56,6 +57,7 @@ COMPANIES
   huawei           career.huawei.com           (Huawei / 华为)
   weibo            career.sina.com.cn          (Weibo / 微博 — auth-gated, limited)
   mihoyo           campus.mihoyo.com           (miHoYo / 米哈游 — SPA, limited)
+  pingan           campus.pingan.com           (Ping An / 平安 — unified group)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -212,6 +214,7 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   huawei: huawei as unknown as CompanyAdapter,
   weibo: weibo as unknown as CompanyAdapter,
   mihoyo: mihoyo as unknown as CompanyAdapter,
+  pingan: pingan as unknown as CompanyAdapter,
 };
 
 async function runCompany(
