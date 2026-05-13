@@ -1,24 +1,131 @@
 // Thin client for Meituan's public recruiting API at zhaopin.meituan.com.
 //
 // All endpoints are unauthenticated; the server just checks Referer/Origin.
-// Endpoint inventory:
+// Endpoint inventory (verified 2026-05-14):
 //
 //   POST /api/official/job/getJobList      — paginated job search
 //   POST /api/official/job/getJobDetail    — single job detail by jobUnionId
+//   POST /api/official/city/search         — resolve city name → {code, name}
 //
 // Response envelope: { status: 1, message: "成功", data: { ... } }
 // NOTE: status === 1 (not 0) indicates success on this platform.
 //
-// jobType codes (re-verified 2026-05-13 against the live job-list page,
-// where the "校招" tab shows ~643 = code 1 + code 2 combined):
-//   "1" → 校招应届正式岗 (new-grad full-time)   — totalCount ~112
-//          sample titles: 自动驾驶算法工程师 / 计算机视觉工程师
-//   "2" → 实习 (intern)                          — totalCount ~531
-//          sample titles: HR实习生-招聘方向 / 策略运营实习生
-//   "3" → 社招 (experienced hire)                — totalCount ~2616
-//          NOT what users mean by "校招"; the previous default ["3"] was
-//          misleading. New default is ["1","2"] which mirrors what
-//          zhaopin.meituan.com itself surfaces under the 校招 tab.
+// ═══════════════════════════════════════════════════════════════════════════
+// FILTER TAXONOMY (all verified against live API 2026-05-14)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ── 1. jobType (in request body as jobType: [{code, subCode:[]}]) ──────────
+//   "1" → 校招应届正式 (new-grad full-time)     totalCount ~112
+//          jobSpecialCode distribution: {"1":72, "3":27, "7":1}
+//          sample: 自动驾驶算法工程师 / 计算机视觉工程师
+//   "2" → 实习 (intern)                          totalCount ~531
+//          jobSpecialCode distribution: {"6":94, "1":3, "3":3}
+//          sample: HR实习生-招聘方向 / Marketing Intern
+//   "3" → 社招 (experienced hire)                totalCount ~2613
+//          jobSpecialCode distribution: {"5":100}
+//   ∅  → all three combined                      totalCount ~3256
+//   Default: ["1","2"] mirrors the "校招" tab on zhaopin.meituan.com.
+//
+// ── 2. city (in request body as cityList: [{code, name}]) ─────────────────
+//   City codes come from POST /api/official/city/search {keyword: "北京"}.
+//   CRITICAL: passing {name} without a code returns wrong results (e.g. 10
+//   instead of 2148 for Beijing). Always resolve code first.
+//
+//   Top cities (all jobTypes combined, 2026-05-14):
+//     北京市  001001      2148    上海市  001009       736
+//     深圳市  001019002    375    成都市  001023001    198
+//     广州市  001019001    177    杭州市  001011001    142
+//     武汉市  001017001    109    人力资源平台  —        95
+//     南京市  001010001     70    西安市  001027001     67
+//     苏州市  001010013     50
+//   Campus (jobType 1+2) by city:
+//     北京市   557    上海市   229    深圳市    81    成都市    40    杭州市    11
+//
+// ── 3. department / BU (in request body as department: [{code}]) ───────────
+//   department codes are Meituan's internal "BG" codes.  Passing name-only
+//   does NOT filter (returns all results). Codes discovered by scanning the
+//   JS bundle + brute-force sweep BG001..BG100 (2026-05-14):
+//
+//   BG053  食杂零售-小象事业部              361
+//   BG041  核心本地商业-基础研发平台         342
+//   BG052  食杂零售-快驴事业部              233
+//   BG022  食杂零售 (parent BG)            762  ← aggregates 053/052/054/055/056
+//   BG038  核心本地商业-闪购事业部          204
+//   BG043  核心本地商业-业务研发平台         195
+//   BG047  核心本地商业-酒店旅行            189
+//   BG024  软硬件服务 (parent BG)           388  ← aggregates 012/018/019/050/057/058
+//   BG021  Keeta                           188
+//   BG015  财务平台                        126
+//   BG012  软硬件服务-骑行事业部            112
+//   BG039  核心本地商业-医药健康事业部        99
+//   BG032  核心本地商业-服务零售事业部        98
+//   BG011  人力资源平台                     95
+//   BG037  核心本地商业-到家履约平台         95
+//   BG054  食杂零售-快乐猴事业部             88
+//   BG036  核心本地商业-外卖事业部           72
+//   BG046  核心本地商业-商业增值部           50
+//   BG019  软硬件服务-充电宝业务部           50
+//   BG048  核心本地商业-下沉市场发展部        43
+//   BG055  食杂零售-公共部门                43
+//   BG018  软硬件服务-餐饮SaaS事业部         44
+//   BG009  美团自动车配送                   145
+//   BG003  美团金服                         45
+//   BG031  核心本地商业-到餐事业部           44
+//   BG056  食杂零售-Keemart                 36
+//   BG013  核心本地商业-美团平台            278
+//   BG010  公司事务平台                     35
+//   BG057  软硬件服务-硬件管理部             28
+//   BG020  美团无人机                        93
+//   BG044  核心本地商业-平台及职能部门        19
+//   BG050  软硬件服务-软件研发部             19
+//   BG049  软硬件服务-酒店SaaS业务部         10
+//   BG016  战略与投资平台                     6
+//   BG008  核心本地商业-点评事业部            24
+//   BG045  GN06                              4
+//   BG051  (unidentified)                    1
+//   BG058  软硬件服务-软硬件合规部             1
+//   Note: codes returning 3256 (e.g. BG001) act as no-op; only the above
+//   codes represent real filterable BU subdivisions.
+//
+// ── 4. jobFamily / jobFamilyGroup — NOT filterable via API ────────────────
+//   jobFamily and jobFamilyGroup appear as metadata on job objects but
+//   sending them in the request body has no effect (always returns 3256).
+//   Values observed in corpus (first 500 jobs):
+//     jobFamily: 技术类 / 运营类 / 产品类 / 零售类 / 职能类
+//               销售、客服与支持类 / 商业分析类 / 市场营销类 / 设计类
+//     jobFamilyGroup: 软件 / 算法 / 运维 / 测试 / 产品 / 产品运营 / 用户运营
+//               业务运营 / 运营类 / 财务 / 人力资源 / 商业分析 / 供应链
+//               物流 / 门店 / 销售 / 营销 / 采购 / 市场 / 行政 / …
+//   Use keyword search to narrow by family (e.g. keyword="算法").
+//
+// ── 5. jobSpecialCode — metadata only, not a filter dimension ─────────────
+//   "1" = 普通校招岗 (normal campus)
+//   "3" = 可能为 global/特殊项目 (mixed, appears in both type 1 & 2)
+//   "5" = 社招 (experienced hire)
+//   "6" = 实习 (intern, always accompanies jobType=2)
+//   "7" = rare, appears in type 1 (<1%)
+//
+// ── 6. jobShareType — undocumented enum ───────────────────────────────────
+//   "1" → returns ~3256 (the full public listing, used as default)
+//   "2" → returns ~2194 (subset, purpose unclear)
+//   ∅  → returns ~3256 (same as "1")
+//
+// ── Request body shape ────────────────────────────────────────────────────
+//   {
+//     page: { pageNo: number, pageSize: number },  // max pageSize = 100
+//     jobShareType: "1",
+//     keywords: string,                            // respected, max 30 chars
+//     cityList: [{code: string, name: string}],    // code required for filter
+//     department: [{code: string}],                // BG code; name ignored
+//     jobType: [{code: string, subCode: []}],
+//   }
+//
+// ── City lookup ───────────────────────────────────────────────────────────
+//   POST /api/official/city/search {keyword: "城市名"}
+//   Returns [{code, name, children, …}]
+//   Common codes hardcoded in CITY_CODES below for offline use.
+//
+// ═══════════════════════════════════════════════════════════════════════════
 //
 // PositionSummary field mapping:
 //   post_id       ← jobUnionId (stringified)
@@ -54,6 +161,73 @@ const JOB_TYPE_LABEL: Record<string, string> = {
   "1": "校招",
   "2": "实习",
   "3": "社招",
+};
+
+// Hardcoded city codes for common cities (verified 2026-05-14 via city/search).
+// Use resolveCityCodes() to look up arbitrary city names at runtime.
+const CITY_CODES: Record<string, string> = {
+  "北京": "001001",
+  "北京市": "001001",
+  "上海": "001009",
+  "上海市": "001009",
+  "广州": "001019001",
+  "广州市": "001019001",
+  "深圳": "001019002",
+  "深圳市": "001019002",
+  "杭州": "001011001",
+  "杭州市": "001011001",
+  "成都": "001023001",
+  "成都市": "001023001",
+  "武汉": "001017001",
+  "武汉市": "001017001",
+  "西安": "001027001",
+  "西安市": "001027001",
+  "苏州": "001010013",
+  "苏州市": "001010013",
+  "南京": "001010001",
+  "南京市": "001010001",
+};
+
+// BG department codes (verified 2026-05-14, see header comment for full list)
+// Map from code → canonical department name
+export const BG_DEPARTMENT_CODES: Record<string, string> = {
+  "BG003": "美团金服",
+  "BG008": "核心本地商业-点评事业部",
+  "BG009": "美团自动车配送",
+  "BG010": "公司事务平台",
+  "BG011": "人力资源平台",
+  "BG012": "软硬件服务-骑行事业部",
+  "BG013": "核心本地商业-美团平台",
+  "BG015": "财务平台",
+  "BG016": "战略与投资平台",
+  "BG018": "软硬件服务-餐饮SaaS事业部",
+  "BG019": "软硬件服务-充电宝业务部",
+  "BG020": "美团无人机",
+  "BG021": "Keeta",
+  "BG022": "食杂零售",
+  "BG024": "软硬件服务",
+  "BG031": "核心本地商业-到餐事业部",
+  "BG032": "核心本地商业-服务零售事业部",
+  "BG036": "核心本地商业-外卖事业部",
+  "BG037": "核心本地商业-到家履约平台",
+  "BG038": "核心本地商业-闪购事业部",
+  "BG039": "核心本地商业-医药健康事业部",
+  "BG041": "核心本地商业-基础研发平台",
+  "BG043": "核心本地商业-业务研发平台",
+  "BG044": "核心本地商业-平台及职能部门",
+  "BG045": "GN06",
+  "BG046": "核心本地商业-商业增值部",
+  "BG047": "核心本地商业-酒店旅行",
+  "BG048": "核心本地商业-下沉市场发展部",
+  "BG049": "软硬件服务-酒店SaaS业务部",
+  "BG050": "软硬件服务-软件研发部",
+  "BG052": "食杂零售-快驴事业部",
+  "BG053": "食杂零售-小象事业部",
+  "BG054": "食杂零售-快乐猴事业部",
+  "BG055": "食杂零售-公共部门",
+  "BG056": "食杂零售-Keemart",
+  "BG057": "软硬件服务-硬件管理部",
+  "BG058": "软硬件服务-软硬件合规部",
 };
 
 interface ApiEnvelope<T> {
@@ -205,9 +379,59 @@ function summarizePosition(item: RawJobListEntry): PositionSummary {
 
 export interface SearchOptions {
   keyword?: string;
-  jobTypeCodes?: string[];  // default: ["1","2"] (校招应届正式 + 实习) — matches the 校招 tab
+  /** default: ["1","2"] (校招应届正式 + 实习) — matches the 校招 tab on zhaopin.meituan.com */
+  jobTypeCodes?: string[];
+  /**
+   * Filter by city.  Each entry is a city name (e.g. "北京" or "北京市").
+   * Common cities are resolved offline via CITY_CODES; unknown names are
+   * looked up live via POST /api/official/city/search.  A code must be found
+   * for the filter to take effect — name-only does NOT filter correctly.
+   * Example: ["北京", "上海"]
+   */
+  cities?: string[];
+  /**
+   * Filter by BU / department using BG codes (e.g. "BG021" for Keeta).
+   * See BG_DEPARTMENT_CODES for the full list, or use the human-readable
+   * department names from the header comment.  Passing a name without a
+   * BG code has no effect — the API ignores it.
+   * Example: ["BG021", "BG022"]  or human aliases resolved by this client.
+   */
+  departments?: string[];
   page?: number;
   pageSize?: number;
+}
+
+/**
+ * Resolve city names to [{code, name}] objects for the getJobList payload.
+ * Uses the hardcoded CITY_CODES map first; falls back to a live API lookup.
+ */
+async function resolveCityCodes(
+  cityNames: string[]
+): Promise<{ code: string; name: string }[]> {
+  const result: { code: string; name: string }[] = [];
+  for (const raw of cityNames) {
+    const name = raw.trim();
+    if (!name) continue;
+    const knownCode = CITY_CODES[name];
+    if (knownCode) {
+      result.push({ code: knownCode, name });
+      continue;
+    }
+    // Live lookup
+    const res = await call<Array<{ code?: string; name?: string }>>(
+      "POST",
+      "/city/search",
+      { body: { keyword: name } }
+    );
+    if (res.ok && Array.isArray(res.data) && res.data.length > 0) {
+      const first = res.data[0];
+      if (first.code && first.name) {
+        result.push({ code: first.code, name: first.name });
+      }
+    }
+    // If not resolved, skip — sending name-only would give wrong counts
+  }
+  return result;
 }
 
 export async function searchPositions(opts: SearchOptions = {}) {
@@ -215,12 +439,36 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const page = Math.max(1, opts.page ?? 1);
   const jobTypeCodes = opts.jobTypeCodes ?? ["1", "2"];
 
+  // Resolve city names → [{code, name}]
+  const cityList = opts.cities?.length
+    ? await resolveCityCodes(opts.cities)
+    : [];
+
+  // Resolve department strings → [{code}]
+  // Accept BG codes directly (e.g. "BG021") or canonical names looked up in
+  // the reverse map. Name-only entries that can't be resolved are dropped.
+  const bgNameToCode: Record<string, string> = {};
+  for (const [code, name] of Object.entries(BG_DEPARTMENT_CODES)) {
+    bgNameToCode[name] = code;
+  }
+  const department: { code: string }[] = [];
+  for (const d of opts.departments ?? []) {
+    const s = d.trim();
+    if (!s) continue;
+    if (/^BG\d+$/i.test(s)) {
+      department.push({ code: s.toUpperCase() });
+    } else if (bgNameToCode[s]) {
+      department.push({ code: bgNameToCode[s] });
+    }
+    // Unresolvable names are silently dropped (API ignores them anyway)
+  }
+
   const body = {
     page: { pageNo: page, pageSize },
     jobShareType: "1",
     keywords: (opts.keyword ?? "").trim().slice(0, 30),
-    cityList: [],
-    department: [],
+    cityList,
+    department,
     jobType: jobTypeCodes.map((code) => ({ code, subCode: [] })),
   };
 
@@ -249,7 +497,14 @@ export async function searchPositions(opts: SearchOptions = {}) {
 }
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; jobTypeCodes?: string[] } = {}
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    jobTypeCodes?: string[];
+    cities?: string[];
+    departments?: string[];
+  } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 30);
@@ -261,6 +516,8 @@ export async function fetchAllPositions(
     const result = await searchPositions({
       keyword: opts.keyword,
       jobTypeCodes: opts.jobTypeCodes,
+      cities: opts.cities,
+      departments: opts.departments,
       page,
       pageSize,
     });
