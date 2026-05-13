@@ -1,7 +1,7 @@
 {
   "name": "job-pro",
-  "version": "0.3.0",
-  "description": "Query Chinese big-tech campus recruiting from your terminal. Talks straight to Tencent (join.qq.com), ByteDance, Alibaba, Meituan and Xiaohongshu — no signup, no token, no server.",
+  "version": "0.4.0",
+  "description": "Query Chinese big-tech campus recruiting from your terminal. 12 companies wired: Tencent, ByteDance, Alibaba, Meituan, Xiaohongshu, JD, Kuaishou, Xiaomi, Baidu, NetEase, Didi, Bilibili — no signup, no token, no server.",
   "homepage": "https://job.ha7ch.com",
   "repository": "https://github.com/HA7CH/job-pro",
   "license": "MIT",
