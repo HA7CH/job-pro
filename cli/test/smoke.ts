@@ -22,6 +22,10 @@ import * as alibaba from "../src/alibaba.js";
 import * as meituan from "../src/meituan.js";
 import * as xiaohongshu from "../src/xiaohongshu.js";
 import * as jd from "../src/jd.js";
+import * as kuaishou from "../src/kuaishou.js";
+import * as xiaomi from "../src/xiaomi.js";
+import * as baidu from "../src/baidu.js";
+import * as netease from "../src/netease.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -31,6 +35,10 @@ const ADAPTERS: Record<string, Adapter> = {
   meituan: meituan as unknown as Adapter,
   xiaohongshu: xiaohongshu as unknown as Adapter,
   jd: jd as unknown as Adapter,
+  kuaishou: kuaishou as unknown as Adapter,
+  xiaomi: xiaomi as unknown as Adapter,
+  baidu: baidu as unknown as Adapter,
+  netease: netease as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; reason: string };

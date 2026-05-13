@@ -6,6 +6,10 @@ import * as alibaba from "./alibaba.js";
 import * as meituan from "./meituan.js";
 import * as xiaohongshu from "./xiaohongshu.js";
 import * as jd from "./jd.js";
+import * as kuaishou from "./kuaishou.js";
+import * as xiaomi from "./xiaomi.js";
+import * as baidu from "./baidu.js";
+import * as netease from "./netease.js";
 import {
   memoryList,
   memoryGet,
@@ -32,6 +36,10 @@ COMPANIES
   meituan          zhaopin.meituan.com         (Meituan / 美团)
   xiaohongshu      job.xiaohongshu.com         (Xiaohongshu / 小红书)
   jd               campus.jd.com               (JD / 京东)
+  kuaishou         campus.kuaishou.cn          (Kuaishou / 快手)
+  xiaomi           xiaomi.jobs.f.mioffice.cn   (Xiaomi / 小米 — Feishu ATSX)
+  baidu            talent.baidu.com            (Baidu / 百度)
+  netease          hr.163.com                  (NetEase / 网易)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -176,6 +184,10 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   meituan: meituan as unknown as CompanyAdapter,
   xiaohongshu: xiaohongshu as unknown as CompanyAdapter,
   jd: jd as unknown as CompanyAdapter,
+  kuaishou: kuaishou as unknown as CompanyAdapter,
+  xiaomi: xiaomi as unknown as CompanyAdapter,
+  baidu: baidu as unknown as CompanyAdapter,
+  netease: netease as unknown as CompanyAdapter,
 };
 
 async function runCompany(

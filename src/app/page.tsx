@@ -56,6 +56,30 @@ const COMPANIES: Company[] = [
     autoApply: "building",
   },
   {
+    name: "Kuaishou",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/kuaishou.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
+    name: "Xiaomi",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xiaomi.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
+    name: "Baidu",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/baidu.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
+    name: "NetEase",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/netease.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
     listings: "building",
