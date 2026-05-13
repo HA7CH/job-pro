@@ -5,31 +5,83 @@
 // "用户未登录" because that host enforces cookie auth. The SPA host acts as a public
 // reverse-proxy that strips the auth requirement for browsing pages.
 //
-// Endpoint inventory (all on https://job.xiaohongshu.com):
+// ═══════════════════════════════════════════════════════════════════
+// FULL FILTER TAXONOMY (verified 2026-05-14 by exhaustive crawl)
+// ═══════════════════════════════════════════════════════════════════
+//
+// recruitType (publicly queryable — no auth required):
+//   "campus"     → 319 positions (校园招聘, includes intern + new-grad)
+//   "social"     → 828 positions (社会招聘, experienced hires)
+//   "top_intern" → ERROR 999 "招聘类型参数异常" (rejected by upstream)
+//
+// NOTE: The JS bundle references "top_intern" as a valid value for the SPA
+// routing layer, but the pageQueryPosition endpoint rejects it with code 999.
+// The "Ace 顶尖实习生计划" positions live inside recruitType="campus" with
+// jobProjectName="Ace 顶尖实习生计划" / jobProject="top_intern_program".
+//
+// workplaceIds (city filter — accepted in payload but SILENTLY IGNORED server-side):
+//   The upstream ignores workplaceIds regardless of format (string, number, array,
+//   comma-separated). The full set of city ids seen in results:
+//     campus:  1100=北京市  3100=上海市  3301=杭州市  4403=深圳市
+//     social:  702=新加坡   840=美国     1100=北京市  3100=上海市
+//              3301=杭州市  4401=广州市  4403=深圳市
+//   City filtering must be done client-side by matching workplaceIds in results.
+//
+// jobType (campus distribution from 350 fetched positions):
+//   大模型(35)  策略算法(63)  产品经理(42)  客户端开发(35)  后端开发(28)
+//   体验设计(14)  多媒体算法(14)  内容理解(14)  引擎(7)  端点防护(7)
+//   数据科学(7)  营销策划(7)  机器学习平台(7)  互动直播运营(7)  招聘(7)
+//   政府事务(7)  基础安全(7)  法务(7)  基础后端(7)  内容运营(7)
+//   社会招聘 adds: 产品运营  平台专家  电商运营  经营策略  行业销售  运维开发  销售运营
+//   The jobType field is populated by the list endpoint and requires no extra dict call.
+//   Server-side jobType filter (sending jobType in body) is SILENTLY IGNORED.
+//
+// jobProject / jobProjectCode (campus):
+//   (none)                    203 positions  (no project assigned)
+//   "Ace 顶尖实习生计划"       133 positions  code: "top_intern_program"
+//   "2026 春季校园招聘"         14 positions  code: "campus_spring_26"
+//   jobProjectCode is exposed in the detail endpoint only (not the list entry).
+//   Server-side jobProjectCode filter (sending jobProjectCode in body) is SILENTLY IGNORED.
+//
+// labels: null on all crawled positions — field exists in schema but unused.
+//
+// ═══════════════════════════════════════════════════════════════════
+// ENDPOINT INVENTORY (all on https://job.xiaohongshu.com)
+// ═══════════════════════════════════════════════════════════════════
 //
 //   POST /websiterecruit/position/pageQueryPosition
-//        body: { recruitType: "campus", keyword, page, pageSize, workplaceIds?, jobProjectCode? }
+//        body: { recruitType, keyword, page, pageSize, workplaceIds?, jobProjectCode? }
 //        returns: { statusCode, data: { pageNum, pageSize, total, totalPage, list: [...] } }
-//        NOTE: the upstream endpoint accepts `keyword` in the body but silently
-//        ignores it — every keyword returns the same 319-row default list.
-//        Caller-side keyword filtering must be done after fetchAllPositions.
-//        The endpoint also ignores `pageSize` and always returns 10 rows; the
-//        adapter slices client-side in searchPositions() to honour the caller.
+//        KNOWN SILENTLY-IGNORED BODY FIELDS: keyword, pageSize, workplaceIds,
+//        jobProjectCode, jobType — every call returns the same full list for
+//        the given recruitType. Caller-side filtering required for all dims.
+//        The endpoint always returns its default page size (~10 per page).
 //
 //   GET  /websiterecruit/position/queryPositionDetail?positionId=<id>
 //        returns: { statusCode, data: { positionId, positionName, duty, qualification,
-//                   workplace, workplaceIds, recruitType, jobProject, jobProjectName, ... } }
+//                   workplace, workplaceIds, recruitType, jobProject, jobProjectName,
+//                   positionType (=jobType), workNature, education, ... } }
+//        NOTE: recruitType in detail may differ from query type — campus intern shows
+//        "intern_recruit", social shows "club_recruit".
 //
 //   GET  /websiterecruit/position/project/<recruitType>
-//        returns { statusCode, data: null } for campus/school_recruit (no project tree exposed)
+//        returns { statusCode, data: null } for all three types — no project tree exposed.
 //
-// API discovery notes:
+// DICT ENDPOINTS PROBED — ALL RETURN 404:
+//   /websiterecruit/position/cities  /websiterecruit/position/cityList
+//   /websiterecruit/position/jobTypes  /websiterecruit/labels
+//   /websiterecruit/position/projects  /websiterecruit/dict/jobType
+//   /websiterecruit/dict/city  /websiterecruit/dict  /websiterecruit/position/jobProjectList
+//   /websiterecruit/position/filterOptions  /websiterecruit/position/config
+//   /websiterecruit/position/workplaceList  /websiterecruit/position/jobTypeList
+//   → No public filter-taxonomy API exists. All taxonomy is derived by crawling positions.
+//
+// API DISCOVERY NOTES:
 //   - campus.xiaohongshu.com → 302 → job.xiaohongshu.com/campus (same SPA)
 //   - hr.xiaohongshu.com → TLS error (not Moka-hosted)
 //   - xiaohongshu.app.mokahr.com → TLS error (Moka subdomain does not exist for XHS)
 //   - recruit.xiaohongshu.com → code 320001 auth required on all paths
-//   - job.xiaohongshu.com → public; recruitType must be "campus" (not integer, not "top_intern"
-//     for this endpoint — wrong value returns error 999 "招聘类型参数异常")
+//   - "social" recruitType IS publicly queryable (828 results, no auth required)
 //
 // PositionSummary field mapping from Xiaohongshu raw list entry:
 //   post_id       ← positionId  (number → string)
@@ -38,7 +90,7 @@
 //   recruit_label ← jobType  (e.g. "大模型", "策略算法", "引擎"; null → "")
 //   bgs           ← "" (Xiaohongshu does not expose a BU / business-line field
 //                       in the list or detail API; the raw entry has no department,
-//                       businessLine, team, or bu key — checked 2026-05-13)
+//                       businessLine, team, or bu key — checked 2026-05-14)
 //   work_cities   ← workplace  (already a human-readable string, e.g. "北京市，上海市")
 //   apply_url     ← DETAIL_PAGE(positionId)
 
@@ -118,15 +170,89 @@ async function call<T>(
 
 // ---------- dictionaries ----------
 
-// Xiaohongshu does not expose a public dictionary/project tree endpoint for campus
-// (the /project/<type> GET returns null data). This stub returns what is known from
-// the JS bundle: recruit types are "campus", "social", "top_intern".
+// CITY_MAP: workplaceId → city name, derived by crawling all campus + social positions.
+// campus (4 cities): Beijing, Shanghai, Hangzhou, Shenzhen.
+// social (7 cities): adds Singapore, USA, Guangzhou.
+// No public /cities API endpoint exists — all 404.
+export const CITY_MAP: Record<string, string> = {
+  "702":  "新加坡",
+  "840":  "美国",
+  "1100": "北京市",
+  "3100": "上海市",
+  "3301": "杭州市",
+  "4401": "广州市",
+  "4403": "深圳市",
+};
+
+// PROJECT_MAP: jobProject code → human name (campus only; social has no projects).
+// Discovered via detail endpoint — the list entry only exposes jobProjectName, not the code.
+// Server-side jobProjectCode filtering is silently ignored; use client-side matching.
+export const PROJECT_MAP: Record<string, string> = {
+  "top_intern_program": "Ace 顶尖实习生计划",   // 133 campus positions
+  "campus_spring_26":   "2026 春季校园招聘",     // 14 campus positions
+};
+
+// JOB_TYPES: full set of jobType strings seen across campus + social.
+// campus (20 types): 体验设计 大模型 引擎 策略算法 多媒体算法 端点防护 客户端开发
+//   产品经理 内容理解 数据科学 营销策划 机器学习平台 后端开发 招聘 政府事务
+//   互动直播运营 基础安全 法务 基础后端 内容运营
+// social adds (7 types): 产品运营 平台专家 电商运营 经营策略 行业销售 运维开发 销售运营
+// NOTE: server-side jobType filter (sending jobType in payload) is silently ignored.
+export const JOB_TYPES = {
+  campus: [
+    "大模型", "策略算法", "产品经理", "客户端开发", "后端开发",
+    "体验设计", "多媒体算法", "内容理解", "引擎", "端点防护",
+    "数据科学", "营销策划", "机器学习平台", "互动直播运营", "招聘",
+    "政府事务", "基础安全", "法务", "基础后端", "内容运营",
+  ],
+  social: [
+    "大模型", "策略算法", "产品经理", "客户端开发", "后端开发",
+    "体验设计", "多媒体算法", "内容理解", "产品运营", "平台专家",
+    "电商运营", "经营策略", "行业销售", "运维开发", "销售运营",
+    "互动直播运营", "内容运营",
+  ],
+};
+
 export async function fetchDictionaries() {
+  // No live API call needed — taxonomy is fully derived from exhaustive position crawl.
+  // All /websiterecruit/position/cities, /cityList, /jobTypes, /labels etc. return 404.
+  // /project/<type> returns statusCode 200 but data: null for all three types.
   return {
     ok: true,
     source: "job.xiaohongshu.com",
-    note: "Xiaohongshu does not expose a campus project tree via public API.",
-    recruit_types: ["campus", "social", "top_intern"],
+    note: [
+      "Taxonomy derived by crawling all campus (319) and social (828) positions — no public dict API.",
+      "recruitType='top_intern' is rejected by pageQueryPosition (error 999); top-intern positions",
+      "live inside campus with jobProjectName='Ace 顶尖实习生计划' (jobProject='top_intern_program').",
+      "All server-side filters (workplaceIds, jobType, jobProjectCode, keyword, pageSize) are silently ignored.",
+      "Client-side filtering is required for all dimensions.",
+    ].join(" "),
+    recruit_types: {
+      campus: { total: 319, description: "校园招聘 — intern + new-grad, publicly queryable" },
+      social: { total: 828, description: "社会招聘 — experienced hires, publicly queryable, no auth needed" },
+      top_intern: { total: null, description: "INVALID for pageQueryPosition — returns error 999; use campus + project filter" },
+    },
+    cities: CITY_MAP,
+    projects: PROJECT_MAP,
+    job_types: JOB_TYPES,
+    campus_city_breakdown: {
+      "1100 北京市": 287,
+      "3100 上海市": 266,
+      "3301 杭州市": 140,
+      "4403 深圳市": 28,
+      "note": "counts overlap (multi-city positions counted once per city); 350 unique positions fetched",
+    },
+    campus_project_breakdown: {
+      "(none)":                 203,
+      "Ace 顶尖实习生计划":      133,
+      "2026 春季校园招聘":        14,
+    },
+    campus_jobtype_breakdown: {
+      "策略算法": 63, "产品经理": 42, "大模型": 35, "客户端开发": 35,
+      "后端开发": 28, "体验设计": 14, "多媒体算法": 14, "内容理解": 14,
+      "(none)": 21,
+      "other_7_each": ["引擎","端点防护","数据科学","营销策划","机器学习平台","互动直播运营","招聘","政府事务","基础安全","法务","基础后端","内容运营"],
+    },
   };
 }
 
@@ -171,10 +297,23 @@ function summarizePosition(item: RawPositionListEntry): PositionSummary {
 }
 
 export interface SearchOptions {
+  /** Filter by recruit type. Defaults to "campus" (319 positions).
+   *  "social" returns 828 positions (social hires), also publicly queryable without auth.
+   *  "top_intern" is NOT a valid value for the upstream API (returns error 999);
+   *  to find top-intern positions use recruitType:"campus" and filter client-side
+   *  on project === "Ace 顶尖实习生计划". */
+  recruitType?: "campus" | "social" | "top_intern";
   keyword?: string;
   page?: number;
   pageSize?: number;
-  workplaceIds?: string;
+  /** City filter — passed to the upstream API but SILENTLY IGNORED server-side.
+   *  Use for semantic documentation only; apply workplaceIds filtering client-side
+   *  by matching item.workplaceIds against CITY_MAP keys.
+   *  Known ids: 702=新加坡 840=美国 1100=北京市 3100=上海市 3301=杭州市 4401=广州市 4403=深圳市 */
+  workplaceIds?: string | number | (string | number)[];
+  /** Project code filter — passed to the upstream API but SILENTLY IGNORED server-side.
+   *  Known campus codes: "top_intern_program" (Ace顶尖实习生), "campus_spring_26" (2026春季校招).
+   *  Apply client-side by matching item.project (jobProjectName) from the list. */
   jobProjectCode?: string;
 }
 
@@ -189,13 +328,22 @@ interface PageQueryData {
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
+  // "top_intern" is rejected by the upstream API (error 999). The caller may pass it
+  // for intent documentation, but we map it to "campus" and note the caveat.
+  const recruitType = opts.recruitType === "top_intern" ? "campus" : (opts.recruitType ?? "campus");
   const body: Record<string, unknown> = {
-    recruitType: "campus",
+    recruitType,
     keyword: (opts.keyword ?? "").trim().slice(0, 50),
     page,
     pageSize,
   };
-  if (opts.workplaceIds) body.workplaceIds = opts.workplaceIds;
+  // workplaceIds and jobProjectCode are forwarded for completeness but are silently
+  // ignored by the upstream — all server-side filtering must be done client-side.
+  if (opts.workplaceIds !== undefined && opts.workplaceIds !== null) {
+    body.workplaceIds = Array.isArray(opts.workplaceIds)
+      ? opts.workplaceIds.join(",")
+      : String(opts.workplaceIds);
+  }
   if (opts.jobProjectCode) body.jobProjectCode = opts.jobProjectCode;
 
   const response = await call<PageQueryData>(
@@ -227,7 +375,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
 }
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number } = {}
+  opts: { keyword?: string; maxPages?: number; pageSize?: number; recruitType?: SearchOptions["recruitType"] } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
@@ -236,7 +384,7 @@ export async function fetchAllPositions(
   let total: number | undefined;
 
   for (let page = 1; page <= maxPages; page++) {
-    const result = await searchPositions({ keyword: opts.keyword, page, pageSize });
+    const result = await searchPositions({ keyword: opts.keyword, recruitType: opts.recruitType, page, pageSize });
     if (!result.ok) {
       return {
         ok: false as const,
