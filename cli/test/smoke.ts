@@ -21,6 +21,7 @@ import * as bytedance from "../src/bytedance.js";
 import * as alibaba from "../src/alibaba.js";
 import * as meituan from "../src/meituan.js";
 import * as xiaohongshu from "../src/xiaohongshu.js";
+import * as jd from "../src/jd.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -29,6 +30,7 @@ const ADAPTERS: Record<string, Adapter> = {
   alibaba: alibaba as unknown as Adapter,
   meituan: meituan as unknown as Adapter,
   xiaohongshu: xiaohongshu as unknown as Adapter,
+  jd: jd as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; reason: string };
