@@ -648,9 +648,15 @@ export function checkResume(text: string) {
     });
   }
 
-  const gradYear = /(20\d{2})\s*(?:年|\/|-)?\s*(?:6|7|9|June|July)/.test(text);
-  const school = /(大学|学院|University|College)/.test(text);
-  const major = /(专业|major|本科|硕士|博士|学士|bachelor|master|phd)/i.test(text);
+  // gradYear: three accept patterns — strict month suffix, "graduated/毕业"
+  // proximity, or a school/degree token within ~80 chars of a 20xx year (so
+  // a one-liner like "BS Tsinghua 2026" still counts as an education entry).
+  const gradYear =
+    /\b20\d{2}\s*(?:年|届|6|7|9|June|July)/i.test(text) ||
+    /(?:graduat\w*|毕业|grad)[^]{0,30}\b20\d{2}\b/i.test(text) ||
+    /(?:Bachelor|BSc?|BA|Master|MSc?|MA|PhD|本科|硕士|博士|学士|大学|学院|University|College|Tsinghua|Peking|Fudan|Zhejiang|Jiao\s*Tong|USTC|SJTU|PKU|HKU)[^]{0,80}\b20\d{2}\b/i.test(text);
+  const school = /(大学|学院|University|College|Tsinghua|Peking|Fudan|Zhejiang|Jiao\s*Tong|USTC|SJTU|PKU|HKU)/i.test(text);
+  const major = /(专业|major|本科|硕士|博士|学士|bachelor|master|phd|\bBSc?\b|\bMSc?\b|\bBA\b|\bMA\b|\bMBA\b|\bMEng\b|\bMPhil\b)/i.test(text);
   const eduOk = Number(school) + Number(major) + Number(gradYear);
   if (eduOk === 3) {
     checks.push({
