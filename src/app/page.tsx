@@ -33,8 +33,8 @@ const COMPANIES: Company[] = [
   },
   {
     name: "Meituan",
-    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meituan+adapter",
-    listings: "building",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/meituan.ts",
+    listings: "live",
     autoApply: "building",
   },
   {

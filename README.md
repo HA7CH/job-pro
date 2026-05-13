@@ -72,7 +72,7 @@ Add `--compact` to any command for a single-line JSON output (pipe-friendly).
 | Tencent    | ✅       | ⏳         | [`join.qq.com`](https://join.qq.com)                                |
 | ByteDance  | ✅       | ⏳         | [`jobs.bytedance.com`](https://jobs.bytedance.com/campus/position) |
 | Alibaba    | ✅       | ⏳         | [`campus-talent.alibaba.com`](https://campus-talent.alibaba.com/campus/position) |
-| Meituan    | ⏳       | ⏳         | zhaopin.meituan.com                                                |
+| Meituan    | ✅       | ⏳         | [`zhaopin.meituan.com`](https://zhaopin.meituan.com/job-list)      |
 | Xiaohongshu| ⏳       | ⏳         | (investigating)                                                    |
 
 `Auto-apply` is phase 2 — it needs login cookies / OAuth, not just the public
