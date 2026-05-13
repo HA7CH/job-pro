@@ -27,6 +27,7 @@ import * as xiaomi from "../src/xiaomi.js";
 import * as baidu from "../src/baidu.js";
 import * as netease from "../src/netease.js";
 import * as didi from "../src/didi.js";
+import * as bilibili from "../src/bilibili.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -41,6 +42,7 @@ const ADAPTERS: Record<string, Adapter> = {
   baidu: baidu as unknown as Adapter,
   netease: netease as unknown as Adapter,
   didi: didi as unknown as Adapter,
+  bilibili: bilibili as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; reason: string };

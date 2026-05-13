@@ -11,6 +11,7 @@ import * as xiaomi from "./xiaomi.js";
 import * as baidu from "./baidu.js";
 import * as netease from "./netease.js";
 import * as didi from "./didi.js";
+import * as bilibili from "./bilibili.js";
 import {
   memoryList,
   memoryGet,
@@ -42,6 +43,7 @@ COMPANIES
   baidu            talent.baidu.com            (Baidu / 百度)
   netease          hr.163.com                  (NetEase / 网易)
   didi             talent.didiglobal.com       (Didi / 滴滴 — mixed campus+social)
+  bilibili         jobs.bilibili.com           (Bilibili / 哔哩哔哩)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -191,6 +193,7 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   baidu: baidu as unknown as CompanyAdapter,
   netease: netease as unknown as CompanyAdapter,
   didi: didi as unknown as CompanyAdapter,
+  bilibili: bilibili as unknown as CompanyAdapter,
 };
 
 async function runCompany(
