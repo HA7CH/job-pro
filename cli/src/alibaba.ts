@@ -26,6 +26,14 @@
 //   "new_campus_group_official_site". Both channel values return identical counts
 //   for batchId 100000540002 (474 total), so either works; the new name is canonical.
 //
+// KEYWORD LIMITATION:
+//   `/position/search` accepts but silently IGNORES the `keyword` field —
+//   passing "AI", "前端", or any other query returns the same 474-row default
+//   set in the same order. Server-side keyword filtering is not exposed in
+//   the public campus API. Callers needing keyword filtering must do it
+//   client-side after `fetchAllPositions`. The adapter still forwards the
+//   keyword in the request body (cheap, in case the server enables it later).
+//
 // PositionSummary field mapping (Alibaba → canonical):
 //   post_id        ← String(item.id)                (numeric, e.g. 199903220038)
 //   title          ← item.name
