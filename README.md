@@ -10,6 +10,23 @@ No signup, no token, no proxy server. The CLI talks straight to each company's
 public API (e.g. `join.qq.com` for Tencent) and prints JSON. Pipe it into `jq`,
 Claude Code, anything.
 
+## Demo: hand it to Claude Code
+
+Drop the prompt from [job.ha7ch.com](https://job.ha7ch.com) into Claude Code,
+attach your resume, and let the agent drive the CLI end-to-end.
+
+**1. It pulls the city's intern list and shortlists roles against your resume.**
+
+![Claude Code fetches Beijing intern roles and recommends top matches](docs/screenshots/01-recommend.png)
+
+**2. It pulls multiple JDs in parallel and grades each one line-by-line.**
+
+![Three JDs analyzed side-by-side with star ratings per requirement](docs/screenshots/02-jd-analysis.png)
+
+**3. It hands you a final verdict — apply, fall back, or skip.**
+
+![Final recommendation: AI-app primary, front-end fallback, skip PM track](docs/screenshots/03-verdict.png)
+
 ## Install
 
 ```bash

@@ -63,17 +63,12 @@ const COMPANIES: Company[] = [
   },
 ];
 
-const PROMPT = `Use the job-pro CLI to help me find and apply to tech-giant campus jobs:
+const PROMPT = `Run \`npx job-pro@latest help\` to discover the CLI, then use it to find
+Chinese big-tech campus jobs that fit my background.
 
-  npx job-pro@latest tencent search "<keyword>"        # list openings
-  npx job-pro tencent detail <post_id>                 # full JD
-  npx job-pro tencent notices                          # official announcements
-  npx job-pro tencent match - < my-resume.md           # rank jobs vs my resume
-  npx job-pro tencent resume-check my-resume.md        # sanity-check my resume
+My resume: <paste path or text>
 
-Today only Tencent (join.qq.com) is live. More employers are coming —
-see https://job.ha7ch.com for the live roadmap.
-Help me find roles that fit, draft tailored bullets, and prep for interviews.
+Match roles to my resume, draft tailored bullets, and prep me for interviews.
 Always reply to me in Chinese.`;
 
 /**
