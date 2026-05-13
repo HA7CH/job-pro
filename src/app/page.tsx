@@ -138,7 +138,9 @@ export default function Home() {
 
   return (
     <main className="page">
-      <h1 className="brand">Apply jobs w/ your Claude Code</h1>
+      <h1 className="font-serif text-4xl md:text-5xl tracking-tight leading-[1.1]">
+        Apply jobs w/ your Claude Code
+      </h1>
       <p className="lede">
         <span className="lede-prefix">$</span> npx job-pro help
       </p>
