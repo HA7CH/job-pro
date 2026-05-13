@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.env
+.DS_Store
+node_modules/
+*.log
+.idea/
+.vscode/
+/.vercel
+/.next
+dist/

@@ -1,0 +1,36 @@
+{
+  "name": "job-pro",
+  "version": "0.1.0",
+  "description": "Query Chinese big-tech campus recruiting from your terminal. Talks straight to join.qq.com (Tencent) and friends — no signup, no token, no server.",
+  "homepage": "https://job.ha7ch.com",
+  "repository": "https://github.com/HA7CH/job-pro",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "job-pro": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "campus-recruiting",
+    "校招",
+    "tencent",
+    "job-search",
+    "cli",
+    "claude-code"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
