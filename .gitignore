@@ -11,3 +11,5 @@ node_modules/
 /.vercel
 /.next
 dist/
+/.next
+next-env.d.ts
