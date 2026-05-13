@@ -110,6 +110,24 @@ const COMPANIES: Company[] = [
     autoApply: "building",
   },
   {
+    name: "Huawei",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/huawei.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
+    name: "Weibo",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/weibo.ts",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
+    name: "miHoYo",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/mihoyo.ts",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
     listings: "building",

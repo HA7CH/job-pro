@@ -31,6 +31,9 @@ import * as bilibili from "../src/bilibili.js";
 import * as pdd from "../src/pdd.js";
 import * as nio from "../src/nio.js";
 import * as minimax from "../src/minimax.js";
+import * as huawei from "../src/huawei.js";
+import * as weibo from "../src/weibo.js";
+import * as mihoyo from "../src/mihoyo.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -49,6 +52,9 @@ const ADAPTERS: Record<string, Adapter> = {
   pdd: pdd as unknown as Adapter,
   nio: nio as unknown as Adapter,
   minimax: minimax as unknown as Adapter,
+  huawei: huawei as unknown as Adapter,
+  weibo: weibo as unknown as Adapter,
+  mihoyo: mihoyo as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };

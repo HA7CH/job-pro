@@ -15,6 +15,9 @@ import * as bilibili from "./bilibili.js";
 import * as pdd from "./pdd.js";
 import * as nio from "./nio.js";
 import * as minimax from "./minimax.js";
+import * as huawei from "./huawei.js";
+import * as weibo from "./weibo.js";
+import * as mihoyo from "./mihoyo.js";
 import {
   memoryList,
   memoryGet,
@@ -50,6 +53,9 @@ COMPANIES
   pdd              careers.pinduoduo.com       (PDD / 拼多多 — notices only, jobs need auth)
   nio              nio.jobs.feishu.cn          (NIO / 蔚来 — Feishu ATSX)
   minimax          vrfi1sk8a0.jobs.feishu.cn   (MiniMax — Feishu ATSX)
+  huawei           career.huawei.com           (Huawei / 华为)
+  weibo            career.sina.com.cn          (Weibo / 微博 — auth-gated, limited)
+  mihoyo           campus.mihoyo.com           (miHoYo / 米哈游 — SPA, limited)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -203,6 +209,9 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   pdd: pdd as unknown as CompanyAdapter,
   nio: nio as unknown as CompanyAdapter,
   minimax: minimax as unknown as CompanyAdapter,
+  huawei: huawei as unknown as CompanyAdapter,
+  weibo: weibo as unknown as CompanyAdapter,
+  mihoyo: mihoyo as unknown as CompanyAdapter,
 };
 
 async function runCompany(
