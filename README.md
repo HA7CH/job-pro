@@ -71,7 +71,7 @@ Add `--compact` to any command for a single-line JSON output (pipe-friendly).
 |------------|----------|------------|--------------------------------------------------------------------|
 | Tencent    | ✅       | ⏳         | [`join.qq.com`](https://join.qq.com)                                |
 | ByteDance  | ✅       | ⏳         | [`jobs.bytedance.com`](https://jobs.bytedance.com/campus/position) |
-| Alibaba    | ⏳       | ⏳         | campus-talent.alibaba.com                                          |
+| Alibaba    | ✅       | ⏳         | [`campus-talent.alibaba.com`](https://campus-talent.alibaba.com/campus/position) |
 | Meituan    | ⏳       | ⏳         | zhaopin.meituan.com                                                |
 | Xiaohongshu| ⏳       | ⏳         | (investigating)                                                    |
 

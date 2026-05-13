@@ -27,8 +27,8 @@ const COMPANIES: Company[] = [
   },
   {
     name: "Alibaba",
-    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Alibaba+adapter",
-    listings: "building",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/alibaba.ts",
+    listings: "live",
     autoApply: "building",
   },
   {

@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import * as tencent from "./tencent.js";
 import * as bytedance from "./bytedance.js";
+import * as alibaba from "./alibaba.js";
 import {
   memoryList,
   memoryGet,
@@ -22,8 +23,9 @@ USAGE
   job-pro help
 
 COMPANIES
-  tencent          join.qq.com         (Tencent / 腾讯)
-  bytedance        jobs.bytedance.com  (ByteDance / 字节跳动)
+  tencent          join.qq.com                 (Tencent / 腾讯)
+  bytedance        jobs.bytedance.com          (ByteDance / 字节跳动)
+  alibaba          campus-talent.alibaba.com   (Alibaba / 阿里巴巴)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -44,8 +46,10 @@ OUTPUT
 EXAMPLES
   job-pro tencent search "后台开发" --page-size 5
   job-pro bytedance search "前端" --page-size 5
+  job-pro alibaba search "AI" --page-size 5
   job-pro tencent detail 1200791473415778304
   job-pro bytedance detail 7638940721068099893
+  job-pro alibaba detail 199903220038
   job-pro tencent notices
   job-pro tencent flow "腾讯2026实习什么时候开始投递" --question-time 2026-05-13
   cat my-resume.md | job-pro tencent match -
@@ -109,6 +113,7 @@ type CompanyAdapter = typeof tencent;
 const ADAPTERS: Record<string, CompanyAdapter> = {
   tencent,
   bytedance: bytedance as unknown as CompanyAdapter,
+  alibaba: alibaba as unknown as CompanyAdapter,
 };
 
 async function runCompany(
