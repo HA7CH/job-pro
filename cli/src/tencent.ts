@@ -483,12 +483,22 @@ const CITY_VOCAB = new Set([
   "西安", "合肥", "天津", "厦门", "香港", "remote", "远程",
 ]);
 
+// Match a short vocab term against haystack with word-style boundaries when
+// the term is 1-2 chars long, so "c" matches "C++" / "C language" but NOT the
+// "c" inside "TypeScript". Longer terms keep the original substring match,
+// which is forgiving across camelCase / kebab-case variations like "FastAPI".
+function termMatches(haystack: string, term: string): boolean {
+  if (term.length >= 3) return haystack.includes(term);
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${escaped}(?![a-z0-9])`, "i").test(haystack);
+}
+
 export function extractResumeSignals(text: string): { terms: string[]; cities: string[] } {
   const lower = (text ?? "").toLowerCase();
   const terms: string[] = [];
   const seen = new Set<string>();
   for (const term of TECH_VOCAB) {
-    if (lower.includes(term) && !seen.has(term)) {
+    if (termMatches(lower, term) && !seen.has(term)) {
       terms.push(term);
       seen.add(term);
     }
@@ -517,7 +527,7 @@ export function scoreOverlap(haystack: string, terms: string[], cities: string[]
   const reasons: string[] = [];
   for (const t of terms) {
     if (!t) continue;
-    if (hay.includes(t.toLowerCase())) {
+    if (termMatches(hay, t.toLowerCase())) {
       score += t.length > 2 ? 3 : 1;
       if (reasons.length < 4) reasons.push(`matched: ${t}`);
     }
