@@ -1,155 +1,227 @@
-type Status = "live" | "wip" | "none";
+"use client";
+
+import { useState } from "react";
+import { Check, Copy } from "lucide-react";
+
+type Status = "live" | "building" | "none";
 
 type Company = {
   name: string;
-  nameEn?: string;
-  /** color used for the placeholder square icon */
-  color: string;
-  /** initial(s) shown on the placeholder */
-  glyph: string;
-  /** can we list jobs / read JDs right now? */
-  fetch: Status;
-  /** can we auto-apply right now? */
-  apply: Status;
-  /** repo path where this company's adapter lives (or will live) */
   href: string;
+  listings: Status;
+  autoApply: Status;
 };
 
 const COMPANIES: Company[] = [
   {
-    name: "腾讯",
-    nameEn: "Tencent",
-    color: "#0067e6",
-    glyph: "T",
-    fetch: "live",
-    apply: "wip",
+    name: "Tencent",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/tencent.ts",
+    listings: "live",
+    autoApply: "building",
   },
   {
-    name: "字节跳动",
-    nameEn: "ByteDance",
-    color: "#000",
-    glyph: "B",
-    fetch: "wip",
-    apply: "wip",
+    name: "ByteDance",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+ByteDance+adapter",
+    listings: "building",
+    autoApply: "building",
   },
   {
-    name: "滴滴",
-    nameEn: "Didi",
-    color: "#ff7733",
-    glyph: "D",
-    fetch: "wip",
-    apply: "wip",
-    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Didi+adapter",
-  },
-  {
-    name: "阿里",
-    nameEn: "Alibaba",
-    color: "#ff6a00",
-    glyph: "A",
-    fetch: "wip",
-    apply: "wip",
+    name: "Alibaba",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Alibaba+adapter",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
+    name: "Meituan",
+    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meituan+adapter",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
+    name: "Xiaohongshu",
+    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Xiaohongshu+adapter",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
+    name: "Google",
+    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Google+adapter",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
+    name: "Meta",
+    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
+    name: "Apple",
+    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Apple+adapter",
+    listings: "building",
+    autoApply: "building",
   },
 ];
 
-function StatusBadge({ status, label }: { status: Status; label: string }) {
-  if (status === "live") {
+const PROMPT = `Use the job-pro CLI to help me find and apply to tech-giant campus jobs:
+
+  npx job-pro@latest tencent search "<keyword>"        # list openings
+  npx job-pro tencent detail <post_id>                 # full JD
+  npx job-pro tencent notices                          # official announcements
+  npx job-pro tencent match - < my-resume.md           # rank jobs vs my resume
+  npx job-pro tencent resume-check my-resume.md        # sanity-check my resume
+
+Today only Tencent (join.qq.com) is live. More employers are coming —
+see https://job.ha7ch.com for the live roadmap.
+Help me find roles that fit, draft tailored bullets, and prep for interviews.
+Always reply to me in Chinese.`;
+
+/**
+ * Material Symbols Rounded (filled). Path data sourced from
+ * `api.iconify.design/material-symbols:<name>.svg` — inlined to skip the
+ * network hop at runtime.
+ */
+function StatusIcon({ kind }: { kind: Status }) {
+  if (kind === "live") {
     return (
-      <span className={`status status-live`} aria-label={`${label}: live`}>
-        <span className="status-dot" aria-hidden="true" />
-        live
-      </span>
+      <svg
+        viewBox="0 0 24 24"
+        className="status-icon"
+        aria-hidden
+        focusable="false"
+      >
+        <path
+          fill="currentColor"
+          d="m10.6 13.8l-2.15-2.15q-.275-.275-.7-.275t-.7.275t-.275.7t.275.7L9.9 15.9q.3.3.7.3t.7-.3l5.65-5.65q.275-.275.275-.7t-.275-.7t-.7-.275t-.7.275zM12 22q-2.075 0-3.9-.788t-3.175-2.137T2.788 15.9T2 12t.788-3.9t2.137-3.175T8.1 2.788T12 2t3.9.788t3.175 2.137T21.213 8.1T22 12t-.788 3.9t-2.137 3.175t-3.175 2.138T12 22"
+        />
+      </svg>
     );
   }
-  if (status === "wip") {
+  if (kind === "building") {
     return (
-      <span className={`status status-wip`} aria-label={`${label}: 建设中`}>
-        <span className="status-dot" aria-hidden="true" />
-        building
+      <span className="status-emoji" role="img" aria-label="Building">
+        🚧
       </span>
     );
   }
   return (
-    <span className={`status status-none`} aria-label={`${label}: none`}>
-      <span className="status-dot" aria-hidden="true" />
-      none
-    </span>
+    <svg
+      viewBox="0 0 24 24"
+      className="status-icon"
+      aria-hidden
+      focusable="false"
+    >
+      <path
+        fill="currentColor"
+        d="m12 13.4l2.9 2.9q.275.275.7.275t.7-.275t.275-.7t-.275-.7L13.4 12l2.9-2.9q.275-.275.275-.7t-.275-.7t-.7-.275t-.7.275L12 10.6L9.1 7.7q-.275-.275-.7-.275t-.7.275t-.275.7t.275.7l2.9 2.9l-2.9 2.9q-.275.275-.275.7t.275.7t.7.275t.7-.275zm0 8.6q-2.075 0-3.9-.788t-3.175-2.137T2.788 15.9T2 12t.788-3.9t2.137-3.175T8.1 2.788T12 2t3.9.788t3.175 2.137T21.213 8.1T22 12t-.788 3.9t-2.137 3.175t-3.175 2.138T12 22"
+      />
+    </svg>
   );
 }
 
+function statusClass(kind: Status): string {
+  return `status-cell status-${kind}`;
+}
+
 export default function Home() {
+  const [copied, setCopied] = useState(false);
+
+  async function copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(PROMPT);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // ignore — older browsers
+    }
+  }
+
   return (
-    <main className="homepage">
-      <article className="article">
-        <header>
-          <h1 className="brand">job.pro</h1>
-          <p className="tagline">
-            Query Chinese big-tech campus recruiting from your terminal.
-          </p>
-        </header>
+    <main className="page">
+      <h1 className="brand">Apply jobs w/ your Claude Code</h1>
+      <p className="lede">
+        <span className="lede-prefix">$</span> npx job-pro help
+      </p>
 
-        <section className="install">
-          <code>npx job-pro@latest tencent search &ldquo;后台开发&rdquo;</code>
-          <span className="install-hint">No signup. No token. No proxy.</span>
-        </section>
+      <section className="prompt-card" aria-labelledby="prompt-title">
+        <div className="prompt-head">
+          <span id="prompt-title" className="prompt-head-label">
+            Copy into Claude Code, Codex, or Cursor
+          </span>
+          <button
+            type="button"
+            className="prompt-copy"
+            onClick={copyPrompt}
+            aria-label={copied ? "Copied" : "Copy prompt"}
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        </div>
+        <pre className="prompt-body">{PROMPT}</pre>
+      </section>
 
-        <section className="roadmap" aria-labelledby="roadmap-title">
-          <h2 id="roadmap-title" className="section-title">
-            Roadmap
-          </h2>
-          <ul className="company-list">
-            {COMPANIES.map((company) => (
-              <li key={company.name}>
-                <a
-                  href={company.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <span
-                    className="company-icon"
-                    style={{ background: company.color }}
-                    aria-hidden="true"
-                  >
-                    {company.glyph}
-                  </span>
-                  <span className="company-name">
-                    <span className="company-name-cn">{company.name}</span>
-                    {company.nameEn ? (
-                      <span className="company-name-en">{company.nameEn}</span>
-                    ) : null}
-                  </span>
-                  <span className="company-caps">
-                    <span className="company-cap">
-                      <span className="company-cap-label">get jobs</span>
-                      <StatusBadge status={company.fetch} label="get jobs" />
-                    </span>
-                    <span className="company-cap">
-                      <span className="company-cap-label">auto-apply</span>
-                      <StatusBadge status={company.apply} label="auto-apply" />
-                    </span>
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </section>
+      <section className="company-table" aria-labelledby="table-title">
+        <h2 id="table-title" className="sr-only">Roadmap</h2>
+        <div className="company-row company-row--header" aria-hidden>
+          <span className="col-label">Company</span>
+          <span className="col-label">Info</span>
+          <span className="col-label">Auto-apply</span>
+        </div>
+        {COMPANIES.map((c) => (
+          <a
+            key={c.name}
+            className="company-row"
+            href={c.href}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span className="company-name">{c.name}</span>
+            <span className={statusClass(c.listings)} aria-label={`Info: ${c.listings}`}>
+              <StatusIcon kind={c.listings} />
+            </span>
+            <span className={statusClass(c.autoApply)} aria-label={`Auto-apply: ${c.autoApply}`}>
+              <StatusIcon kind={c.autoApply} />
+            </span>
+          </a>
+        ))}
+      </section>
 
-        <section className="links">
-          <a href="https://github.com/HA7CH/job-pro" target="_blank" rel="noopener noreferrer">
-            GitHub
-          </a>
-          <span aria-hidden="true">·</span>
-          <a href="https://www.npmjs.com/package/job-pro" target="_blank" rel="noopener noreferrer">
-            npm
-          </a>
-          <span aria-hidden="true">·</span>
-          <a href="https://ha7ch.com" target="_blank" rel="noopener noreferrer">
-            ha7ch
-          </a>
-        </section>
-      </article>
+      <p className="link-row">
+        <a
+          href="https://github.com/HA7CH/job-pro"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="GitHub"
+          className="link-icon"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+          </svg>
+        </a>
+        <a
+          href="https://www.npmjs.com/package/job-pro"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="npm"
+          className="link-icon"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C23.99.786 23.204 0 22.227 0H1.763zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113V5.323z" />
+          </svg>
+        </a>
+        <span aria-hidden> · </span>
+        <a href="https://cv.ha7ch.com" target="_blank" rel="noopener noreferrer">
+          cv.ha7ch.com
+        </a>
+        <a
+          href="https://ha7ch.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="link-right"
+        >
+          ha7ch.com
+        </a>
+      </p>
     </main>
   );
 }
