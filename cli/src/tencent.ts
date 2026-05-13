@@ -483,7 +483,7 @@ const CITY_VOCAB = new Set([
   "西安", "合肥", "天津", "厦门", "香港", "remote", "远程",
 ]);
 
-function extractResumeSignals(text: string): { terms: string[]; cities: string[] } {
+export function extractResumeSignals(text: string): { terms: string[]; cities: string[] } {
   const lower = (text ?? "").toLowerCase();
   const terms: string[] = [];
   const seen = new Set<string>();
@@ -511,7 +511,7 @@ function extractResumeSignals(text: string): { terms: string[]; cities: string[]
   return { terms: terms.slice(0, 30), cities };
 }
 
-function scoreOverlap(haystack: string, terms: string[], cities: string[]) {
+export function scoreOverlap(haystack: string, terms: string[], cities: string[]) {
   const hay = haystack.toLowerCase();
   let score = 0;
   const reasons: string[] = [];
