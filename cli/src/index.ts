@@ -1,16 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import {
-  fetchDictionaries,
-  searchPositions,
-  fetchPositionDetail,
-  fetchAllPositions,
-  listNotices,
-  getNotice,
-  findNoticesByQuestion,
-  matchResume,
-  checkResume,
-} from "./tencent.js";
+import * as tencent from "./tencent.js";
+import * as bytedance from "./bytedance.js";
 import {
   memoryList,
   memoryGet,
@@ -19,7 +10,7 @@ import {
   memoryClear,
 } from "./memory.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const HELP = `
 job-pro — query Chinese big-tech campus recruiting from your terminal
@@ -30,17 +21,18 @@ USAGE
   job-pro --version
   job-pro help
 
-COMPANIES (v0.1)
-  tencent          join.qq.com  (Tencent / 腾讯)
+COMPANIES
+  tencent          join.qq.com         (Tencent / 腾讯)
+  bytedance        jobs.bytedance.com  (ByteDance / 字节跳动)
 
-VERBS (for tencent)
-  search <kw>                       search openings (kw is free text, <=30 chars)
+VERBS (same surface for every company)
+  search <kw>                       search openings (free text)
   detail <post_id>                  show full JD for one job
   all [<kw>]                        paginate every job (filter by kw if given)
-  dicts                             dump filter dictionaries (BG, city, family…)
-  notices                           list official announcements
-  notice <id>                       show one announcement's full content
-  flow <question>                   answer a question using best-matching notices
+  dicts                             dump filter dictionaries (where supported)
+  notices                           list official announcements (where supported)
+  notice <id>                       show one announcement's content (tencent only)
+  flow <question>                   answer using best-matching notices (tencent only)
   match <resume-text-or-->          rank jobs by overlap with resume text
                                     pass "-" to read resume from stdin
   resume-check <resume-text-or-->   structural sanity check on a resume
@@ -51,12 +43,14 @@ OUTPUT
 
 EXAMPLES
   job-pro tencent search "后台开发" --page-size 5
+  job-pro bytedance search "前端" --page-size 5
   job-pro tencent detail 1200791473415778304
+  job-pro bytedance detail 7638940721068099893
   job-pro tencent notices
   job-pro tencent flow "腾讯2026实习什么时候开始投递" --question-time 2026-05-13
   cat my-resume.md | job-pro tencent match -
   job-pro tencent memory set "stack=Go,Python" "target_city=深圳"
-  job-pro tencent memory event applied "腾讯后台 1200791473415778304"
+  job-pro bytedance memory event applied "ByteDance 前端 7638940721068099893"
 
 DOCS
   https://job.ha7ch.com
@@ -82,16 +76,12 @@ function popFlagValue(args: string[], name: string): { args: string[]; value?: s
   return { args: out, value };
 }
 
-function emit(result: unknown, compact: boolean): never {
-  const text = compact
-    ? JSON.stringify(result)
-    : JSON.stringify(result, null, 2);
-  console.log(text);
-  const ok =
-    typeof result === "object" && result !== null && "ok" in (result as Record<string, unknown>)
-      ? Boolean((result as Record<string, unknown>).ok)
-      : true;
-  process.exit(ok ? 0 : 1);
+function emit(value: unknown, compact: boolean) {
+  if (compact) {
+    console.log(JSON.stringify(value));
+  } else {
+    console.log(JSON.stringify(value, null, 2));
+  }
 }
 
 function readResumeArg(arg: string | undefined): string {
@@ -112,18 +102,31 @@ function readResumeArg(arg: string | undefined): string {
   }
 }
 
-async function runTencent(rawArgs: string[]): Promise<void> {
+// Every company adapter exposes the same set of functions, so one dispatcher
+// can route verbs against any of them. New companies plug in by adding an
+// `import * as <name>` and a line in `ADAPTERS`.
+type CompanyAdapter = typeof tencent;
+const ADAPTERS: Record<string, CompanyAdapter> = {
+  tencent,
+  bytedance: bytedance as unknown as CompanyAdapter,
+};
+
+async function runCompany(
+  adapter: CompanyAdapter,
+  company: string,
+  rawArgs: string[]
+): Promise<void> {
   const [verb, ...rest] = rawArgs;
-  if (!verb) die("expected a verb. Try `job-pro help`.");
+  if (!verb) die(`expected a verb. Try \`job-pro help\`.`);
 
   const { args, compact } = popCompactFlag(rest);
 
   if (verb === "search") {
-    let { args: a, value: page } = popFlagValue(args, "--page");
-    let { args: a2, value: pageSize } = popFlagValue(a, "--page-size");
+    const { args: a, value: page } = popFlagValue(args, "--page");
+    const { args: a2, value: pageSize } = popFlagValue(a, "--page-size");
     const keyword = a2.join(" ").trim();
     return emit(
-      await searchPositions({
+      await adapter.searchPositions({
         keyword,
         page: page ? Number(page) : undefined,
         pageSize: pageSize ? Number(pageSize) : undefined,
@@ -134,16 +137,16 @@ async function runTencent(rawArgs: string[]): Promise<void> {
 
   if (verb === "detail") {
     const postId = args[0];
-    if (!postId) die("usage: job-pro tencent detail <post_id>");
-    return emit(await fetchPositionDetail(postId), compact);
+    if (!postId) die(`usage: job-pro ${company} detail <post_id>`);
+    return emit(await adapter.fetchPositionDetail(postId), compact);
   }
 
   if (verb === "all") {
-    let { args: a, value: maxPages } = popFlagValue(args, "--max-pages");
-    let { args: a2, value: pageSize } = popFlagValue(a, "--page-size");
+    const { args: a, value: maxPages } = popFlagValue(args, "--max-pages");
+    const { args: a2, value: pageSize } = popFlagValue(a, "--page-size");
     const keyword = a2.join(" ").trim();
     return emit(
-      await fetchAllPositions({
+      await adapter.fetchAllPositions({
         keyword,
         maxPages: maxPages ? Number(maxPages) : undefined,
         pageSize: pageSize ? Number(pageSize) : undefined,
@@ -153,26 +156,27 @@ async function runTencent(rawArgs: string[]): Promise<void> {
   }
 
   if (verb === "dicts") {
-    return emit(await fetchDictionaries(), compact);
+    return emit(await adapter.fetchDictionaries(), compact);
   }
 
   if (verb === "notices") {
-    return emit(await listNotices(), compact);
+    return emit(await adapter.listNotices(), compact);
   }
 
   if (verb === "notice") {
     const id = args[0];
-    if (!id) die("usage: job-pro tencent notice <id>");
-    return emit(await getNotice(id), compact);
+    if (!id) die(`usage: job-pro ${company} notice <id>`);
+    return emit(await adapter.getNotice(id), compact);
   }
 
   if (verb === "flow") {
     const { args: a, value: questionTime } = popFlagValue(args, "--question-time");
     const { args: a2, value: topK } = popFlagValue(a, "--top-k");
     const question = a2.join(" ").trim();
-    if (!question) die("usage: job-pro tencent flow <question> [--question-time YYYY-MM-DD] [--top-k N]");
+    if (!question)
+      die(`usage: job-pro ${company} flow <question> [--question-time YYYY-MM-DD] [--top-k N]`);
     return emit(
-      await findNoticesByQuestion(question, {
+      await adapter.findNoticesByQuestion(question, {
         questionTime,
         topK: topK ? Number(topK) : undefined,
       }),
@@ -185,7 +189,7 @@ async function runTencent(rawArgs: string[]): Promise<void> {
     const { args: a2, value: candidates } = popFlagValue(a, "--candidates");
     const text = readResumeArg(a2[0]);
     return emit(
-      await matchResume(text, {
+      await adapter.matchResume(text, {
         topN: topN ? Number(topN) : undefined,
         candidates: candidates ? Number(candidates) : undefined,
       }),
@@ -195,16 +199,16 @@ async function runTencent(rawArgs: string[]): Promise<void> {
 
   if (verb === "resume-check") {
     const text = readResumeArg(args[0]);
-    return emit(checkResume(text), compact);
+    return emit(adapter.checkResume(text), compact);
   }
 
   if (verb === "memory") {
     const [sub, ...subArgs] = args;
-    if (!sub) die("usage: job-pro tencent memory <list|get|set|event|clear>");
+    if (!sub) die(`usage: job-pro ${company} memory <list|get|set|event|clear>`);
     if (sub === "list") return emit(memoryList(), compact);
     if (sub === "get") {
       const key = subArgs[0];
-      if (!key) die("usage: job-pro tencent memory get <key>");
+      if (!key) die(`usage: job-pro ${company} memory get <key>`);
       return emit(memoryGet(key), compact);
     }
     if (sub === "set") {
@@ -234,12 +238,17 @@ async function main() {
     return;
   }
 
-  if (cmd === "tencent") {
-    await runTencent(args.slice(1));
+  const adapter = ADAPTERS[cmd];
+  if (adapter) {
+    await runCompany(adapter, cmd, args.slice(1));
     return;
   }
 
-  die(`unknown company: ${cmd}. Supported in v0.1: tencent. Try \`job-pro help\`.`);
+  die(
+    `unknown company: ${cmd}. Supported: ${Object.keys(ADAPTERS).join(
+      ", "
+    )}. Try \`job-pro help\`.`
+  );
 }
 
 main().catch((err) => {

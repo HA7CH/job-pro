@@ -21,8 +21,8 @@ const COMPANIES: Company[] = [
   },
   {
     name: "ByteDance",
-    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+ByteDance+adapter",
-    listings: "building",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/bytedance.ts",
+    listings: "live",
     autoApply: "building",
   },
   {

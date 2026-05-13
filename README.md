@@ -67,12 +67,13 @@ Add `--compact` to any command for a single-line JSON output (pipe-friendly).
 
 ## Roadmap
 
-| Company    | Get jobs | Auto-apply | Source                              |
-|------------|----------|------------|-------------------------------------|
-| Tencent    | ✅       | ⏳         | [`join.qq.com`](https://join.qq.com) |
-| ByteDance  | ⏳       | ⏳         | jobs.bytedance.com                  |
-| Didi       | ⏳       | ⏳         | talent.didiglobal.com               |
-| Alibaba    | ⏳       | ⏳         | talent.alibaba.com                  |
+| Company    | Get jobs | Auto-apply | Source                                                             |
+|------------|----------|------------|--------------------------------------------------------------------|
+| Tencent    | ✅       | ⏳         | [`join.qq.com`](https://join.qq.com)                                |
+| ByteDance  | ✅       | ⏳         | [`jobs.bytedance.com`](https://jobs.bytedance.com/campus/position) |
+| Alibaba    | ⏳       | ⏳         | campus-talent.alibaba.com                                          |
+| Meituan    | ⏳       | ⏳         | zhaopin.meituan.com                                                |
+| Xiaohongshu| ⏳       | ⏳         | (investigating)                                                    |
 
 `Auto-apply` is phase 2 — it needs login cookies / OAuth, not just the public
 search endpoints. See [docs/auto-apply.md](./docs/auto-apply.md) for the plan.
