@@ -455,14 +455,28 @@ export async function matchResume(
   };
 }
 
-// ---------- stub notices ----------
-// Bilibili's campus site has no public notices/announcements endpoint.
+// ---------- stub notices + dicts ----------
+// Bilibili's campus site has no public notices/announcements endpoint
+// and the dict/post endpoint requires a real Bilibili session (403 anon),
+// so fetchDictionaries also stubs with an honest message.
 
 const STUB_NOTICES = {
   ok: false as const,
   source: "jobs.bilibili.com",
   message: "Bilibili: no public notices endpoint",
 };
+
+export async function fetchDictionaries(): Promise<{
+  ok: false;
+  source: string;
+  message: string;
+}> {
+  return {
+    ok: false,
+    source: "jobs.bilibili.com",
+    message: "Bilibili: dict endpoints (dict/post, cityList, etc.) require a real user session (ajSessionId); filter taxonomy is derivable from positionList responses instead.",
+  };
+}
 
 export async function listNotices(): Promise<typeof STUB_NOTICES> {
   return STUB_NOTICES;
