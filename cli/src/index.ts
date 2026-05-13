@@ -19,6 +19,7 @@ import * as huawei from "./huawei.js";
 import * as weibo from "./weibo.js";
 import * as mihoyo from "./mihoyo.js";
 import * as pingan from "./pingan.js";
+import * as sensetime from "./sensetime.js";
 import {
   memoryList,
   memoryGet,
@@ -58,6 +59,7 @@ COMPANIES
   weibo            career.sina.com.cn          (Weibo / 微博 — auth-gated, limited)
   mihoyo           campus.mihoyo.com           (miHoYo / 米哈游 — SPA, limited)
   pingan           campus.pingan.com           (Ping An / 平安 — unified group)
+  sensetime        hr.sensetime.com            (SenseTime / 商汤 — auth-gated, limited)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -215,6 +217,7 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   weibo: weibo as unknown as CompanyAdapter,
   mihoyo: mihoyo as unknown as CompanyAdapter,
   pingan: pingan as unknown as CompanyAdapter,
+  sensetime: sensetime as unknown as CompanyAdapter,
 };
 
 async function runCompany(

@@ -134,6 +134,12 @@ const COMPANIES: Company[] = [
     autoApply: "building",
   },
   {
+    name: "SenseTime",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/sensetime.ts",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
     listings: "building",

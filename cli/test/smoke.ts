@@ -35,6 +35,7 @@ import * as huawei from "../src/huawei.js";
 import * as weibo from "../src/weibo.js";
 import * as mihoyo from "../src/mihoyo.js";
 import * as pingan from "../src/pingan.js";
+import * as sensetime from "../src/sensetime.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -57,6 +58,7 @@ const ADAPTERS: Record<string, Adapter> = {
   weibo: weibo as unknown as Adapter,
   mihoyo: mihoyo as unknown as Adapter,
   pingan: pingan as unknown as Adapter,
+  sensetime: sensetime as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };
