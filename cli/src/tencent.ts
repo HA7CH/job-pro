@@ -1,5 +1,58 @@
 // Thin client for Tencent's public campus-recruiting API at join.qq.com.
 //
+// IMPORTANT: join.qq.com is a CAMPUS-ONLY portal (校园招聘). It exposes
+// three recruit types — 应届生 (new graduates), 实习生 (interns), and 人才专项
+// (talent programs such as 青云计划 and 技术研发提前批). There is NO social-hire /
+// 社招 / experienced-hire endpoint on this domain; Tencent's social-hire jobs
+// live at a separate site (careers.tencent.com).
+//
+// Filter taxonomy (all IDs are for the searchPosition POST body):
+//
+//   projectIdList  — leaf codes from getAllProject; controls recruit type
+//     1   应届生
+//     2   实习生
+//     12  项目实习生
+//     14  青云计划-应届生
+//     16  技术研发提前批
+//     20  青云计划-实习生
+//
+//   bgList  — BusinessGroup codes (data.count is accurate per BG)
+//     953    CDG 企业发展事业群         ~100 positions
+//     29294  CSIG 云与智慧产业事业群    ~206 positions
+//     956    IEG 互动娱乐事业群         ~275 positions
+//     29292  PCG 平台与内容事业群        ~89 positions
+//     14129  WXG 微信事业群             ~152 positions
+//     958    TEG 技术工程事业群          ~198 positions
+//     78     S1 职能系统-职能线           ~36 positions
+//     2233   S2 职能系统-财经线            ~6 positions
+//     2234   S3 职能系统-HR与管理线       ~12 positions
+//     955    其他                           ~0 positions
+//
+//   positionFidList  — sub-family "id" values from getPositionFamily
+//     fid 2 技术: 75:软件开发类, 76:技术运营类, 77:安全技术类, 84:测试与质量管理类,
+//              93:算法研究类, 231:解决方案与服务类, 250:硬件开发类
+//     fid 3 产品: 79:产品经理培训生, 80:游戏产品类, 83:内容制作类, 94:通用产品类,
+//              219:金融产品类, 253:项目管理类
+//     fid 4 设计: 85:游戏美术类, 89:平面交互类
+//     fid 5 市场: 78:战略投资类, 82:市场营销类, 96:公共关系类, 192:销售拓展类
+//     fid 6 职能: 326:财经分析类, 327:人力资源类, 328:法律与公共策略类, 329:行政支持类
+//
+//   workCountryType  — 0=不限 (695), 1=国内 (593), 2=海外 (102)
+//
+//   workCityList  — city codes from getPositionWorkCities (key "1" = 国内, key "2" = 海外)
+//     国内: 1:深圳 (~419), 2:北京 (~252), 3:上海 (~185), 5:广州 (~66),
+//           6:武汉, 7:杭州, 8:成都, 11:南京, 14:重庆, 17:贵阳, 18:长沙,
+//           29:厦门, 30:合肥, 31:天津, 37:中国香港, 190:芜湖, 276:韶关
+//     海外: 138:贝尔维尤, 401:帕罗奥多, 407:洛杉矶, 501:阿姆斯特丹,
+//           601:法兰克福, 701:首尔, 801:东京, 1001:曼谷, 1301:新加坡,
+//           1401:伦敦, 1601:雅加达, 2301:巴黎, 3003:奥克兰
+//
+//   recruitCityList  — codes from getRecruitCity (interview city, not work city)
+//     1:成都, 3:广州, 5:上海, 11:北京, 13:中国香港, 14:深圳, 27:武汉, 47:远程面试
+//
+// NOTE: data.count is unreliable when projectIdList is the ONLY filter
+// (always returns 695). It IS accurate when bgList or positionFidList are set.
+//
 // All endpoints are unauthenticated; the server just checks Referer/Origin
 // to discourage cross-site embedding. Endpoint inventory:
 //
@@ -78,24 +131,100 @@ async function call<T>(
 
 // ---------- dictionaries ----------
 
+/** Retrieve the full filter catalog for join.qq.com, including live position
+ *  counts per BusinessGroup and per PositionFamily sub-category.
+ *
+ *  Counts are fetched in parallel (one POST per BG / family sub-id).
+ *  The projectIdList used for count probes is the full set [1,2,12,14,16,20]
+ *  so counts reflect the whole campus pool.
+ *
+ *  Note: counts under recruit_types are NOT probed here because
+ *  data.count is unreliable when projectIdList is the sole filter
+ *  (always returns 695 regardless of which projects are listed).
+ */
 export async function fetchDictionaries() {
   const [projects, families, workCities, recruitCities, shared] = await Promise.all([
     call<unknown[]>("GET", "/position/getAllProject"),
-    call<unknown[]>("GET", "/position/getPositionFamily?lang=zh-cn"),
-    call<unknown[]>("GET", "/position/getPositionWorkCities?lang=zh-cn"),
+    call<unknown>("GET", "/position/getPositionFamily?lang=zh-cn"),
+    call<unknown>("GET", "/position/getPositionWorkCities?lang=zh-cn"),
     call<unknown[]>("GET", "/position/getRecruitCity?lang=zh-cn"),
     call<unknown>(
       "GET",
       "/dictionary/?types=RecruitType,BusinessGroup,RecruitProjectPostList"
     ),
   ]);
+
+  const allProjectIds = [1, 2, 12, 14, 16, 20];
+
+  // Helper: call searchPosition with a single extra filter, return count.
+  async function countWith(extra: Record<string, unknown>): Promise<number> {
+    const body = {
+      projectIdList: allProjectIds,
+      keyword: "",
+      bgList: [],
+      workCountryType: 0,
+      workCityList: [],
+      recruitCityList: [],
+      positionFidList: [],
+      pageIndex: 1,
+      pageSize: 1,
+      ...extra,
+    };
+    const r = await call<{ count?: number }>("POST", "/position/searchPosition", { body });
+    return r.data?.count ?? 0;
+  }
+
+  // BG codes from shared.BusinessGroup
+  const bgEntries = ((shared.data as { BusinessGroup?: Array<{ name: string; code: string }> })
+    ?.BusinessGroup ?? []).filter((e) => e.code && e.code !== "955");
+
+  // positionFidList sub-ids from families data
+  type FamilyEntry = { id: number; fid: number; title: string };
+  const familySubIds: FamilyEntry[] = [];
+  const familyData = families.data as Record<string, FamilyEntry[]> | undefined;
+  if (familyData) {
+    for (const entries of Object.values(familyData)) {
+      for (const e of entries) {
+        if (e.id) familySubIds.push(e);
+      }
+    }
+  }
+
+  // Fire all count probes in parallel
+  const [bgCounts, familyCounts] = await Promise.all([
+    Promise.all(bgEntries.map((bg) => countWith({ bgList: [Number(bg.code)] }))),
+    Promise.all(familySubIds.map((f) => countWith({ positionFidList: [f.id] }))),
+  ]);
+
+  const bg_counts: Record<string, { name: string; code: number; count: number }> = {};
+  for (let i = 0; i < bgEntries.length; i++) {
+    const bg = bgEntries[i];
+    bg_counts[bg.code] = { name: bg.name, code: Number(bg.code), count: bgCounts[i] };
+  }
+
+  const family_counts: Record<string, { id: number; fid: number; title: string; count: number }> = {};
+  for (let i = 0; i < familySubIds.length; i++) {
+    const f = familySubIds[i];
+    family_counts[f.id] = { ...f, count: familyCounts[i] };
+  }
+
   return {
     ok: [projects, families, workCities, recruitCities, shared].every((r) => r.ok),
     source: "join.qq.com",
-    projects: projects.data,
+    api_host: API_ROOT,
+    verified_at: new Date().toISOString(),
+    campus_only: true,
+    recruit_types: (shared.data as { RecruitType?: unknown[] })?.RecruitType ?? [],
+    recruit_project_post_list:
+      (shared.data as { RecruitProjectPostList?: unknown[] })?.RecruitProjectPostList ?? [],
+    business_groups:
+      (shared.data as { BusinessGroup?: unknown[] })?.BusinessGroup ?? [],
+    bg_counts,
     position_families: families.data,
+    family_counts,
     work_cities: workCities.data,
     recruit_cities: recruitCities.data,
+    projects: projects.data,
     shared: shared.data,
   };
 }
@@ -161,6 +290,16 @@ function summarizePosition(item: RawPositionListEntry): PositionSummary {
 export interface SearchOptions {
   keyword?: string;
   projectIds?: number[];
+  /** BG (事业群) codes, e.g. 953=CDG, 29294=CSIG, 956=IEG, 29292=PCG, 14129=WXG, 958=TEG */
+  bgIds?: number[];
+  /** Sub-family ids from getPositionFamily, e.g. 75=软件开发类, 93=算法研究类, 85=游戏美术类 */
+  positionFamilyIds?: number[];
+  /** Work-city codes from getPositionWorkCities, e.g. 1=深圳, 2=北京, 3=上海 */
+  workCityIds?: number[];
+  /** Recruit-city codes from getRecruitCity (interview city), e.g. 14=深圳, 11=北京 */
+  recruitCityIds?: number[];
+  /** 0=不限 (default), 1=国内, 2=海外 */
+  workCountryType?: 0 | 1 | 2;
   page?: number;
   pageSize?: number;
 }
@@ -172,11 +311,11 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const body = {
     projectIdList: projectIds,
     keyword: (opts.keyword ?? "").trim().slice(0, 30),
-    bgList: [],
-    workCountryType: 0,
-    workCityList: [],
-    recruitCityList: [],
-    positionFidList: [],
+    bgList: opts.bgIds ?? [],
+    workCountryType: opts.workCountryType ?? 0,
+    workCityList: opts.workCityIds ?? [],
+    recruitCityList: opts.recruitCityIds ?? [],
+    positionFidList: opts.positionFamilyIds ?? [],
     pageIndex: page,
     pageSize,
   };
