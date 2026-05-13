@@ -205,7 +205,7 @@ function summarizePosition(item: RawJobListEntry): PositionSummary {
 
 export interface SearchOptions {
   keyword?: string;
-  jobTypeCodes?: string[];  // default: ["3"] (campus/experienced)
+  jobTypeCodes?: string[];  // default: ["1","2"] (校招应届正式 + 实习) — matches the 校招 tab
   page?: number;
   pageSize?: number;
 }
