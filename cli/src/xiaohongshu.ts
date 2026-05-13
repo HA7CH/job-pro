@@ -10,6 +10,11 @@
 //   POST /websiterecruit/position/pageQueryPosition
 //        body: { recruitType: "campus", keyword, page, pageSize, workplaceIds?, jobProjectCode? }
 //        returns: { statusCode, data: { pageNum, pageSize, total, totalPage, list: [...] } }
+//        NOTE: the upstream endpoint accepts `keyword` in the body but silently
+//        ignores it — every keyword returns the same 319-row default list.
+//        Caller-side keyword filtering must be done after fetchAllPositions.
+//        The endpoint also ignores `pageSize` and always returns 10 rows; the
+//        adapter slices client-side in searchPositions() to honour the caller.
 //
 //   GET  /websiterecruit/position/queryPositionDetail?positionId=<id>
 //        returns: { statusCode, data: { positionId, positionName, duty, qualification,
@@ -339,12 +344,15 @@ export async function findNoticesByQuestion(
   question: string,
   _opts: { questionTime?: string; topK?: number } = {}
 ) {
+  // Stub contract: align with listNotices (ok: true, empty results) so callers
+  // treating "no public endpoint" as a soft success — same as Tencent when the
+  // notice list happens to be empty — get a uniform shape.
   return {
-    ok: false as const,
+    ok: true as const,
     source: "job.xiaohongshu.com",
     question,
-    message: "Xiaohongshu: no public campus notice API — cannot search notices",
     matches: [] as unknown[],
+    note: "No public campus notice API discovered for Xiaohongshu; flow returns no matches by design.",
   };
 }
 
