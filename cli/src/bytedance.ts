@@ -3,11 +3,22 @@
 // All endpoints are unauthenticated; the server enforces portal-channel /
 // portal-platform / website-path headers to discourage cross-site embedding.
 //
-// Endpoint inventory (probed 2024-05):
+// Endpoint inventory (probed 2024-05, filter semantics verified 2026-05):
 //
 //   POST https://jobs.bytedance.com/api/v1/search/job/posts
-//        Payload: { keyword, limit, offset, portal_type:3, portal_entrance:1, language:"zh" }
+//        Payload: { keyword, limit, offset, portal_type:3, portal_entrance:1, language:"zh",
+//                   recruitment_id_list:["201"] }
 //        Response: { code:0, data:{ job_post_list:[...], count:<int> }, message:"ok" }
+//
+// Filter semantics (from JS bundle S={1:"1",2:"201",3:"202,301"} mapping):
+//   URL ?type=2  → recruitment_id_list:["201"]   → 正式 (campus / new-grad)  ~2057 posts
+//   URL ?type=3  → recruitment_id_list:["202"]   → 实习 (intern)              ~5767 posts
+//   No filter   → all listings                                                  ~7824 posts
+//
+// The campus page (jobs.bytedance.com/campus/position) defaults to the 校园招聘 tab (type=2,
+// 正式/new-grad only).  Without recruitment_id_list the API returns all 7824 listings
+// (campus + intern combined), which does NOT match the default tab view.
+// The correct default filter is recruitment_id_list:["201"].
 //
 // No separate detail / dictionaries / notices endpoints are publicly reachable
 // (all return 404).  fetchPositionDetail is implemented by paginating the search
@@ -182,6 +193,9 @@ export async function searchPositions(
     portal_type: 3,
     portal_entrance: 1,
     language: "zh",
+    // "201" = 正式 (campus / new-grad) — matches the default 校园招聘 tab on the website.
+    // Without this filter the API returns ~7824 (campus + intern combined).
+    recruitment_id_list: ["201"],
   };
 
   const response = await call<RawSearchData>("/search/job/posts", payload);
@@ -269,6 +283,7 @@ export async function fetchPositionDetail(postId: string) {
       portal_type: 3,
       portal_entrance: 1,
       language: "zh",
+      recruitment_id_list: ["201"],
     };
     const response = await call<RawSearchData>("/search/job/posts", payload);
     if (!response.ok || !response.data) break;
@@ -383,6 +398,7 @@ export async function matchResume(
     portal_type: 3,
     portal_entrance: 1,
     language: "zh",
+    recruitment_id_list: ["201"],
   };
   const raw = await call<RawSearchData>("/search/job/posts", payload);
   const rawPosts: RawJobPost[] = raw.ok ? (raw.data?.job_post_list ?? []) : [];
