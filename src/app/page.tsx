@@ -39,8 +39,8 @@ const COMPANIES: Company[] = [
   },
   {
     name: "Xiaohongshu",
-    href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Xiaohongshu+adapter",
-    listings: "building",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xiaohongshu.ts",
+    listings: "live",
     autoApply: "building",
   },
   {

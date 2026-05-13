@@ -73,7 +73,7 @@ Add `--compact` to any command for a single-line JSON output (pipe-friendly).
 | ByteDance  | ✅       | ⏳         | [`jobs.bytedance.com`](https://jobs.bytedance.com/campus/position) |
 | Alibaba    | ✅       | ⏳         | [`campus-talent.alibaba.com`](https://campus-talent.alibaba.com/campus/position) |
 | Meituan    | ✅       | ⏳         | [`zhaopin.meituan.com`](https://zhaopin.meituan.com/job-list)      |
-| Xiaohongshu| ⏳       | ⏳         | (investigating)                                                    |
+| Xiaohongshu| ✅       | ⏳         | [`job.xiaohongshu.com`](https://job.xiaohongshu.com/)              |
 
 `Auto-apply` is phase 2 — it needs login cookies / OAuth, not just the public
 search endpoints. See [docs/auto-apply.md](./docs/auto-apply.md) for the plan.

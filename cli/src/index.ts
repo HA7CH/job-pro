@@ -4,6 +4,7 @@ import * as tencent from "./tencent.js";
 import * as bytedance from "./bytedance.js";
 import * as alibaba from "./alibaba.js";
 import * as meituan from "./meituan.js";
+import * as xiaohongshu from "./xiaohongshu.js";
 import {
   memoryList,
   memoryGet,
@@ -28,6 +29,7 @@ COMPANIES
   bytedance        jobs.bytedance.com          (ByteDance / 字节跳动)
   alibaba          campus-talent.alibaba.com   (Alibaba / 阿里巴巴)
   meituan          zhaopin.meituan.com         (Meituan / 美团)
+  xiaohongshu      job.xiaohongshu.com         (Xiaohongshu / 小红书)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -117,6 +119,7 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   bytedance: bytedance as unknown as CompanyAdapter,
   alibaba: alibaba as unknown as CompanyAdapter,
   meituan: meituan as unknown as CompanyAdapter,
+  xiaohongshu: xiaohongshu as unknown as CompanyAdapter,
 };
 
 async function runCompany(
