@@ -134,7 +134,7 @@ export default function Home() {
   return (
     <main className="page">
       <h1 className="font-serif text-4xl md:text-5xl tracking-tight leading-[1.1]">
-        Apply jobs w/ your <span className="whitespace-nowrap">Claude Code</span>
+        Apply jobs w/ <span className="whitespace-nowrap">your Claude Code</span>
       </h1>
       <p className="lede">
         <span className="lede-prefix">$</span> npx job-pro help
