@@ -13,6 +13,8 @@ import * as netease from "./netease.js";
 import * as didi from "./didi.js";
 import * as bilibili from "./bilibili.js";
 import * as pdd from "./pdd.js";
+import * as nio from "./nio.js";
+import * as minimax from "./minimax.js";
 import {
   memoryList,
   memoryGet,
@@ -46,6 +48,8 @@ COMPANIES
   didi             talent.didiglobal.com       (Didi / 滴滴 — mixed campus+social)
   bilibili         jobs.bilibili.com           (Bilibili / 哔哩哔哩)
   pdd              careers.pinduoduo.com       (PDD / 拼多多 — notices only, jobs need auth)
+  nio              nio.jobs.feishu.cn          (NIO / 蔚来 — Feishu ATSX)
+  minimax          vrfi1sk8a0.jobs.feishu.cn   (MiniMax — Feishu ATSX)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -197,6 +201,8 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   didi: didi as unknown as CompanyAdapter,
   bilibili: bilibili as unknown as CompanyAdapter,
   pdd: pdd as unknown as CompanyAdapter,
+  nio: nio as unknown as CompanyAdapter,
+  minimax: minimax as unknown as CompanyAdapter,
 };
 
 async function runCompany(

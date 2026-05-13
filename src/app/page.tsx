@@ -98,6 +98,18 @@ const COMPANIES: Company[] = [
     autoApply: "building",
   },
   {
+    name: "NIO",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/nio.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
+    name: "MiniMax",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/minimax.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
     listings: "building",

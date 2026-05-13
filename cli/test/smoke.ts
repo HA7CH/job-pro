@@ -29,6 +29,8 @@ import * as netease from "../src/netease.js";
 import * as didi from "../src/didi.js";
 import * as bilibili from "../src/bilibili.js";
 import * as pdd from "../src/pdd.js";
+import * as nio from "../src/nio.js";
+import * as minimax from "../src/minimax.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -45,6 +47,8 @@ const ADAPTERS: Record<string, Adapter> = {
   didi: didi as unknown as Adapter,
   bilibili: bilibili as unknown as Adapter,
   pdd: pdd as unknown as Adapter,
+  nio: nio as unknown as Adapter,
+  minimax: minimax as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };
