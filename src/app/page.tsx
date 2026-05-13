@@ -80,6 +80,12 @@ const COMPANIES: Company[] = [
     autoApply: "building",
   },
   {
+    name: "Didi",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/didi.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
     listings: "building",

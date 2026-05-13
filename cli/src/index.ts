@@ -10,6 +10,7 @@ import * as kuaishou from "./kuaishou.js";
 import * as xiaomi from "./xiaomi.js";
 import * as baidu from "./baidu.js";
 import * as netease from "./netease.js";
+import * as didi from "./didi.js";
 import {
   memoryList,
   memoryGet,
@@ -40,6 +41,7 @@ COMPANIES
   xiaomi           xiaomi.jobs.f.mioffice.cn   (Xiaomi / 小米 — Feishu ATSX)
   baidu            talent.baidu.com            (Baidu / 百度)
   netease          hr.163.com                  (NetEase / 网易)
+  didi             talent.didiglobal.com       (Didi / 滴滴 — mixed campus+social)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -188,6 +190,7 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   xiaomi: xiaomi as unknown as CompanyAdapter,
   baidu: baidu as unknown as CompanyAdapter,
   netease: netease as unknown as CompanyAdapter,
+  didi: didi as unknown as CompanyAdapter,
 };
 
 async function runCompany(
