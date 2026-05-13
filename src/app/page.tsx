@@ -140,6 +140,30 @@ const COMPANIES: Company[] = [
     autoApply: "building",
   },
   {
+    name: "Trip.com",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/trip.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
+    name: "Unitree",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/unitree.ts",
+    listings: "live",
+    autoApply: "building",
+  },
+  {
+    name: "BYD",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/byd.ts",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
+    name: "Ant Group",
+    href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/antgroup.ts",
+    listings: "building",
+    autoApply: "building",
+  },
+  {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
     listings: "building",

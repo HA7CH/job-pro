@@ -20,6 +20,10 @@ import * as weibo from "./weibo.js";
 import * as mihoyo from "./mihoyo.js";
 import * as pingan from "./pingan.js";
 import * as sensetime from "./sensetime.js";
+import * as trip from "./trip.js";
+import * as unitree from "./unitree.js";
+import * as byd from "./byd.js";
+import * as antgroup from "./antgroup.js";
 import {
   memoryList,
   memoryGet,
@@ -60,6 +64,10 @@ COMPANIES
   mihoyo           campus.mihoyo.com           (miHoYo / 米哈游 — SPA, limited)
   pingan           campus.pingan.com           (Ping An / 平安 — unified group)
   sensetime        hr.sensetime.com            (SenseTime / 商汤 — auth-gated, limited)
+  trip             careers.ctrip.com           (Trip.com / 携程)
+  unitree          www.unitree.com             (Unitree / 宇树科技 — robotics)
+  byd              job.byd.com                 (BYD / 比亚迪 — JWT-gated, limited)
+  antgroup         talent.antgroup.com         (Ant Group / 蚂蚁集团 — OAuth-gated, limited)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -218,6 +226,10 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   mihoyo: mihoyo as unknown as CompanyAdapter,
   pingan: pingan as unknown as CompanyAdapter,
   sensetime: sensetime as unknown as CompanyAdapter,
+  trip: trip as unknown as CompanyAdapter,
+  unitree: unitree as unknown as CompanyAdapter,
+  byd: byd as unknown as CompanyAdapter,
+  antgroup: antgroup as unknown as CompanyAdapter,
 };
 
 async function runCompany(

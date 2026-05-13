@@ -36,6 +36,10 @@ import * as weibo from "../src/weibo.js";
 import * as mihoyo from "../src/mihoyo.js";
 import * as pingan from "../src/pingan.js";
 import * as sensetime from "../src/sensetime.js";
+import * as trip from "../src/trip.js";
+import * as unitree from "../src/unitree.js";
+import * as byd from "../src/byd.js";
+import * as antgroup from "../src/antgroup.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -59,6 +63,10 @@ const ADAPTERS: Record<string, Adapter> = {
   mihoyo: mihoyo as unknown as Adapter,
   pingan: pingan as unknown as Adapter,
   sensetime: sensetime as unknown as Adapter,
+  trip: trip as unknown as Adapter,
+  unitree: unitree as unknown as Adapter,
+  byd: byd as unknown as Adapter,
+  antgroup: antgroup as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };
