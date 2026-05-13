@@ -9,13 +9,16 @@
 // Response envelope: { status: 1, message: "成功", data: { ... } }
 // NOTE: status === 1 (not 0) indicates success on this platform.
 //
-// jobType codes (verified 2026-05-13):
-//   "1" → 社招 (regular / experienced hire) — totalCount ~2600+
-//   "2" → 实习 (intern)                     — totalCount ~530+
-//   "3" → 经验丰富/校园类 (the original spec labelled this "campus";
-//           in practice the API label is jobType "3" / specialCode "5",
-//           covering experienced-hire style postings rather than new-grad
-//           campus recruitment). Using "2" for intern yields clear 实习 roles.
+// jobType codes (re-verified 2026-05-13 against the live job-list page,
+// where the "校招" tab shows ~643 = code 1 + code 2 combined):
+//   "1" → 校招应届正式岗 (new-grad full-time)   — totalCount ~112
+//          sample titles: 自动驾驶算法工程师 / 计算机视觉工程师
+//   "2" → 实习 (intern)                          — totalCount ~531
+//          sample titles: HR实习生-招聘方向 / 策略运营实习生
+//   "3" → 社招 (experienced hire)                — totalCount ~2616
+//          NOT what users mean by "校招"; the previous default ["3"] was
+//          misleading. New default is ["1","2"] which mirrors what
+//          zhaopin.meituan.com itself surfaces under the 校招 tab.
 //
 // PositionSummary field mapping:
 //   post_id       ← jobUnionId (stringified)
@@ -48,9 +51,9 @@ const DEFAULT_HEADERS = {
 
 // jobType code → human label
 const JOB_TYPE_LABEL: Record<string, string> = {
-  "1": "社招",
+  "1": "校招",
   "2": "实习",
-  "3": "校园/经验",
+  "3": "社招",
 };
 
 interface ApiEnvelope<T> {
@@ -210,7 +213,7 @@ export interface SearchOptions {
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const jobTypeCodes = opts.jobTypeCodes ?? ["3"];
+  const jobTypeCodes = opts.jobTypeCodes ?? ["1", "2"];
 
   const body = {
     page: { pageNo: page, pageSize },
