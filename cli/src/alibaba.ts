@@ -7,32 +7,46 @@
 // Endpoint inventory (all under https://campus-talent.alibaba.com):
 //
 //   GET  /campus/position                  — HTML page; sets XSRF-TOKEN cookie
-//   POST /position/search                  — paginated job search
+//   POST /searchCondition/listBatch        — list all active batches (no auth required)
+//   POST /searchCondition/list             — filter taxonomy for a given batchId
+//   POST /position/search                  — paginated job search (filter params below)
 //   POST /position/detail                  — single job detail (body: {id: <number>})
+//   POST /position/queryCircleDept         — dept tree for a circle (returns [] without login)
 //
-// No public dictionary / notice endpoints were found; those exports are stubbed.
+// ACTIVE BATCHES (as of 2026-05-14; refresh via fetchDictionaries()):
+//   batchId        | batchName                   | type         | totalCount
+//   100000540002   | 阿里巴巴2027届实习生           | internship   | 474
+//   100000560002   | 阿里巴巴日常实习生             | project      | 225
+//   100000560001   | 阿里巴巴研究型实习生           | project      | 188
+//   (graduate section is empty — no 校招正式 batch open as of 2026-05-14)
 //
-// DEFAULT BATCH SCOPE:
-//   batchId 100000540002 = "阿里巴巴2027届实习生" (Alibaba 2027 class internships only).
-//   All positions returned have categoryType: "internship" — this batch does NOT include
-//   full-time new-grad (校招正式) roles. The batch name is embedded in each result's
-//   batchName field. When a full-time new-grad batch opens it will have a different
-//   batchId; pass --batch-id explicitly to target it.
-//   As of 2026-05-13 the only other active batch is 100000560002 ("阿里巴巴日常实习生",
-//   225 roles, categoryType: "project").
+// FULL-TIME (校招正式) NOTE:
+//   Alibaba's full-time new-grad batch (graduate/trainee type) is NOT currently active.
+//   It historically opens in August–October. When it opens, /searchCondition/listBatch
+//   will populate the `graduate` array with a new batchId. Pass that batchId explicitly.
+//
+// BATCHID IS MANDATORY:
+//   POST /position/search with NO batchId returns totalCount=0. There is no "all batches"
+//   aggregate call — you must loop over each batchId to get the full picture.
+//
+// FILTER DIMENSIONS (passed as comma-joined strings in /position/search body):
+//   subCategories  — category values from searchCondition/list (type="category")
+//                    e.g. "11" (技术类), "1" (产品类), "11,1" (both) — comma-joined
+//   regions        — city names from searchCondition/list (type="workCity")
+//                    e.g. "北京", "北京,上海" — comma-joined city labels
+//   customDeptCode — child dept codes from searchCondition/list (type="customDept")
+//                    Must use leaf-level codes (e.g. "JM3EV0" for 阿里云技术线),
+//                    NOT parent codes (e.g. "60002" for 阿里云 returns 0 results).
+//                    Comma-join multiple: "JM3EV0,5YTU0N"
+//
+// KEYWORD SEARCH:
+//   The correct field is `searchKey` (NOT `keyword`). searchKey works: passing "前端"
+//   returns 3 results, "算法" returns 87, "java" returns 2. The old `keyword` field is
+//   silently ignored by the server. This adapter now uses searchKey.
 //
 // CHANNEL NOTE:
-//   The live site (window.__sysconfig.channelCodeMap.campus) now uses
-//   "new_campus_group_official_site". Both channel values return identical counts
-//   for batchId 100000540002 (474 total), so either works; the new name is canonical.
-//
-// KEYWORD LIMITATION:
-//   `/position/search` accepts but silently IGNORES the `keyword` field —
-//   passing "AI", "前端", or any other query returns the same 474-row default
-//   set in the same order. Server-side keyword filtering is not exposed in
-//   the public campus API. Callers needing keyword filtering must do it
-//   client-side after `fetchAllPositions`. The adapter still forwards the
-//   keyword in the request body (cheap, in case the server enables it later).
+//   The live site uses "new_campus_group_official_site". Both channel values return
+//   identical counts for batchId 100000540002 (474 total), so either works.
 //
 // PositionSummary field mapping (Alibaba → canonical):
 //   post_id        ← String(item.id)                (numeric, e.g. 199903220038)
@@ -232,10 +246,33 @@ function summarizePosition(item: RawPosition): PositionSummary {
 // ---------- search ----------
 
 export interface SearchOptions {
+  /** Full-text keyword. Sent as `searchKey` which the server does filter on. */
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /**
+   * Which batch to search. Defaults to 100000540002 (2027届实习生).
+   * Retrieve available batchIds via fetchDictionaries().
+   */
   batchId?: number;
+  /**
+   * Category filter values (comma-joined string or array). Values come from
+   * fetchDictionaries().batches[n].filters.categories.
+   * Examples: "11" (技术类), ["11","1"] (技术+产品).
+   */
+  subCategories?: string | string[];
+  /**
+   * City filter (comma-joined string or array). Values come from
+   * fetchDictionaries().batches[n].filters.cities.
+   * Examples: "北京", ["北京","上海"].
+   */
+  regions?: string | string[];
+  /**
+   * BU / dept leaf-level codes (comma-joined string or array). Use CHILD codes
+   * from fetchDictionaries().batches[n].filters.customDepts[*].children[*].value.
+   * Parent-level codes (e.g. "60002") return 0 results — use child codes only.
+   */
+  customDeptCode?: string | string[];
 }
 
 interface SearchContent {
@@ -243,20 +280,31 @@ interface SearchContent {
   totalCount?: number;
 }
 
+function joinFilter(v: string | string[] | undefined): string | undefined {
+  if (!v) return undefined;
+  return Array.isArray(v) ? v.join(",") : v;
+}
+
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+  const searchKey = (opts.keyword ?? "").trim().slice(0, 60) || undefined;
   const batchId = opts.batchId ?? DEFAULT_BATCH_ID;
 
-  const body = {
+  const body: Record<string, unknown> = {
     batchId,
     pageIndex: page,
     pageSize,
     channel: DEFAULT_CHANNEL,
     language: "zh",
-    keyword,
   };
+  if (searchKey) body.searchKey = searchKey;
+  const subCategories = joinFilter(opts.subCategories);
+  if (subCategories) body.subCategories = subCategories;
+  const regions = joinFilter(opts.regions);
+  if (regions) body.regions = regions;
+  const customDeptCode = joinFilter(opts.customDeptCode);
+  if (customDeptCode) body.customDeptCode = customDeptCode;
 
   const response = await call<SearchContent>("/position/search", body);
   if (!response.ok || !response.data) {
@@ -287,7 +335,15 @@ export async function searchPositions(opts: SearchOptions = {}) {
 // ---------- fetch all ----------
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; batchId?: number } = {}
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    batchId?: number;
+    subCategories?: string | string[];
+    regions?: string | string[];
+    customDeptCode?: string | string[];
+  } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
@@ -301,6 +357,9 @@ export async function fetchAllPositions(
       page,
       pageSize,
       batchId: opts.batchId,
+      subCategories: opts.subCategories,
+      regions: opts.regions,
+      customDeptCode: opts.customDeptCode,
     });
     if (!result.ok) {
       return {
@@ -362,12 +421,131 @@ export async function fetchPositionDetail(postId: string | number) {
   };
 }
 
-// ---------- stubs for missing public endpoints ----------
+// ---------- dictionaries: real batch list + filter taxonomy ----------
+
+interface RawBatch {
+  id: number;
+  name: string;
+  enName?: string;
+  type?: string;
+  remark?: string;
+  remarkEn?: string;
+}
+
+interface RawBatchList {
+  graduate?: RawBatch[];
+  internship?: RawBatch[];
+  topTalentPlan?: RawBatch[];
+  sequence?: string[];
+}
+
+interface RawSearchConditionItem {
+  label: string;
+  value: string;
+  positionCountNotHC?: number;
+  children?: RawSearchConditionItem[] | null;
+}
+
+interface RawSearchCondition {
+  type: string;
+  title: string;
+  items?: RawSearchConditionItem[] | null;
+}
+
+interface RawSearchConditionList {
+  searchItems?: RawSearchCondition[] | null;
+  totalPositions?: number | null;
+}
 
 export async function fetchDictionaries() {
+  // Step 1: fetch all active batches
+  const batchRes = await call<RawBatchList>("/searchCondition/listBatch", {
+    channel: DEFAULT_CHANNEL,
+    language: "zh",
+  });
+  if (!batchRes.ok || !batchRes.data) {
+    return {
+      ok: false as const,
+      message: `Alibaba batch list failed: ${batchRes.message}`,
+    };
+  }
+
+  const rawBatchList = batchRes.data;
+  // Collect all batches across categories
+  const allRawBatches: Array<{ batch: RawBatch; category: string }> = [];
+  for (const cat of rawBatchList.sequence ?? ["graduate", "internship", "topTalentPlan"]) {
+    const list = (rawBatchList as Record<string, unknown>)[cat] as RawBatch[] | undefined;
+    if (Array.isArray(list)) {
+      for (const b of list) {
+        allRawBatches.push({ batch: b, category: cat });
+      }
+    }
+  }
+
+  // Deduplicate by batchId (topTalentPlan reuses 100000540002)
+  const seen = new Set<number>();
+  const uniqueBatches = allRawBatches.filter(({ batch }) => {
+    if (seen.has(batch.id)) return false;
+    seen.add(batch.id);
+    return true;
+  });
+
+  // Step 2: for each unique batch, fetch the filter taxonomy
+  const batches = await Promise.all(
+    uniqueBatches.map(async ({ batch, category }) => {
+      const condRes = await call<RawSearchConditionList>("/searchCondition/list", {
+        batchId: batch.id,
+        channel: DEFAULT_CHANNEL,
+        language: "zh",
+      });
+      const searchItems = condRes.data?.searchItems ?? [];
+      const filters: {
+        categories: Array<{ label: string; value: string }>;
+        cities: Array<{ label: string; value: string }>;
+        customDepts: Array<{
+          label: string;
+          value: string;
+          children?: Array<{ label: string; value: string }>;
+        }>;
+      } = { categories: [], cities: [], customDepts: [] };
+
+      for (const si of searchItems) {
+        const items = si.items ?? [];
+        if (si.type === "category") {
+          filters.categories = items.map((x) => ({ label: x.label, value: x.value }));
+        } else if (si.type === "workCity") {
+          filters.cities = items.map((x) => ({ label: x.label, value: x.value }));
+        } else if (si.type === "customDept") {
+          filters.customDepts = items.map((x) => ({
+            label: x.label,
+            value: x.value,
+            children: x.children?.map((c) => ({ label: c.label, value: c.value })),
+          }));
+        }
+      }
+
+      return {
+        batchId: batch.id,
+        batchName: batch.name,
+        batchNameEn: batch.enName ?? "",
+        category, // "graduate" | "internship" | "topTalentPlan"
+        recruitType: batch.type ?? "", // "trainee" | "talent_plan" | "aliStar"
+        remark: batch.remark ?? "",
+        totalPositions: condRes.data?.totalPositions ?? null,
+        filters,
+      };
+    })
+  );
+
   return {
-    ok: false as const,
-    message: "Alibaba: no public dictionary endpoint",
+    ok: true as const,
+    source: "campus-talent.alibaba.com",
+    note:
+      "batchId is mandatory for /position/search — no cross-batch aggregate exists. " +
+      "Graduate (校招正式) batch is empty; it typically opens Aug–Oct. " +
+      "Use subCategories/regions/customDeptCode filters in searchPositions(). " +
+      "customDeptCode requires CHILD-level codes (leaf nodes), not parent group codes.",
+    batches,
   };
 }
 
