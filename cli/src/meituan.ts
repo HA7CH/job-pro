@@ -587,10 +587,66 @@ export async function fetchPositionDetail(postId: string) {
   };
 }
 
-// ---------- stubs (no public endpoints found) ----------
+// ---------- dictionaries (synthesized from API probing 2026-05-14) ----------
 
+/**
+ * Returns the full filter taxonomy for zhaopin.meituan.com as of 2026-05-14.
+ * There is no single "dictionaries" endpoint — this data was assembled by:
+ *   1. Enumerating jobType counts via getJobList.
+ *   2. Scanning the entry-main JS bundle for BG codes.
+ *   3. Brute-forcing BG001..BG100 to discover all live department codes.
+ *   4. Resolving city codes via POST /city/search.
+ * jobFamily/jobFamilyGroup are returned as metadata-only (not filterable).
+ */
 export async function fetchDictionaries() {
-  return { ok: false as const, message: "Meituan: no public dictionaries endpoint" };
+  return {
+    ok: true as const,
+    source: "zhaopin.meituan.com",
+    note: "Synthesized from API probing; no single dictionaries endpoint exists. jobFamily/jobFamilyGroup are metadata only — use keyword to narrow by them.",
+    jobTypes: [
+      { code: "1", label: "校招应届正式", totalCount: 112,
+        jobSpecialCodes: { "1": "普通校招", "3": "特殊/全球岗", "7": "稀有" } },
+      { code: "2", label: "实习", totalCount: 531,
+        jobSpecialCodes: { "6": "实习", "1": "其他", "3": "特殊" } },
+      { code: "3", label: "社招", totalCount: 2613,
+        jobSpecialCodes: { "5": "社招" } },
+    ],
+    cities: [
+      { code: "001001",     name: "北京市",   totalCount: 2148 },
+      { code: "001009",     name: "上海市",   totalCount: 736 },
+      { code: "001019002",  name: "深圳市",   totalCount: 375 },
+      { code: "001023001",  name: "成都市",   totalCount: 198 },
+      { code: "001019001",  name: "广州市",   totalCount: 177 },
+      { code: "001011001",  name: "杭州市",   totalCount: 142 },
+      { code: "001017001",  name: "武汉市",   totalCount: 109 },
+      { code: "001010001",  name: "南京市",   totalCount: 70 },
+      { code: "001027001",  name: "西安市",   totalCount: 67 },
+      { code: "001010013",  name: "苏州市",   totalCount: 50 },
+    ],
+    departments: Object.entries(BG_DEPARTMENT_CODES)
+      .map(([code, name]) => ({ code, name }))
+      .sort((a, b) => a.code.localeCompare(b.code)),
+    jobFamilies: {
+      note: "Metadata on job objects only — cannot be used as a filter in getJobList.",
+      jobFamily: [
+        "技术类", "运营类", "产品类", "零售类", "职能类",
+        "销售、客服与支持类", "商业分析类", "市场营销类", "设计类",
+      ],
+      jobFamilyGroup: [
+        "软件", "算法", "运维", "测试", "硬件", "硬件产品",
+        "产品", "产品运营", "用户运营", "业务运营", "内容运营", "商品运营",
+        "财务", "人力资源", "供应链", "物流", "门店",
+        "销售", "客服", "营销", "市场", "商业分析",
+        "业务支持", "采购", "行政", "公司事务", "设计",
+      ],
+    },
+    payloadShapes: {
+      cityFilter: "cityList: [{code: '001001', name: '北京市'}]  — code is required",
+      departmentFilter: "department: [{code: 'BG021'}]  — name is ignored by the server",
+      jobTypeFilter: "jobType: [{code: '1', subCode: []}, {code: '2', subCode: []}]",
+      cityLookup: "POST /api/official/city/search {keyword: '城市名'} → [{code, name}]",
+    },
+  };
 }
 
 export async function listNotices() {
