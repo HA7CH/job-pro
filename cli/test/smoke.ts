@@ -54,6 +54,18 @@ import * as galaxyuniversal from "../src/galaxyuniversal.js";
 import * as stepfun from "../src/stepfun.js";
 import * as cicc from "../src/cicc.js";
 import * as baichuan from "../src/baichuan.js";
+import * as xpeng from "../src/xpeng.js";
+import * as weride from "../src/weride.js";
+import * as hoyoverse from "../src/hoyoverse.js";
+import * as iflytek from "../src/iflytek.js";
+import * as oppo from "../src/oppo.js";
+import * as vivo from "../src/vivo.js";
+import * as sf from "../src/sf.js";
+import * as cainiao from "../src/cainiao.js";
+import * as geely from "../src/geely.js";
+import * as webank from "../src/webank.js";
+import * as horizonrobotics from "../src/horizonrobotics.js";
+import * as cambricon from "../src/cambricon.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -95,6 +107,18 @@ const ADAPTERS: Record<string, Adapter> = {
   stepfun: stepfun as unknown as Adapter,
   cicc: cicc as unknown as Adapter,
   baichuan: baichuan as unknown as Adapter,
+  xpeng: xpeng as unknown as Adapter,
+  weride: weride as unknown as Adapter,
+  hoyoverse: hoyoverse as unknown as Adapter,
+  iflytek: iflytek as unknown as Adapter,
+  oppo: oppo as unknown as Adapter,
+  vivo: vivo as unknown as Adapter,
+  sf: sf as unknown as Adapter,
+  cainiao: cainiao as unknown as Adapter,
+  geely: geely as unknown as Adapter,
+  webank: webank as unknown as Adapter,
+  horizonrobotics: horizonrobotics as unknown as Adapter,
+  cambricon: cambricon as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };

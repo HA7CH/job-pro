@@ -38,6 +38,18 @@ import * as galaxyuniversal from "./galaxyuniversal.js";
 import * as stepfun from "./stepfun.js";
 import * as cicc from "./cicc.js";
 import * as baichuan from "./baichuan.js";
+import * as xpeng from "./xpeng.js";
+import * as weride from "./weride.js";
+import * as hoyoverse from "./hoyoverse.js";
+import * as iflytek from "./iflytek.js";
+import * as oppo from "./oppo.js";
+import * as vivo from "./vivo.js";
+import * as sf from "./sf.js";
+import * as cainiao from "./cainiao.js";
+import * as geely from "./geely.js";
+import * as webank from "./webank.js";
+import * as horizonrobotics from "./horizonrobotics.js";
+import * as cambricon from "./cambricon.js";
 import {
   memoryList,
   memoryGet,
@@ -96,6 +108,18 @@ COMPANIES
   stepfun          stepfun.com                 (StepFun / 阶跃星辰 — Moka-gated, limited)
   cicc             cicc.com                    (CICC / 中金 — geo-blocked, limited)
   baichuan         www.baichuan-ai.com         (Baichuan / 百川智能 — no public API, limited)
+  xpeng            boards.greenhouse.io        (XPeng / 小鹏汽车 — Greenhouse, US AI center)
+  weride           jobs.lever.co/weride        (WeRide / 文远知行 — Lever)
+  hoyoverse        boards.greenhouse.io        (HoYoverse / 米哈游国际 — Greenhouse)
+  iflytek          campus.iflytek.com          (iFlytek / 科大讯飞 — iTalent-gated, limited)
+  oppo             careers.oppo.com            (OPPO — bespoke 500, limited)
+  vivo             hr.vivo.com                 (vivo — BPM-gated, limited)
+  sf               campus.sf-express.com       (SF Express / 顺丰 — captcha-gated, limited)
+  cainiao          cainiao.com                 (Cainiao / 菜鸟 — DNS-blocked, limited)
+  geely            geely.com                   (Geely / 吉利汽车 — DNS-blocked, limited)
+  webank           webank.com                  (WeBank / 微众银行 — WeChat-only, limited)
+  horizonrobotics  app.mokahr.com              (Horizon Robotics / 地平线 — Moka-gated, limited)
+  cambricon        cambricon.com               (Cambricon / 寒武纪 — DNS-blocked, limited)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -272,6 +296,18 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   stepfun: stepfun as unknown as CompanyAdapter,
   cicc: cicc as unknown as CompanyAdapter,
   baichuan: baichuan as unknown as CompanyAdapter,
+  xpeng: xpeng as unknown as CompanyAdapter,
+  weride: weride as unknown as CompanyAdapter,
+  hoyoverse: hoyoverse as unknown as CompanyAdapter,
+  iflytek: iflytek as unknown as CompanyAdapter,
+  oppo: oppo as unknown as CompanyAdapter,
+  vivo: vivo as unknown as CompanyAdapter,
+  sf: sf as unknown as CompanyAdapter,
+  cainiao: cainiao as unknown as CompanyAdapter,
+  geely: geely as unknown as CompanyAdapter,
+  webank: webank as unknown as CompanyAdapter,
+  horizonrobotics: horizonrobotics as unknown as CompanyAdapter,
+  cambricon: cambricon as unknown as CompanyAdapter,
 };
 
 async function runCompany(
