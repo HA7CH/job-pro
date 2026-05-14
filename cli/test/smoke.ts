@@ -40,6 +40,20 @@ import * as trip from "../src/trip.js";
 import * as unitree from "../src/unitree.js";
 import * as byd from "../src/byd.js";
 import * as antgroup from "../src/antgroup.js";
+import * as liauto from "../src/liauto.js";
+import * as moonshot from "../src/moonshot.js";
+import * as zhipu from "../src/zhipu.js";
+import * as hikvision from "../src/hikvision.js";
+import * as iqiyi from "../src/iqiyi.js";
+import * as megvii from "../src/megvii.js";
+import * as lilith from "../src/lilith.js";
+import * as agibot from "../src/agibot.js";
+import * as deepseek from "../src/deepseek.js";
+import * as zerooneai from "../src/zerooneai.js";
+import * as galaxyuniversal from "../src/galaxyuniversal.js";
+import * as stepfun from "../src/stepfun.js";
+import * as cicc from "../src/cicc.js";
+import * as baichuan from "../src/baichuan.js";
 
 type Adapter = typeof tencent;
 const ADAPTERS: Record<string, Adapter> = {
@@ -67,6 +81,20 @@ const ADAPTERS: Record<string, Adapter> = {
   unitree: unitree as unknown as Adapter,
   byd: byd as unknown as Adapter,
   antgroup: antgroup as unknown as Adapter,
+  liauto: liauto as unknown as Adapter,
+  moonshot: moonshot as unknown as Adapter,
+  zhipu: zhipu as unknown as Adapter,
+  hikvision: hikvision as unknown as Adapter,
+  iqiyi: iqiyi as unknown as Adapter,
+  megvii: megvii as unknown as Adapter,
+  lilith: lilith as unknown as Adapter,
+  agibot: agibot as unknown as Adapter,
+  deepseek: deepseek as unknown as Adapter,
+  zerooneai: zerooneai as unknown as Adapter,
+  galaxyuniversal: galaxyuniversal as unknown as Adapter,
+  stepfun: stepfun as unknown as Adapter,
+  cicc: cicc as unknown as Adapter,
+  baichuan: baichuan as unknown as Adapter,
 };
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };

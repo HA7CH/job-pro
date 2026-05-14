@@ -24,6 +24,20 @@ import * as trip from "./trip.js";
 import * as unitree from "./unitree.js";
 import * as byd from "./byd.js";
 import * as antgroup from "./antgroup.js";
+import * as liauto from "./liauto.js";
+import * as moonshot from "./moonshot.js";
+import * as zhipu from "./zhipu.js";
+import * as hikvision from "./hikvision.js";
+import * as iqiyi from "./iqiyi.js";
+import * as megvii from "./megvii.js";
+import * as lilith from "./lilith.js";
+import * as agibot from "./agibot.js";
+import * as deepseek from "./deepseek.js";
+import * as zerooneai from "./zerooneai.js";
+import * as galaxyuniversal from "./galaxyuniversal.js";
+import * as stepfun from "./stepfun.js";
+import * as cicc from "./cicc.js";
+import * as baichuan from "./baichuan.js";
 import {
   memoryList,
   memoryGet,
@@ -68,6 +82,20 @@ COMPANIES
   unitree          www.unitree.com             (Unitree / 宇树科技 — robotics)
   byd              job.byd.com                 (BYD / 比亚迪 — JWT-gated, limited)
   antgroup         talent.antgroup.com         (Ant Group / 蚂蚁集团 — OAuth-gated, limited)
+  liauto           www.lixiang.com             (Li Auto / 理想汽车)
+  moonshot         moonshot.jobs.feishu.cn     (Moonshot / 月之暗面 — Feishu, 0 jobs)
+  zhipu            zhipu-ai.jobs.feishu.cn     (Zhipu / 智谱AI — Feishu, social)
+  hikvision        hr.hikvision.com            (Hikvision / 海康威视 — geo-blocked, limited)
+  iqiyi            careers.iqiyi.com           (iQIYI / 爱奇艺 — Feishu ATSX)
+  megvii           joinus.megvii.com           (Megvii / 旷视 — Moka-gated, limited)
+  lilith           jobs.lilith.com             (Lilith Games / 莉莉丝 — DNS-blocked, limited)
+  agibot           agirobot.jobs.feishu.cn     (Agibot / 智元机器人 — Feishu, 661 jobs)
+  deepseek         www.deepseek.com            (DeepSeek / 深度求索 — Moka-gated, limited)
+  zerooneai        www.01.ai                   (01.AI / 零一万物 — limited)
+  galaxyuniversal  galbot.com                  (Galaxy Universal / 银河通用 — Moka-gated, limited)
+  stepfun          stepfun.com                 (StepFun / 阶跃星辰 — Moka-gated, limited)
+  cicc             cicc.com                    (CICC / 中金 — geo-blocked, limited)
+  baichuan         www.baichuan-ai.com         (Baichuan / 百川智能 — no public API, limited)
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -230,6 +258,20 @@ const ADAPTERS: Record<string, CompanyAdapter> = {
   unitree: unitree as unknown as CompanyAdapter,
   byd: byd as unknown as CompanyAdapter,
   antgroup: antgroup as unknown as CompanyAdapter,
+  liauto: liauto as unknown as CompanyAdapter,
+  moonshot: moonshot as unknown as CompanyAdapter,
+  zhipu: zhipu as unknown as CompanyAdapter,
+  hikvision: hikvision as unknown as CompanyAdapter,
+  iqiyi: iqiyi as unknown as CompanyAdapter,
+  megvii: megvii as unknown as CompanyAdapter,
+  lilith: lilith as unknown as CompanyAdapter,
+  agibot: agibot as unknown as CompanyAdapter,
+  deepseek: deepseek as unknown as CompanyAdapter,
+  zerooneai: zerooneai as unknown as CompanyAdapter,
+  galaxyuniversal: galaxyuniversal as unknown as CompanyAdapter,
+  stepfun: stepfun as unknown as CompanyAdapter,
+  cicc: cicc as unknown as CompanyAdapter,
+  baichuan: baichuan as unknown as CompanyAdapter,
 };
 
 async function runCompany(

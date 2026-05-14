@@ -14,3 +14,4 @@ dist/
 /.next
 next-env.d.ts
 .vercel
+.claude/
