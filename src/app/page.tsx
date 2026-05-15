@@ -94,7 +94,7 @@ const COMPANIES: Company[] = [
   {
     name: "PDD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/pdd.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -118,13 +118,13 @@ const COMPANIES: Company[] = [
   {
     name: "Weibo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/weibo.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "miHoYo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/mihoyo.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -154,7 +154,7 @@ const COMPANIES: Company[] = [
   {
     name: "BYD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/byd.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -196,7 +196,7 @@ const COMPANIES: Company[] = [
   {
     name: "Megvii",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/megvii.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -214,25 +214,25 @@ const COMPANIES: Company[] = [
   {
     name: "DeepSeek",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/deepseek.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "01.AI",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/zerooneai.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "Galaxy Universal",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/galaxyuniversal.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "StepFun",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/stepfun.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -244,7 +244,7 @@ const COMPANIES: Company[] = [
   {
     name: "Baichuan",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/baichuan.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -268,25 +268,25 @@ const COMPANIES: Company[] = [
   {
     name: "iFlytek",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/iflytek.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "OPPO",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/oppo.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "vivo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/vivo.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "SF Express",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/sf.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
