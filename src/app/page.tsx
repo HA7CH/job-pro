@@ -136,7 +136,7 @@ const COMPANIES: Company[] = [
   {
     name: "SenseTime",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/sensetime.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -310,13 +310,13 @@ const COMPANIES: Company[] = [
   {
     name: "Horizon Robotics",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/horizonrobotics.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
     name: "Cambricon",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cambricon.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
