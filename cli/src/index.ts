@@ -59,7 +59,7 @@ import {
   memoryClear,
 } from "./memory.js";
 
-const VERSION = "0.7.2";
+const VERSION = "0.7.3";
 
 const HELP = `
 job-pro — query Chinese big-tech campus recruiting from your terminal

@@ -1,96 +1,113 @@
-// Thin client for Ant Group's campus-recruiting portal at talent.antgroup.com.
+// 蚂蚁集团 (Ant Group) careers adapter for `job-pro`.
 //
 // ============================================================
-// API Discovery (probed 2026-05, JS bundle + network analysis):
+// API DISCOVERY (probed 2026-05-16 via puppeteer-core network capture)
 //
-//   Portal URL:   https://talent.antgroup.com/campus-list      (public list view)
-//                 https://talent.antgroup.com/campus-full-list (full list view)
-//   JS bundles:   gw.alipayobjects.com/render/p/yuyan/180020010001257966/umi.6f081e74.js
-//                 render.alipay.com/p/yuyan/180020010001257966/p__CampusRecruitment__CRList__index.*.async.js
-//                 render.alipay.com/p/yuyan/180020010001257966/p__CampusRecruitment__CRFullList__index.*.async.js
-//   Gateway host: talent.antgroup.com  (Spanner CDN/WAF, Alipay's proprietary gateway)
-//   Backend host: antwork-prod.antgroup-inc.cn  (actual API server)
+// `talent.antgroup.com` is an Ant Bigfish SPA. Its public-facing job feed
+// is served by `hrcareersweb.antgroup.com` with two anonymous endpoints:
 //
-// ============================================================
-// Endpoint inventory (extracted from JS bundle module 64588 + full UMI bundle):
+//   POST /api/campus/position/search   — 467 校招 / 实习 positions
+//   POST /api/social/position/search   — 922 社招 positions
 //
-//   POST /api/campus/position/search      — paginated job search
-//   POST /api/campus/position/detail      — single position detail
-//   POST /api/campus/position/queryDept   — dept tree for a position group
-//   POST /api/campus/positionGroup/queryBatchConfig      — batch config
-//   POST /api/campus/positionGroup/queryBatchDetailById  — batch detail
-//   POST /api/searchCondition/list             — filter taxonomy (categories, cities, depts)
-//   POST /api/searchCondition/listPositionGroup
-//   POST /api/searchCondition/listTalentPlan
+// Both accept JSON `{ key, pageIndex, pageSize, channel?, language, … }`
+// and return:
+//   { success:true, errorMsg:"成功", content:[…RawPosition], totalCount,
+//     pageSize, currentPage }
 //
-//   Canonical position detail URL: /campus-position?positionId=<id>
+// The `channel` field is required only on the social endpoint
+// (`"group_official_site"`). The `ctoken=…` query parameter that the
+// browser SPA appends is NOT required for unauthenticated reads.
 //
-// ============================================================
-// AUTH STATUS — GATED (Alipay OAuth / buservice SDK):
-//
-//   EVERY endpoint (including /api/campus/position/search and
-//   /api/searchCondition/list) requires an authenticated Alipay/Ant Group
-//   session. Without login, the backend returns:
-//
-//     { "buserviceErrorCode": "USER_NOT_LOGIN",
-//       "buserviceErrorMsg": "https://pubbuservice.alipay.com/…" }
-//
-//   The buservice middleware intercepts ALL routes as a catch-all auth gate
-//   before any controller logic runs. There is no guest/anonymous tier.
-//
-//   The talent.antgroup.com Spanner gateway additionally returns 405 Method
-//   Not Allowed for POST requests that lack valid Alipay session cookies,
-//   preventing even the USER_NOT_LOGIN response from being seen in most cases.
-//   Direct calls to antwork-prod.antgroup-inc.cn reveal the auth error clearly.
-//
-// ============================================================
-// CSRF / session flow (observed but INSUFFICIENT for anonymous access):
-//
-//   GET /campus-list sets:
-//     ALIPAYJSESSIONID=<token>; domain=.antgroup.com
-//     _CHIPS-ALIPAYJSESSIONID=<same_token>; samesite=none; partitioned
-//     spanner=<signed_value>; path=/; secure
-//
-//   These cookies are required for CORS (Access-Control-Allow-Credentials: true)
-//   but the buservice SDK then validates the session against Alipay's auth
-//   infrastructure — a simple GET-derived cookie has no authenticated user.
-//   Unlike Alibaba's portal (campus-talent.alibaba.com) which only needs an
-//   XSRF-TOKEN for public search, Ant Group's portal requires full Alipay OAuth.
-//
-// ============================================================
-// Ant Group vs Alibaba — KEY DIFFERENCES:
-//
-//   Portal:       talent.antgroup.com    vs campus-talent.alibaba.com
-//   Auth:         Alipay OAuth (gated)   vs XSRF-TOKEN only (public search works)
-//   CSRF:         Not sufficient alone   vs Sufficient for anonymous search
-//   Backend host: antwork-prod.antgroup-inc.cn vs campus-talent.alibaba.com
-//   Auth MW:      buservice SDK (blocks all) vs Spring XSRF (only mutating ops)
-//
-// ============================================================
-// FILTER TAXONOMY (from JS bundle, not verified against live API):
-//   channel values: "campus_group_official_site" (zh), "en_official_site" (en)
-//   searchCondition/list returns: searchItems with types "workCity", "category", "dept", "recruitType"
-//   Position fields: id, categoryName, workLocations, graduationTime, circleNames (BU)
-//
-// ============================================================
-// ---- PositionSummary field mapping (Ant Group → canonical) ----
-//   post_id       ← item.id  (stringified)
-//   title         ← item.name
-//   project       ← item.categoryName ?? ""    (e.g. "技术类", "产品类")
-//   recruit_label ← item.recruitType ?? ""     (e.g. "实习生", "校招生")
-//   bgs           ← item.circleNames?.[0] ?? "" (BU / business unit)
-//   work_cities   ← item.workLocations?.join(" / ") ?? ""
-//   apply_url     ← https://talent.antgroup.com/campus-position?positionId=<id>
+// queryCollections / favoritePosition / login-required endpoints return
+// `errorCode:"LOGIN_EXPIRED"` for anonymous callers — those are user
+// dashboard surfaces, not the public search.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
-export { extractResumeSignals, scoreOverlap, checkResume };
+export { checkResume };
 
-const PORTAL_ROOT = "https://talent.antgroup.com";
-const CAMPUS_PAGE = `${PORTAL_ROOT}/campus-list`;
-const DETAIL_PAGE = (id: string | number) =>
-  `${PORTAL_ROOT}/campus-position?positionId=${encodeURIComponent(String(id))}`;
+const SOURCE = "hrcareersweb.antgroup.com";
+const API_ROOT = "https://hrcareersweb.antgroup.com/api";
+const CAMPUS_PAGE = "https://talent.antgroup.com/campus-list";
+const SOCIAL_PAGE = "https://talent.antgroup.com/off-campus-position";
+const DETAIL_URL = (recruitType: "campus" | "social", id: string) =>
+  recruitType === "campus"
+    ? `https://talent.antgroup.com/campus-list?positionId=${encodeURIComponent(id)}`
+    : `https://talent.antgroup.com/off-campus-position-detail?positionId=${encodeURIComponent(id)}`;
 
-// ---------- PositionSummary ----------
+const DEFAULT_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  "Content-Type": "application/json;charset=UTF-8",
+  Origin: "https://talent.antgroup.com",
+};
+
+interface AntEnvelope<T> {
+  success?: boolean;
+  errorMsg?: string;
+  errorCode?: string;
+  content?: T;
+  totalCount?: number;
+  currentPage?: number;
+  pageSize?: number;
+  traceId?: string;
+}
+
+interface RawPosition {
+  bucket?: string;
+  positionUrl?: string;
+  id?: number | string;
+  code?: string;
+  name?: string;
+  categories?: string[];
+  categoryName?: string;
+  publishTime?: string;
+  graduationTime?: string;
+  workLocations?: string[];
+  workLocationsCodes?: string[];
+  interviewLocations?: string[];
+  tags?: unknown;
+  requirement?: string;
+  description?: string;
+  experience?: string;
+  degree?: string;
+  teamDescription?: string;
+  department?: string;
+  project?: string;
+  positionType?: string;
+}
+
+async function post<T>(path: string, body: unknown, referer: string): Promise<{
+  ok: boolean;
+  content?: T;
+  totalCount?: number;
+  message: string;
+}> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`, {
+      method: "POST",
+      headers: { ...DEFAULT_HEADERS, Referer: referer },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
+  let env: AntEnvelope<T>;
+  try {
+    env = (await response.json()) as AntEnvelope<T>;
+  } catch (err) {
+    return { ok: false, message: `bad JSON: ${err instanceof Error ? err.message : err}` };
+  }
+  if (env.success !== true) {
+    return { ok: false, message: env.errorMsg ?? `errorCode=${env.errorCode ?? "?"}` };
+  }
+  return { ok: true, content: env.content, totalCount: env.totalCount ?? 0, message: "ok" };
+}
+
+// ---------- canonical types ----------
 
 export interface PositionSummary {
   post_id: string;
@@ -102,202 +119,347 @@ export interface PositionSummary {
   apply_url: string;
 }
 
-// ---------- SearchOptions ----------
-
 export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /** Category filter (e.g. "技术类", "产品类"). From searchCondition/list type="category". */
-  category?: string;
-  /** City filter (e.g. "北京", "上海"). From searchCondition/list type="workCity". */
-  region?: string;
-  /** Dept filter code. From searchCondition/list type="dept". Leaf codes only. */
-  deptCode?: string;
-  /** Channel: "campus_group_official_site" (zh, default) or "en_official_site" (en). */
-  channel?: string;
+  /** "campus" → 校招/实习 endpoint; "social" → 社招 endpoint; omit = merge both. */
+  recruitType?: "campus" | "social" | "all";
+  /** Filter by BG code (社招 only); e.g. "19887" 支付宝事业群. */
+  bgCode?: string;
 }
 
-// ---------- stub reason constant ----------
-
-const STUB_MESSAGE =
-  "Ant Group (talent.antgroup.com): all API endpoints require Alipay OAuth login. " +
-  "POST /api/campus/position/search returns buserviceErrorCode=USER_NOT_LOGIN for " +
-  "unauthenticated requests. The Spanner CDN gateway additionally returns HTTP 405 " +
-  "for POST requests lacking a valid Alipay session cookie. No anonymous/guest tier exists. " +
-  "To use this portal, the user must log in at talent.antgroup.com with an Alipay account " +
-  "and supply a valid ALIPAYJSESSIONID cookie.";
-
-// ---------- searchPositions (stub) ----------
-
-export async function searchPositions(opts: SearchOptions = {}): Promise<{
-  ok: boolean;
-  source: string;
-  message: string;
-  query: Record<string, unknown>;
-  page: number;
-  page_size: number;
-  total: number | null;
-  positions: PositionSummary[];
-}> {
-  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
-  const page = Math.max(1, opts.page ?? 1);
-  const channel = opts.channel ?? "campus_group_official_site";
-
-  const query: Record<string, unknown> = {
-    pageIndex: page,
-    pageSize,
-    channel,
-    language: "zh",
-  };
-  if (opts.keyword?.trim()) query.keyword = opts.keyword.trim().slice(0, 60);
-  if (opts.category) query.category = opts.category;
-  if (opts.region) query.region = opts.region;
-  if (opts.deptCode) query.deptCode = opts.deptCode;
-
+function summarize(item: RawPosition, recruitType: "campus" | "social"): PositionSummary {
+  const id = String(item.id ?? item.code ?? "");
+  const locs = Array.isArray(item.workLocations) ? item.workLocations.filter(Boolean).join(" / ") : "";
   return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: STUB_MESSAGE,
-    query,
-    page,
-    page_size: pageSize,
-    total: null,
-    positions: [],
+    post_id: id,
+    title: (item.name ?? "").trim(),
+    project:
+      item.project?.trim() ||
+      item.categoryName?.trim() ||
+      (Array.isArray(item.categories) ? item.categories.filter(Boolean).join(" / ") : ""),
+    recruit_label: (item.positionType ?? "").trim() || (recruitType === "campus" ? "校招" : "社招"),
+    bgs: (item.department ?? "").trim(),
+    work_cities: locs,
+    apply_url: id ? DETAIL_URL(recruitType, id) : recruitType === "campus" ? CAMPUS_PAGE : SOCIAL_PAGE,
   };
 }
 
-// ---------- fetchAllPositions (stub) ----------
-
-export async function fetchAllPositions(
-  opts: SearchOptions & { maxPages?: number } = {}
+async function searchSingle(
+  recruitType: "campus" | "social",
+  opts: SearchOptions
 ): Promise<{
   ok: boolean;
-  source: string;
-  message: string;
-  fetched: number;
-  total: number | null;
+  total: number;
   positions: PositionSummary[];
+  message: string;
 }> {
+  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+
+  const body: Record<string, unknown> = {
+    key: keyword,
+    pageIndex: page,
+    pageSize,
+    language: "zh",
+  };
+  if (recruitType === "social") {
+    body.channel = "group_official_site";
+    body.regions = "";
+    body.categories = "";
+    body.subCategories = "";
+    body.bgCode = opts.bgCode ?? "";
+    body.socialQrCode = "";
+  }
+  const referer = recruitType === "campus" ? CAMPUS_PAGE : SOCIAL_PAGE;
+  const r = await post<RawPosition[]>(`/${recruitType}/position/search`, body, referer);
+  if (!r.ok) {
+    return { ok: false, total: 0, positions: [], message: r.message };
+  }
   return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: STUB_MESSAGE,
-    fetched: 0,
-    total: null,
-    positions: [],
+    ok: true,
+    total: r.totalCount ?? 0,
+    positions: (r.content ?? []).map((p) => summarize(p, recruitType)),
+    message: "ok",
   };
 }
 
-// ---------- fetchPositionDetail (stub) ----------
+// ---------- searchPositions ----------
 
-export async function fetchPositionDetail(postId: string): Promise<{
-  ok: boolean;
-  source: string;
-  message: string;
-  post_id?: string;
-  apply_url?: string;
-}> {
-  const id = (postId ?? "").trim();
-  if (!id) {
+export async function searchPositions(opts: SearchOptions = {}) {
+  const recruitType = opts.recruitType ?? "all";
+  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+
+  if (recruitType === "campus" || recruitType === "social") {
+    const r = await searchSingle(recruitType, opts);
+    if (!r.ok) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: r.message,
+        query: { recruitType, page, pageSize, keyword: opts.keyword ?? "" },
+        positions: [] as PositionSummary[],
+      };
+    }
     return {
-      ok: false,
-      source: PORTAL_ROOT,
-      message: "post_id is required",
+      ok: true as const,
+      source: SOURCE,
+      query: { recruitType, page, pageSize, keyword: opts.keyword ?? "" },
+      page,
+      page_size: pageSize,
+      total: r.total,
+      positions: r.positions,
+    };
+  }
+  // "all" → ask both endpoints for the same page
+  const [campus, social] = await Promise.all([
+    searchSingle("campus", opts),
+    searchSingle("social", opts),
+  ]);
+  const positions = [...campus.positions, ...social.positions];
+  const total = (campus.ok ? campus.total : 0) + (social.ok ? social.total : 0);
+  if (!campus.ok && !social.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: campus.message,
+      query: { recruitType: "all", page, pageSize, keyword: opts.keyword ?? "" },
+      positions: [] as PositionSummary[],
     };
   }
   return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: STUB_MESSAGE,
+    ok: true as const,
+    source: SOURCE,
+    query: { recruitType: "all", page, pageSize, keyword: opts.keyword ?? "" },
+    page,
+    page_size: pageSize,
+    total,
+    positions,
+  };
+}
+
+// ---------- fetchAllPositions ----------
+
+export async function fetchAllPositions(
+  opts: SearchOptions & { maxPages?: number } = {}
+) {
+  const recruitType = opts.recruitType ?? "all";
+  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 30));
+  const maxPages = Math.max(1, opts.maxPages ?? 40);
+
+  async function drain(rt: "campus" | "social"): Promise<{ ok: boolean; total: number; positions: PositionSummary[]; message: string }> {
+    const bucket: PositionSummary[] = [];
+    let total = 0;
+    let lastMsg = "ok";
+    for (let page = 1; page <= maxPages; page++) {
+      const r = await searchSingle(rt, { ...opts, page, pageSize });
+      if (!r.ok) {
+        lastMsg = r.message;
+        if (bucket.length === 0) return { ok: false, total: 0, positions: [], message: r.message };
+        break;
+      }
+      if (total === 0) total = r.total;
+      if (!r.positions.length) break;
+      bucket.push(...r.positions);
+      if (bucket.length >= total) break;
+    }
+    return { ok: true, total, positions: bucket, message: lastMsg };
+  }
+
+  if (recruitType === "campus" || recruitType === "social") {
+    const r = await drain(recruitType);
+    if (!r.ok) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: r.message,
+        total: 0,
+        fetched: 0,
+        positions: [] as PositionSummary[],
+      };
+    }
+    return {
+      ok: true as const,
+      source: SOURCE,
+      total: r.total,
+      fetched: r.positions.length,
+      positions: r.positions,
+    };
+  }
+  const [c, s] = await Promise.all([drain("campus"), drain("social")]);
+  return {
+    ok: true as const,
+    source: SOURCE,
+    total: (c.ok ? c.total : 0) + (s.ok ? s.total : 0),
+    fetched: c.positions.length + s.positions.length,
+    positions: [...c.positions, ...s.positions],
+  };
+}
+
+// ---------- fetchPositionDetail ----------
+// The list endpoint already returns description/requirement/teamDescription
+// inline — no separate detail endpoint needed. Scan campus then social.
+
+export async function fetchPositionDetail(postId: string) {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required" };
+
+  for (const rt of ["campus", "social"] as const) {
+    const pageSize = 50;
+    const maxPages = 20;
+    for (let page = 1; page <= maxPages; page++) {
+      const body: Record<string, unknown> = {
+        key: "",
+        pageIndex: page,
+        pageSize,
+        language: "zh",
+      };
+      if (rt === "social") {
+        body.channel = "group_official_site";
+        body.regions = "";
+        body.categories = "";
+        body.subCategories = "";
+        body.bgCode = "";
+        body.socialQrCode = "";
+      }
+      const referer = rt === "campus" ? CAMPUS_PAGE : SOCIAL_PAGE;
+      const r = await post<RawPosition[]>(`/${rt}/position/search`, body, referer);
+      if (!r.ok) break;
+      const found = (r.content ?? []).find((p) => String(p.id ?? p.code) === id);
+      if (found) {
+        return {
+          ok: true as const,
+          source: SOURCE,
+          post_id: id,
+          title: found.name ?? "",
+          project: found.project ?? found.categoryName ?? "",
+          recruit_label: found.positionType ?? (rt === "campus" ? "校招" : "社招"),
+          department: found.department ?? "",
+          work_cities: found.workLocations ?? [],
+          publish_time: found.publishTime ?? "",
+          graduation_time: found.graduationTime ?? "",
+          experience: found.experience ?? "",
+          degree: found.degree ?? "",
+          description: found.description ?? "",
+          requirements: found.requirement ?? "",
+          team_description: found.teamDescription ?? "",
+          apply_url: DETAIL_URL(rt, id),
+        };
+      }
+      if (r.totalCount && (r.content?.length ?? 0) < pageSize) break;
+    }
+  }
+  return {
+    ok: false as const,
+    source: SOURCE,
     post_id: id,
-    apply_url: DETAIL_PAGE(id),
+    message: `post ${id} not found in campus or social feeds`,
   };
 }
 
-// ---------- fetchDictionaries (stub) ----------
+// ---------- fetchDictionaries ----------
 
-export async function fetchDictionaries(): Promise<{
-  ok: boolean;
-  source: string;
-  message: string;
-  note: string;
-}> {
-  return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: STUB_MESSAGE,
-    note:
-      "Filter taxonomy (categories, cities, depts) is served via POST /api/searchCondition/list " +
-      "with body {channel:'campus_group_official_site', language:'zh'}. " +
-      "Response shape: { searchItems: [{type:'workCity'|'category'|'dept'|'recruitType', items:[{label,value}]}] }. " +
-      "All require Alipay login.",
+let _dictCache:
+  | { ok: true; source: string; bgs: Array<{ code: string; name: string }>; regions: Array<{ code: string; name: string }>; categories: unknown[] }
+  | { ok: false; source: string; message: string }
+  | null = null;
+
+export async function fetchDictionaries() {
+  if (_dictCache !== null) return _dictCache;
+  const [depRes, regRes, catRes] = await Promise.all([
+    post<Array<{ code?: string; name?: string }>>("/social/category/listDept", { channel: "group_official_site", language: "zh" }, SOCIAL_PAGE),
+    post<Array<{ code?: string; name?: string }>>("/region/hot", { channel: "group_official_site", language: "zh" }, SOCIAL_PAGE),
+    post<unknown[]>("/social/category/list", { channel: "group_official_site", language: "zh" }, SOCIAL_PAGE),
+  ]);
+  if (!depRes.ok && !regRes.ok && !catRes.ok) {
+    const r = { ok: false as const, source: SOURCE, message: depRes.message };
+    _dictCache = r;
+    return r;
+  }
+  const result = {
+    ok: true as const,
+    source: SOURCE,
+    bgs: (depRes.content ?? []).map((d) => ({ code: d.code ?? "", name: d.name ?? "" })),
+    regions: (regRes.content ?? []).map((d) => ({ code: d.code ?? "", name: d.name ?? "" })),
+    categories: catRes.content ?? [],
   };
+  _dictCache = result;
+  return result;
 }
 
-// ---------- notices (stub) ----------
+// ---------- notices ----------
 
-export async function listNotices(): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-}> {
-  return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: "Ant Group: no public notices endpoint",
-  };
+const NOTICES_MSG = "Ant Group (蚂蚁集团): no public notices endpoint on hrcareersweb";
+
+export async function listNotices() {
+  return { ok: false as const, source: SOURCE, message: NOTICES_MSG, notices: [] as never[] };
 }
 
-export async function getNotice(_id: string): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-}> {
-  return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: "Ant Group: no public notices endpoint",
-  };
+export async function getNotice(noticeId: string) {
+  return { ok: false as const, source: SOURCE, message: NOTICES_MSG, notice_id: noticeId };
 }
 
 export async function findNoticesByQuestion(
-  _question: string,
+  question: string,
   _opts: { questionTime?: string; topK?: number } = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  matches: never[];
-}> {
-  return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: "Ant Group: no public notices endpoint",
-    matches: [],
-  };
+) {
+  return { ok: false as const, source: SOURCE, question, message: NOTICES_MSG, matches: [] as unknown[] };
 }
 
-// ---------- matchResume (stub) ----------
+// ---------- matchResume ----------
 
 export async function matchResume(
   text: string,
   opts: { topN?: number; candidates?: number } = {}
-): Promise<{
-  ok: boolean;
-  source: string;
-  message: string;
-  extracted_terms?: string[];
-  city_preferences?: string[];
-  matches?: never[];
-}> {
+) {
+  const topN = Math.max(1, opts.topN ?? 5);
+  const candidates = Math.max(topN, opts.candidates ?? 20);
   const { terms, cities } = extractResumeSignals(text ?? "");
+  if (!terms.length) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "could not extract any technical signals from the text",
+      preview: (text ?? "").slice(0, 120),
+    };
+  }
+  const keyword = terms.slice(0, 3).join(" ");
+  const list = await searchPositions({ keyword, page: 1, pageSize: 50, recruitType: "all" });
+  if (!list.ok) {
+    return { ok: false as const, source: SOURCE, message: list.message, positions: [] };
+  }
+  type Scored = { score: number; position: PositionSummary; reasons: string[] };
+  const scored: Scored[] = [];
+  for (const p of list.positions) {
+    const blob = [p.title, p.project, p.recruit_label, p.bgs, p.work_cities].join(" ");
+    const { score, reasons } = scoreOverlap(blob, terms, cities);
+    if (score > 0) scored.push({ score, position: p, reasons });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  let shortlist = scored.slice(0, Math.max(topN, candidates));
+  if (!shortlist.length) {
+    shortlist = list.positions.slice(0, candidates).map((position) => ({ score: 0, position, reasons: [] }));
+  }
+  const matches = shortlist.slice(0, topN).map((s) => {
+    const mr =
+      s.reasons.length > 0
+        ? s.reasons.slice(0, 5)
+        : ["no specific keyword overlap — surfaced from initial keyword search"];
+    return { ...s.position, match_reasons: mr };
+  });
   return {
-    ok: false,
-    source: PORTAL_ROOT,
-    message: STUB_MESSAGE,
+    ok: true as const,
+    source: SOURCE,
     extracted_terms: terms,
     city_preferences: cities,
-    matches: [],
+    matches,
+    note:
+      "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
+      "The only authority on selection is HR.",
   };
 }
+
+export { extractResumeSignals, scoreOverlap };

@@ -128,12 +128,10 @@ const ADAPTERS = {
 // must FAIL the suite. Adapters drift OUT of this list as they get unblocked
 // (e.g. moonshot/oppo/vivo/sf/byd moved from auth-gated to live in 6e22fba).
 const KNOWN_LIMITED: ReadonlySet<string> = new Set([
-  "antgroup",
   "hikvision",
   "lilith",
   "cicc",
   "cainiao",
-  "geely",
   "webank",
 ]);
 

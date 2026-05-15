@@ -160,7 +160,7 @@ const COMPANIES: Company[] = [
   {
     name: "Ant Group",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/antgroup.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -298,7 +298,7 @@ const COMPANIES: Company[] = [
   {
     name: "Geely",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/geely.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
