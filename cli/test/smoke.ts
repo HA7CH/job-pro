@@ -66,84 +66,129 @@ import * as geely from "../src/geely.js";
 import * as webank from "../src/webank.js";
 import * as horizonrobotics from "../src/horizonrobotics.js";
 import * as cambricon from "../src/cambricon.js";
+import type { CompanyAdapter } from "../src/adapter.js";
 
-type Adapter = typeof tencent;
-const ADAPTERS: Record<string, Adapter> = {
+type Adapter = CompanyAdapter;
+const ADAPTERS = {
   tencent,
-  bytedance: bytedance as unknown as Adapter,
-  alibaba: alibaba as unknown as Adapter,
-  meituan: meituan as unknown as Adapter,
-  xiaohongshu: xiaohongshu as unknown as Adapter,
-  jd: jd as unknown as Adapter,
-  kuaishou: kuaishou as unknown as Adapter,
-  xiaomi: xiaomi as unknown as Adapter,
-  baidu: baidu as unknown as Adapter,
-  netease: netease as unknown as Adapter,
-  didi: didi as unknown as Adapter,
-  bilibili: bilibili as unknown as Adapter,
-  pdd: pdd as unknown as Adapter,
-  nio: nio as unknown as Adapter,
-  minimax: minimax as unknown as Adapter,
-  huawei: huawei as unknown as Adapter,
-  weibo: weibo as unknown as Adapter,
-  mihoyo: mihoyo as unknown as Adapter,
-  pingan: pingan as unknown as Adapter,
-  sensetime: sensetime as unknown as Adapter,
-  trip: trip as unknown as Adapter,
-  unitree: unitree as unknown as Adapter,
-  byd: byd as unknown as Adapter,
-  antgroup: antgroup as unknown as Adapter,
-  liauto: liauto as unknown as Adapter,
-  moonshot: moonshot as unknown as Adapter,
-  zhipu: zhipu as unknown as Adapter,
-  hikvision: hikvision as unknown as Adapter,
-  iqiyi: iqiyi as unknown as Adapter,
-  megvii: megvii as unknown as Adapter,
-  lilith: lilith as unknown as Adapter,
-  agibot: agibot as unknown as Adapter,
-  deepseek: deepseek as unknown as Adapter,
-  zerooneai: zerooneai as unknown as Adapter,
-  galaxyuniversal: galaxyuniversal as unknown as Adapter,
-  stepfun: stepfun as unknown as Adapter,
-  cicc: cicc as unknown as Adapter,
-  baichuan: baichuan as unknown as Adapter,
-  xpeng: xpeng as unknown as Adapter,
-  weride: weride as unknown as Adapter,
-  hoyoverse: hoyoverse as unknown as Adapter,
-  iflytek: iflytek as unknown as Adapter,
-  oppo: oppo as unknown as Adapter,
-  vivo: vivo as unknown as Adapter,
-  sf: sf as unknown as Adapter,
-  cainiao: cainiao as unknown as Adapter,
-  geely: geely as unknown as Adapter,
-  webank: webank as unknown as Adapter,
-  horizonrobotics: horizonrobotics as unknown as Adapter,
-  cambricon: cambricon as unknown as Adapter,
-};
+  bytedance,
+  alibaba,
+  meituan,
+  xiaohongshu,
+  jd,
+  kuaishou,
+  xiaomi,
+  baidu,
+  netease,
+  didi,
+  bilibili,
+  pdd,
+  nio,
+  minimax,
+  huawei,
+  weibo,
+  mihoyo,
+  pingan,
+  sensetime,
+  trip,
+  unitree,
+  byd,
+  antgroup,
+  liauto,
+  moonshot,
+  zhipu,
+  hikvision,
+  iqiyi,
+  megvii,
+  lilith,
+  agibot,
+  deepseek,
+  zerooneai,
+  galaxyuniversal,
+  stepfun,
+  cicc,
+  baichuan,
+  xpeng,
+  weride,
+  hoyoverse,
+  iflytek,
+  oppo,
+  vivo,
+  sf,
+  cainiao,
+  geely,
+  webank,
+  horizonrobotics,
+  cambricon,
+} satisfies Record<string, CompanyAdapter>;
+
+// Adapters known to be auth-gated / DNS-blocked / WAF-blocked — for these,
+// `ok:false` is the documented "limited" state and reported as WARN.
+// Anything OUTSIDE this set returning `ok:false` is a real regression and
+// must FAIL the suite. Adapters drift OUT of this list as they get unblocked
+// (e.g. moonshot/oppo/vivo/sf/byd moved from auth-gated to live in 6e22fba).
+const KNOWN_LIMITED: ReadonlySet<string> = new Set([
+  "sensetime",
+  "antgroup",
+  "hikvision",
+  "lilith",
+  "cicc",
+  "iflytek",
+  "cainiao",
+  "geely",
+  "webank",
+  "horizonrobotics",
+  "cambricon",
+]);
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };
 
 async function probe(name: string, adapter: Adapter): Promise<Result> {
   try {
-    const search = await adapter.searchPositions({ pageSize: 1 });
+    const search = (await adapter.searchPositions({ pageSize: 1 })) as {
+      ok: boolean;
+      total?: number;
+      positions?: unknown[];
+      message?: string;
+    };
     if (!search.ok) {
-      // ok:false with a documented message (e.g. upstream auth-gated) is an
-      // expected "known limitation" — record it as WARN, not FAIL. Other verbs
-      // (listNotices, fetchDictionaries) may still return real data.
-      const msg = (search as { message?: string }).message ?? "no message";
-      return { name, pass: true, tag: "WARN", reason: `search ok:false — ${msg.slice(0, 100)}` };
+      // `ok:false` from a KNOWN_LIMITED adapter is the documented "limited"
+      // state (auth gate / DNS-blocked / WAF) → WARN.
+      // `ok:false` from anyone else is a real regression (live adapter just
+      // broke against the upstream) → FAIL.
+      const msg = search.message ?? "no message";
+      if (KNOWN_LIMITED.has(name)) {
+        return { name, pass: true, tag: "WARN", reason: `search ok:false — ${msg.slice(0, 100)}` };
+      }
+      return {
+        name,
+        pass: false,
+        tag: "FAIL",
+        reason: `live adapter returned ok:false — ${msg.slice(0, 150)}`,
+      };
+    }
+    // KNOWN_LIMITED adapter unexpectedly went live → FAIL so we remember to
+    // drop it from the limited set on the next pass. Better to be loud about
+    // drift in either direction than silently green.
+    if (KNOWN_LIMITED.has(name)) {
+      return {
+        name,
+        pass: false,
+        tag: "FAIL",
+        reason: `KNOWN_LIMITED adapter unexpectedly returned ok:true — remove '${name}' from KNOWN_LIMITED in test/smoke.ts`,
+      };
     }
     const total = search.total;
     if (typeof total !== "number" || total < 0) {
       return { name, pass: false, tag: "FAIL", reason: `total is ${JSON.stringify(total)} (expected non-negative number)` };
     }
     if (total > 0) {
-      const first = search.positions?.[0];
+      const first = search.positions?.[0] as Record<string, unknown> | undefined;
       if (!first) {
         return { name, pass: false, tag: "FAIL", reason: `total=${total} but positions[0] missing` };
       }
       for (const key of ["post_id", "title", "apply_url"]) {
-        if (!(first as unknown as Record<string, unknown>)[key]) {
+        if (!first[key]) {
           return { name, pass: false, tag: "FAIL", reason: `positions[0].${key} missing/empty` };
         }
       }

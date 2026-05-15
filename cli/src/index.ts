@@ -50,6 +50,7 @@ import * as geely from "./geely.js";
 import * as webank from "./webank.js";
 import * as horizonrobotics from "./horizonrobotics.js";
 import * as cambricon from "./cambricon.js";
+import type { CompanyAdapter } from "./adapter.js";
 import {
   memoryList,
   memoryGet,
@@ -255,60 +256,61 @@ function readResumeArg(arg: string | undefined): string {
 
 // Every company adapter exposes the same set of functions, so one dispatcher
 // can route verbs against any of them. New companies plug in by adding an
-// `import * as <name>` and a line in `ADAPTERS`.
-type CompanyAdapter = typeof tencent;
-const ADAPTERS: Record<string, CompanyAdapter> = {
+// `import * as <name>` and a line in `ADAPTERS`. The `satisfies` clause
+// makes any contract drift (missing verb, wrong signature) a compile error
+// instead of a silent runtime hazard.
+const ADAPTERS = {
   tencent,
-  bytedance: bytedance as unknown as CompanyAdapter,
-  alibaba: alibaba as unknown as CompanyAdapter,
-  meituan: meituan as unknown as CompanyAdapter,
-  xiaohongshu: xiaohongshu as unknown as CompanyAdapter,
-  jd: jd as unknown as CompanyAdapter,
-  kuaishou: kuaishou as unknown as CompanyAdapter,
-  xiaomi: xiaomi as unknown as CompanyAdapter,
-  baidu: baidu as unknown as CompanyAdapter,
-  netease: netease as unknown as CompanyAdapter,
-  didi: didi as unknown as CompanyAdapter,
-  bilibili: bilibili as unknown as CompanyAdapter,
-  pdd: pdd as unknown as CompanyAdapter,
-  nio: nio as unknown as CompanyAdapter,
-  minimax: minimax as unknown as CompanyAdapter,
-  huawei: huawei as unknown as CompanyAdapter,
-  weibo: weibo as unknown as CompanyAdapter,
-  mihoyo: mihoyo as unknown as CompanyAdapter,
-  pingan: pingan as unknown as CompanyAdapter,
-  sensetime: sensetime as unknown as CompanyAdapter,
-  trip: trip as unknown as CompanyAdapter,
-  unitree: unitree as unknown as CompanyAdapter,
-  byd: byd as unknown as CompanyAdapter,
-  antgroup: antgroup as unknown as CompanyAdapter,
-  liauto: liauto as unknown as CompanyAdapter,
-  moonshot: moonshot as unknown as CompanyAdapter,
-  zhipu: zhipu as unknown as CompanyAdapter,
-  hikvision: hikvision as unknown as CompanyAdapter,
-  iqiyi: iqiyi as unknown as CompanyAdapter,
-  megvii: megvii as unknown as CompanyAdapter,
-  lilith: lilith as unknown as CompanyAdapter,
-  agibot: agibot as unknown as CompanyAdapter,
-  deepseek: deepseek as unknown as CompanyAdapter,
-  zerooneai: zerooneai as unknown as CompanyAdapter,
-  galaxyuniversal: galaxyuniversal as unknown as CompanyAdapter,
-  stepfun: stepfun as unknown as CompanyAdapter,
-  cicc: cicc as unknown as CompanyAdapter,
-  baichuan: baichuan as unknown as CompanyAdapter,
-  xpeng: xpeng as unknown as CompanyAdapter,
-  weride: weride as unknown as CompanyAdapter,
-  hoyoverse: hoyoverse as unknown as CompanyAdapter,
-  iflytek: iflytek as unknown as CompanyAdapter,
-  oppo: oppo as unknown as CompanyAdapter,
-  vivo: vivo as unknown as CompanyAdapter,
-  sf: sf as unknown as CompanyAdapter,
-  cainiao: cainiao as unknown as CompanyAdapter,
-  geely: geely as unknown as CompanyAdapter,
-  webank: webank as unknown as CompanyAdapter,
-  horizonrobotics: horizonrobotics as unknown as CompanyAdapter,
-  cambricon: cambricon as unknown as CompanyAdapter,
-};
+  bytedance,
+  alibaba,
+  meituan,
+  xiaohongshu,
+  jd,
+  kuaishou,
+  xiaomi,
+  baidu,
+  netease,
+  didi,
+  bilibili,
+  pdd,
+  nio,
+  minimax,
+  huawei,
+  weibo,
+  mihoyo,
+  pingan,
+  sensetime,
+  trip,
+  unitree,
+  byd,
+  antgroup,
+  liauto,
+  moonshot,
+  zhipu,
+  hikvision,
+  iqiyi,
+  megvii,
+  lilith,
+  agibot,
+  deepseek,
+  zerooneai,
+  galaxyuniversal,
+  stepfun,
+  cicc,
+  baichuan,
+  xpeng,
+  weride,
+  hoyoverse,
+  iflytek,
+  oppo,
+  vivo,
+  sf,
+  cainiao,
+  geely,
+  webank,
+  horizonrobotics,
+  cambricon,
+} satisfies Record<string, CompanyAdapter>;
 
 async function runCompany(
   adapter: CompanyAdapter,
@@ -433,7 +435,7 @@ async function main() {
     return;
   }
 
-  const adapter = ADAPTERS[cmd];
+  const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[cmd];
   if (adapter) {
     await runCompany(adapter, cmd, args.slice(1));
     return;

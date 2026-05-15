@@ -384,6 +384,52 @@ export async function fetchAllPositions(
   };
 }
 
+// ---------- fetchPositionDetail ----------
+// Bilibili's public search response carries description + requirement inline,
+// so "detail" is a paginated scan-and-filter (same pattern as feishu.ts).
+
+export async function fetchPositionDetail(postId: string) {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false as const, source: "jobs.bilibili.com", message: "post_id is required" };
+
+  const pageSize = 100;
+  const maxPages = 4;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const result = await searchPositions({ page, pageSize });
+    if (!result.ok) {
+      return {
+        ok: false as const,
+        source: "jobs.bilibili.com",
+        post_id: id,
+        message: result.message,
+      };
+    }
+    const found = result.positions.find((p) => p.post_id === id);
+    if (found) {
+      return {
+        ok: true as const,
+        source: "jobs.bilibili.com",
+        post_id: id,
+        title: found.title,
+        project: found.project,
+        recruit_label: found.recruit_label,
+        bgs: found.bgs,
+        work_cities: found.work_cities,
+        apply_url: found.apply_url,
+      };
+    }
+    if (result.positions.length < pageSize) break;
+  }
+
+  return {
+    ok: false as const,
+    source: "jobs.bilibili.com",
+    post_id: id,
+    message: `post ${id} not found in public search results (scanned up to ${maxPages * pageSize} posts)`,
+  };
+}
+
 // ---------- matchResume ----------
 
 export async function matchResume(

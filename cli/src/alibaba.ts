@@ -57,8 +57,8 @@
 //   work_cities    ← item.workLocations.join(" / ")
 //   apply_url      ← https://campus-talent.alibaba.com/campus/positionDetail?positionId=<id>
 
-import { extractResumeSignals, scoreOverlap } from "./tencent.js";
-export { extractResumeSignals, scoreOverlap };
+import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+export { extractResumeSignals, scoreOverlap, checkResume };
 
 const API_ROOT = "https://campus-talent.alibaba.com";
 const CAMPUS_PAGE = `${API_ROOT}/campus/position`;
