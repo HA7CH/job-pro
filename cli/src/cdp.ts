@@ -112,6 +112,11 @@ async function launchOnce(): Promise<AnyBrowser | CdpError> {
         ". Set $JOB_PRO_CHROME=/path/to/chrome to override.",
     };
   }
+  // Optional egress proxy — useful for geo-fenced upstreams (e.g. hikvision
+  // requires a CN-egress to pass its Tencent EdgeOne 403 check). Set
+  // `$JOB_PRO_HTTPS_PROXY=http://user:pass@host:port` or `socks5://host:port`.
+  const proxy = process.env.JOB_PRO_HTTPS_PROXY?.trim();
+  const proxyArg = proxy ? [`--proxy-server=${proxy}`] : [];
   try {
     const browser = await pp.mod.launch({
       executablePath: chrome,
@@ -120,6 +125,7 @@ async function launchOnce(): Promise<AnyBrowser | CdpError> {
         "--no-sandbox",
         "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",
+        ...proxyArg,
       ],
     });
     return browser;

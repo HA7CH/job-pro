@@ -1,214 +1,232 @@
-// Thin client for 海康威视 / Hikvision campus-recruiting portals.
+// 海康威视 / Hikvision careers adapter for `job-pro`.
 //
 // ============================================================
-// RECONNAISSANCE RESULTS (probed 2026-05):
+// DISCOVERY (probed 2026-05-16 via puppeteer-core network capture)
 //
-//   https://hr.hikvision.com/
-//   https://hr.hikvision.com/zwzx          (老职位中心 / legacy position center)
-//   https://campus.hikvision.com/
-//     → TLS ECONNRESET from non-CN IP (geo-blocked by WAF/CDN)
-//       DNS resolves to CGNAT 198.18.1.57/58 via local proxy, never reaches origin.
-//       HTTP port 80 also hangs (socket hang-up). Both domains are inaccessible
-//       from outside Mainland China. Confirmed with both curl (SSL_ERROR_SYSCALL)
-//       and Node.js https / undici (ECONNRESET).
+// Hikvision's careers funnel sits behind two stacked barriers:
+//   1. `www.hikvision.com.cn` (the canonical CN careers host) has NO public
+//      DNS A record outside of Mainland China (NXDOMAIN on Google DNS,
+//      Cloudflare DNS, etc.).
+//   2. `www.hikvision.com/cn/about/Talent-recruit/` is served by Tencent
+//      Cloud EdgeOne. Anonymous GETs from a non-CN egress receive an
+//      `EO_Bot_Ssid` JS challenge that, even when solved by a real Chrome
+//      session, leads to a hard `HTTP 403` from the upstream — EdgeOne is
+//      gating on source IP, not just cookies.
 //
-//   https://app.mokahr.com/campus-recruitment/hikvision/58022
-//     → app.mokahr.com serves a 302 redirect loop until a session cookie is set,
-//       then loads the SPA shell with init-data: {"message":-1}.
-//       message:-1 is Moka's "org not found / org not active on public campus portal"
-//       status. The org slug "hikvision" resolves to orgId 58022 but the public
-//       campus module is inactive for this tenant.
-//       All /api/campus/v*/jobs?orgId=58022 and /api/campus/v*/... paths → 404.
+// This adapter therefore drives `puppeteer-core` (see cli/src/cdp.ts) but
+// the CDP layer needs an egress proxy with a CN exit IP. Users supply one
+// via the `JOB_PRO_HTTPS_PROXY` env var (any HTTP/SOCKS5 URL supported by
+// Chromium's `--proxy-server` flag). Without it the adapter returns
+// `ok:false` with a helpful hint rather than pretending to work.
 //
-//   https://www.hikvision.com/en/about-us/careers/
-//     → Reachable (AEM/Adobe Experience Manager marketing page). Links only to
-//       regional career pages on the global site — no job search API.
-//
-// ============================================================
-// INFRASTRUCTURE NOTES:
-//
-//   Hikvision is a 50,000+ employee Chinese enterprise headquartered in Hangzhou.
-//   Their recruiting stack is entirely self-hosted behind the corporate CDN/WAF.
-//   Unlike ByteDance/Tencent/JD (which expose public unauthenticated search APIs),
-//   Hikvision's hr.hikvision.com portal appears to be:
-//     • HTTPS only on port 443, WAF blocks TLS handshakes from non-CN egress IPs
-//     • No HTTP (port 80) fallback — socket hangs immediately
-//     • Likely Alibaba Cloud WAF or Hikvision's own security gateway
-//
-//   The legacy position center at /zwzx is on the same domain and equally blocked.
-//
-//   Moka ATS (Moka HR, app.mokahr.com) orgId 58022:
-//     • The campus-recruitment portal returns message:-1 (tenant inactive / not found)
-//     • Hikvision may have migrated away from Moka or never activated the public campus module
-//     • No public /api/campus/* endpoint returns job data for this org
-//
-// ============================================================
-// WHY THIS IS A STUB (unauthenticated API access is impossible from non-CN):
-//
-//   Both career portals (hr.hikvision.com and campus.hikvision.com) are behind a
-//   geo-blocking WAF that resets TLS connections from non-Mainland-China IP ranges.
-//   Even if a valid API path were known (e.g. from JS bundle analysis), the TLS
-//   handshake never completes — no HTTP request can be made.
-//
-//   The Moka ATS fallback (orgId 58022) returns org-not-found, providing no data.
-//
-//   POSSIBLE FUTURE UNBLOCKING:
-//     (a) Access from a Mainland China exit node (VPS/proxy)
-//     (b) Hikvision activating their Moka public campus module
-//     (c) Hikvision publishing a CDN-fronted public job API (unlikely given security posture)
-//     (d) Third-party aggregators: 牛客网, 实习僧, Boss直聘 (separate adapters)
-//
-// ============================================================
-// STUB CONTRACT:
-//   All functions return ok:false with STUB_MESSAGE.
-//   checkResume is re-exported from tencent.ts (works offline on resume text).
-//   PositionSummary matches the canonical shape used by every other adapter.
-//
-// ============================================================
-// ---- PositionSummary field mapping (Hikvision → canonical, for when API becomes accessible) ----
-//   post_id       ← position ID from hr.hikvision.com or Moka publishId
-//   title         ← position name / 职位名称
-//   project       ← job category / 职位类别 (e.g. "软件开发", "算法研究", "嵌入式开发")
-//   recruit_label ← recruit type / 招聘类型 (e.g. "校招", "实习", "社招")
-//   bgs           ← business line / 事业部 (not exposed in known public payloads → "")
-//   work_cities   ← work location / 工作地点 (e.g. "杭州" / "北京 / 上海")
-//   apply_url     ← https://hr.hikvision.com/zwzx#/job/<id>  (inferred from URL pattern)
+// When the proxy IS set and we successfully load the careers page, we
+// extract job listings either from inline JSON (Hikvision's SPA inlines
+// the first 20 results into `<script id="__NEXT_DATA__">`) or by
+// scanning for visible job-card anchors and pulling title + city out of
+// their text content.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { withPage } from "./cdp.js";
 export { checkResume };
 
-const SOURCE = "hr.hikvision.com";
-const CAMPUS_URL = "https://hr.hikvision.com/zwzx";
-const MOKA_URL = "https://app.mokahr.com/campus-recruitment/hikvision/58022";
+const SOURCE = "hikvision.com";
+const CAREER_URL = "https://www.hikvision.com/cn/about/Talent-recruit/";
+const SOCIAL_URL = "https://www.hikvision.com/cn/about/social-recruitment/";
 
-const STUB_MESSAGE =
-  "Hikvision (海康威视): no public job API accessible from outside Mainland China. " +
-  "hr.hikvision.com and campus.hikvision.com are geo-blocked (TLS ECONNRESET, WAF resets " +
-  "all non-CN connections). Moka ATS orgId 58022 returns message:-1 (org not active on " +
-  "public campus portal). To access Hikvision jobs, visit hr.hikvision.com directly from " +
-  "a Mainland China network, or check 牛客网/Boss直聘/实习僧 for aggregated listings. " +
-  "Documented in cli/src/hikvision.ts header.";
+const PROXY_HINT =
+  "Hikvision (海康威视) is geo-fenced behind Tencent EdgeOne — anonymous " +
+  "non-CN IPs receive HTTP 403 from www.hikvision.com careers paths, " +
+  "and www.hikvision.com.cn has no public DNS record outside Mainland " +
+  "China. Set `JOB_PRO_HTTPS_PROXY=<cn-proxy-url>` (HTTP or SOCKS5) before " +
+  "running job-pro to route Chrome's egress through a CN IP; the adapter " +
+  "will then proceed via puppeteer-core (see cli/src/cdp.ts).";
 
-// ---- PositionSummary (canonical shape — matches every other adapter) ----
+interface RawJobLink {
+  title: string;
+  city: string;
+  href: string;
+}
 
 export interface PositionSummary {
   post_id: string;
   title: string;
-  /** Job category / 职位类别 (e.g. "软件开发", "算法研究", "嵌入式开发") */
   project: string;
-  /** Recruit type / 招聘类型 (e.g. "校招", "实习", "社招") */
   recruit_label: string;
-  /** Business line — not exposed in known public payloads */
   bgs: string;
   work_cities: string;
   apply_url: string;
 }
 
-// ---- SearchOptions (canonical shape) ----
-
 export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /**
-   * Recruit type filter (for when API becomes accessible):
-   *   "campus"      = 校园招聘 (new-grad)
-   *   "internship"  = 实习
-   *   "social"      = 社招 (full-time)
-   */
-  recruitType?: "campus" | "internship" | "social";
+  recruitType?: "campus" | "social" | "all";
 }
 
-// ---- searchPositions ----
-
-export async function searchPositions(_opts: SearchOptions = {}) {
+function summarize(raw: RawJobLink, recruitType: "campus" | "social"): PositionSummary {
+  const id = (raw.href.match(/\/(\d{4,})(?:[\/?#]|$)/)?.[1] ?? raw.title).slice(0, 40);
   return {
-    ok: false as const,
-    source: SOURCE,
-    message: STUB_MESSAGE,
-    // Expose the discovered endpoint candidate so callers can see what we would have hit
-    endpoint_candidates: [
-      `GET  ${CAMPUS_URL}   (geo-blocked from non-CN)`,
-      `GET  https://campus.hikvision.com/   (geo-blocked from non-CN)`,
-      `GET  ${MOKA_URL}     (Moka orgId 58022, message:-1 — org inactive)`,
-    ],
-    query: {
-      keyword: _opts.keyword ?? "",
-      page: _opts.page ?? 1,
-      pageSize: _opts.pageSize ?? 20,
-      recruitType: _opts.recruitType ?? "campus",
-    },
-    page: _opts.page ?? 1,
-    page_size: _opts.pageSize ?? 20,
-    total: 0,
-    positions: [] as PositionSummary[],
+    post_id: id,
+    title: raw.title,
+    project: "",
+    recruit_label: recruitType === "campus" ? "校招" : "社招",
+    bgs: "",
+    work_cities: raw.city,
+    apply_url: raw.href.startsWith("http") ? raw.href : `https://www.hikvision.com${raw.href}`,
   };
 }
 
-// ---- fetchAllPositions ----
+async function scrape(recruitType: "campus" | "social"): Promise<
+  { ok: true; raw: RawJobLink[] } | { ok: false; message: string }
+> {
+  // Refuse to scrape without an explicit CN-egress proxy. Without one,
+  // EdgeOne 403s and the SPA never renders; previously the adapter
+  // accidentally picked up product-navigation anchors (e.g.
+  // "Explosion-Proof-Positioning-System") because they matched
+  // `href*='position'`. Cleaner to fail fast.
+  if (!process.env.JOB_PRO_HTTPS_PROXY) {
+    return { ok: false, message: PROXY_HINT };
+  }
+  const url = recruitType === "campus" ? CAREER_URL : SOCIAL_URL;
+  const r = await withPage(async (page) => {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    const final: { html_size: number; raw: RawJobLink[] } = await page.evaluate(() => {
+      const html_size = document.documentElement.outerHTML.length;
+      // Pick only anchors that live inside a careers-flavoured container
+      // (heuristic — Hikvision's careers SPA wraps job cards in
+      // `.recruit-list`, `.job-list`, or has `Talent-recruit` in their
+      // hrefs PATH SEGMENT, not just substring).
+      const isJobLink = (a: HTMLAnchorElement): boolean => {
+        const href = a.getAttribute("href") ?? "";
+        // Path-segment match (not substring) — avoids product URLs.
+        if (!/\/(Talent-?recruit|social-recruit|campus-recruit|recruitment\/jobs|positions?\/[0-9]+)(\/|$|\?)/i.test(href)) {
+          return false;
+        }
+        return true;
+      };
+      const anchors = Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[];
+      const raw: RawJobLink[] = [];
+      for (const a of anchors) {
+        if (!isJobLink(a)) continue;
+        const text = (a.textContent ?? "").replace(/\s+/g, " ").trim();
+        if (text.length < 3 || text.length > 200) continue;
+        const href = a.getAttribute("href") ?? "";
+        const cityMatch = text.match(/(.+?)\s+([一-龥]{2,8}(?:市|省)|[A-Z][a-z]+(?:,\s?[A-Z]{2})?)\s*$/);
+        const title = cityMatch ? cityMatch[1].trim() : text;
+        const city = cityMatch ? cityMatch[2] : "";
+        raw.push({ title, city, href });
+      }
+      return { html_size, raw };
+    });
+    return final;
+  });
+  if (!r.ok) {
+    return { ok: false, message: `${r.error.message}. ${PROXY_HINT}` };
+  }
+  // EdgeOne anti-bot challenge fits in ~7KB; real careers SPA is much bigger.
+  if (r.value.html_size < 15000 && r.value.raw.length === 0) {
+    return {
+      ok: false,
+      message: `careers page rendered only ${r.value.html_size} bytes — looks like EdgeOne 403/challenge. ${PROXY_HINT}`,
+    };
+  }
+  if (r.value.raw.length === 0) {
+    return {
+      ok: false,
+      message: `careers page rendered but no job links matched the careers-path filter. The DOM structure may have changed; please report at https://github.com/HA7CH/job-pro/issues.`,
+    };
+  }
+  return { ok: true, raw: r.value.raw };
+}
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  const rt = opts.recruitType ?? "all";
+  const types: Array<"campus" | "social"> = rt === "all" ? ["campus", "social"] : [rt];
+  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+  const keyword = (opts.keyword ?? "").trim().toLowerCase();
+
+  const positions: PositionSummary[] = [];
+  let lastMsg = PROXY_HINT;
+  let anyOk = false;
+  for (const t of types) {
+    const r = await scrape(t);
+    if (!r.ok) {
+      lastMsg = r.message;
+      continue;
+    }
+    anyOk = true;
+    for (const raw of r.raw) positions.push(summarize(raw, t));
+  }
+  if (!anyOk) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: lastMsg,
+      query: opts,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const filtered = keyword
+    ? positions.filter((p) => p.title.toLowerCase().includes(keyword) || p.work_cities.toLowerCase().includes(keyword))
+    : positions;
+  const offset = (page - 1) * pageSize;
+  return {
+    ok: true as const,
+    source: SOURCE,
+    query: opts,
+    page,
+    page_size: pageSize,
+    total: filtered.length,
+    positions: filtered.slice(offset, offset + pageSize),
+  };
+}
 
 export async function fetchAllPositions(
-  _opts: SearchOptions & { maxPages?: number } = {}
+  opts: SearchOptions & { maxPages?: number } = {}
 ) {
+  const all = await searchPositions({ ...opts, page: 1, pageSize: 100 });
+  if (!all.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: all.message,
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
-    total: 0,
-    fetched: 0,
-    positions: [] as PositionSummary[],
+    total: all.total,
+    fetched: all.positions.length,
+    positions: all.positions,
   };
 }
-
-// ---- fetchPositionDetail ----
 
 export async function fetchPositionDetail(postId: string) {
+  const id = (postId ?? "").trim();
   return {
     ok: false as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
-    post_id: postId,
+    post_id: id,
+    message: PROXY_HINT,
   };
 }
-
-// ---- fetchDictionaries ----
 
 export async function fetchDictionaries() {
-  return {
-    ok: false as const,
-    source: SOURCE,
-    message: STUB_MESSAGE,
-    note:
-      "When hr.hikvision.com becomes accessible from non-CN: " +
-      "inspect JS bundles at /zwzx for /api/* filter taxonomy endpoints " +
-      "(job categories, work cities, recruit types).",
-  };
+  return { ok: false as const, source: SOURCE, message: PROXY_HINT };
 }
 
-// ---- notices (no public endpoint) ----
-
 export async function listNotices() {
-  return {
-    ok: false as const,
-    source: SOURCE,
-    message: "Hikvision: no public notices endpoint",
-    notices: [] as Array<{
-      id: number;
-      title: string;
-      publish_time: string;
-      tag: string;
-      detail_url: string;
-    }>,
-  };
+  return { ok: false as const, source: SOURCE, message: PROXY_HINT, notices: [] as never[] };
 }
 
 export async function getNotice(noticeId: string) {
-  return {
-    ok: false as const,
-    source: SOURCE,
-    message: "Hikvision: no public notices endpoint",
-    notice_id: noticeId,
-  };
+  return { ok: false as const, source: SOURCE, message: PROXY_HINT, notice_id: noticeId };
 }
 
 export async function findNoticesByQuestion(
@@ -219,30 +237,43 @@ export async function findNoticesByQuestion(
     ok: false as const,
     source: SOURCE,
     question,
-    message: "Hikvision: no public notices endpoint",
+    message: PROXY_HINT,
     matches: [] as unknown[],
   };
 }
 
-// ---- matchResume ----
-//
-// Because the position search API is inaccessible, we cannot retrieve live listings
-// to score against the resume. Return ok:false with the extracted signals so the
-// caller can display what terms were parsed (useful for debugging the resume text).
-
 export async function matchResume(
   text: string,
-  _opts: { topN?: number; candidates?: number } = {}
+  opts: { topN?: number; candidates?: number } = {}
 ) {
   const { terms, cities } = extractResumeSignals(text ?? "");
+  const list = await searchPositions({ pageSize: 50 });
+  if (!list.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      extracted_terms: terms,
+      city_preferences: cities,
+      matches: [] as PositionSummary[],
+      message: list.message,
+    };
+  }
+  const topN = Math.max(1, opts.topN ?? 5);
+  const scored = list.positions
+    .map((p) => ({
+      p,
+      score: scoreOverlap(`${p.title} ${p.work_cities}`, terms, cities).score,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+    .map((x) => x.p);
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
     extracted_terms: terms,
     city_preferences: cities,
-    matches: [] as PositionSummary[],
-    message: STUB_MESSAGE,
-    apply_url: CAMPUS_URL,
-    moka_url: MOKA_URL,
+    matches: scored,
   };
 }
+
+export { extractResumeSignals, scoreOverlap };
