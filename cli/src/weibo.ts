@@ -1,57 +1,148 @@
-// Weibo / Sina campus-recruiting adapter.
+// Weibo / Sina campus + social recruiting adapter.
 //
 // ============================================================
-// API DISCOVERY (probed 2026-05-14)
+// API DISCOVERY (probed 2026-05-15)
 //
-// Three potential portals were investigated:
+// Weibo/Sina posts every position through their Moka (北森's competitor)
+// recruitment portal at app.mokahr.com under the `sina` tenant. The original
+// career.sina.com.cn 302-loop was a red herring — that host just redirects
+// into the Moka SPA at:
 //
-//   1. job.weibo.com / hr.weibo.com / campus.weibo.com
-//      DNS resolves to 198.18.x.x (IANA RFC 2544 benchmarking range — unreachable
-//      from public internet; SSL handshake fails / empty reply at TCP level).
-//      These hostnames are dead ends from outside the Sina intranet.
+//   campus: https://app.mokahr.com/campus-recruitment/sina/43536
+//   social: https://app.mokahr.com/social-recruitment/sina/43535
 //
-//   2. career.sina.com.cn  (Sina's self-hosted Node/Express ATS)
-//      The portal serves Weibo campus jobs at company ID 43536
-//      (/campus-recruitment/sina/43536). Every unauthenticated HTTP request
-//      receives an infinite 302 redirect loop back to itself.
-//      The only JSON endpoint that responds without auth is:
-//        GET /api/jobs → HTTP 401 {"message":"Need Login","code":1}
-//      All other /api/* paths return HTTP 404.
-//      Conclusion: fully auth-gated, no public JSON feed.
+// Moka exposes a fully anonymous JSON endpoint for the position list:
 //
-//   3. weibo.wd1.myworkdayjobs.com  (Workday tenant — also exists for sinagroup)
-//      The tenant resolves and is behind Cloudflare, but the UI shell returns
-//      HTTP 500 and redirects to community.workday.com/maintenance-page.
-//      All POST attempts to /wday/cxs/weibo/<slug>/jobs return HTTP 422
-//      regardless of slug or payload shape — the correct site slug cannot be
-//      determined without a working UI page to scrape.
+//   POST https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2
 //
-//   4. weibo.mokahr.com  — Moka slug: SSL handshake failure (no valid portal).
+// Required body fields: `orgId` ("sina"), `siteId` (the trailing site id from
+// the URL — 43536 campus, 43535 social), plus pagination/keyword. The response
+// body is AES-128-CBC encrypted:
 //
-//   5. Greenhouse boards.greenhouse.io/weibo — HTTP 301, not a Weibo org.
+//   {
+//     "data": <base64 ciphertext>,
+//     "necromancer": <hex string AES key>
+//   }
 //
-// VERDICT: No public unauthenticated API exists for Weibo/Sina campus recruiting.
-// The canonical path is career.sina.com.cn which requires an active login session.
-// This adapter is an honest stub that returns ok:false with a clear message.
+// Decryption parameters:
+//   key  = utf-8 bytes of `necromancer` (per-response, 16 chars / 16 bytes)
+//   iv   = utf-8 bytes of a static `aesIv` embedded in the SPA page HTML
+//          (`window.TurboApply.data.aesIv`). For the sina tenant the iv is
+//          "de7c21ed8d6f50fe" and has remained stable across page reloads.
+//   mode = CBC, padding = PKCS#7
 //
-// ============================================================
-// PositionSummary field mapping (canonical keys, matches all other adapters)
-//   post_id       — string job identifier
-//   title         — position title
-//   project       — job category / department
-//   recruit_label — recruit type label (e.g. "校招" / "实习")
-//   bgs           — business group (not exposed by Sina ATS, always "")
-//   work_cities   — work location string
-//   apply_url     — deep link to the job posting
+// Endpoint inventory (all anon, all app.mokahr.com):
+//   POST /api/outer/ats-apply/website/jobs/v2                → paginated list
+//   POST /api/outer/ats-apply/website/group-by-job           → grouped list
+//   POST /api/outer/ats-apply/website/job                    → single posting
+//   POST /api/outer/ats-apply/website/jobs/v2/filterFieldsAggregations
+//                                                            → filter taxonomy
+//   POST /api/outer/ats-apply/website/manage-job-count       → counts only
+//   POST /api/outer/ats-apply/privacy-policy/get             → site privacy
 // ============================================================
 
+import { createDecipheriv } from "node:crypto";
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 export { checkResume };
 
-const SOURCE = "career.sina.com.cn";
-const CAMPUS_PAGE = "https://career.sina.com.cn/campus-recruitment/sina/43536";
+const SOURCE = "app.mokahr.com/sina";
+const API_ROOT = "https://app.mokahr.com";
+const ORG_ID = "sina";
+const CAMPUS_SITE_ID = 43536;
+const SOCIAL_SITE_ID = 43535;
+const CAMPUS_PAGE = `https://app.mokahr.com/campus-recruitment/sina/${CAMPUS_SITE_ID}`;
+const SOCIAL_PAGE = `https://app.mokahr.com/social-recruitment/sina/${SOCIAL_SITE_ID}`;
+// AES IV embedded in `window.TurboApply.data.aesIv` of the sina recruitment SPA.
+const AES_IV = "de7c21ed8d6f50fe";
 
-// ---------- PositionSummary ----------
+const DEFAULT_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  "Content-Type": "application/json",
+  Referer: CAMPUS_PAGE,
+  Origin: API_ROOT,
+};
+
+function decryptResponse(b64Cipher: string, hexKey: string): unknown {
+  const cipherBuf = Buffer.from(b64Cipher, "base64");
+  const key = Buffer.from(hexKey, "utf-8");
+  const iv = Buffer.from(AES_IV, "utf-8");
+  const decipher = createDecipheriv("aes-128-cbc", key, iv);
+  const plain = Buffer.concat([decipher.update(cipherBuf), decipher.final()]);
+  return JSON.parse(plain.toString("utf-8"));
+}
+
+interface MokaEnvelope {
+  data?: string;
+  necromancer?: string;
+  // unencrypted error envelope
+  code?: number;
+  codeType?: number;
+  msg?: string;
+  success?: boolean;
+}
+
+interface MokaPayload<T> {
+  code?: number;
+  codeType?: number;
+  msg?: string;
+  success?: boolean;
+  data?: T;
+}
+
+async function post<T>(
+  path: string,
+  body: Record<string, unknown>,
+  referer = CAMPUS_PAGE
+): Promise<{ ok: boolean; data?: T; message: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`, {
+      method: "POST",
+      headers: { ...DEFAULT_HEADERS, Referer: referer },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!response.ok) {
+    return { ok: false, message: `HTTP ${response.status}: ${response.statusText}` };
+  }
+  let env: MokaEnvelope;
+  try {
+    env = (await response.json()) as MokaEnvelope;
+  } catch (err) {
+    return { ok: false, message: `bad JSON: ${err instanceof Error ? err.message : err}` };
+  }
+
+  // Error envelope (no ciphertext): code != 0.
+  if (env.code !== undefined && (!env.data || typeof env.data !== "string")) {
+    return { ok: false, message: env.msg || `moka error code=${env.code}` };
+  }
+  if (!env.data || !env.necromancer) {
+    return { ok: false, message: "missing ciphertext or key in moka response" };
+  }
+  let plain: MokaPayload<T>;
+  try {
+    plain = decryptResponse(env.data, env.necromancer) as MokaPayload<T>;
+  } catch (err) {
+    return {
+      ok: false,
+      message: `decrypt failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!plain.success || plain.code !== 0) {
+    return { ok: false, message: plain.msg || `moka inner code=${plain.code}` };
+  }
+  return { ok: true, data: plain.data, message: plain.msg || "ok" };
+}
+
+// ---------- types ----------
 
 export interface PositionSummary {
   post_id: string;
@@ -63,156 +154,254 @@ export interface PositionSummary {
   apply_url: string;
 }
 
-// ---------- SearchOptions ----------
-
 export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /** "campus" (校招, default) or "social" (社招) */
+  channel?: "campus" | "social";
 }
 
-// ---------- stub message ----------
+interface RawJob {
+  id?: string;
+  title?: string;
+  department?: { id?: number; name?: string };
+  locations?: Array<{ cityName?: string; provinceName?: string; country?: string }>;
+  hireMode?: number;
+  commitment?: string;
+  status?: string;
+  publishedAt?: string;
+  openedAt?: string;
+  projectFolder?: { name?: string };
+}
 
-const STUB_MSG =
-  "Weibo campus recruiting (career.sina.com.cn) is fully auth-gated: " +
-  "every endpoint requires a valid login session. " +
-  "job.weibo.com / hr.weibo.com resolve to IANA-reserved IPs (unreachable outside Sina intranet). " +
-  "No public unauthenticated JSON API was found. " +
-  `Apply directly at ${CAMPUS_PAGE}`;
+function summarize(
+  item: RawJob,
+  channel: "campus" | "social",
+  siteId: number
+): PositionSummary {
+  const id = String(item.id ?? "");
+  const cities = (item.locations ?? [])
+    .map((l) => [l.provinceName, l.cityName].filter(Boolean).join("·"))
+    .filter((s) => s.length > 0)
+    .join(", ");
+  const label = channel === "social" ? "社招" : item.hireMode === 2 ? "校招" : "校招";
+  return {
+    post_id: id,
+    title: (item.title ?? "").trim(),
+    project: item.projectFolder?.name?.trim() ?? "",
+    recruit_label: label,
+    bgs: (item.department?.name ?? "").trim(),
+    work_cities: cities,
+    apply_url: id
+      ? `https://app.mokahr.com/${channel}-recruitment/sina/${siteId}/job/${encodeURIComponent(id)}`
+      : channel === "social"
+      ? SOCIAL_PAGE
+      : CAMPUS_PAGE,
+  };
+}
 
 // ---------- searchPositions ----------
 
-export async function searchPositions(
-  _opts: SearchOptions = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-  positions: PositionSummary[];
-}> {
+export async function searchPositions(opts: SearchOptions = {}) {
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+  const channel = opts.channel ?? "campus";
+  const siteId = channel === "social" ? SOCIAL_SITE_ID : CAMPUS_SITE_ID;
+  const refererPage = channel === "social" ? SOCIAL_PAGE : CAMPUS_PAGE;
+
+  const body: Record<string, unknown> = {
+    orgId: ORG_ID,
+    siteId: String(siteId),
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+    needStat: true,
+    jobIdTopList: [],
+    customFields: {},
+    site: channel,
+    locale: "zh-CN",
+  };
+  if (opts.keyword) body.keyword = opts.keyword.trim().slice(0, 60);
+
+  const r = await post<{ jobs?: RawJob[]; jobStats?: { total?: number } }>(
+    "/api/outer/ats-apply/website/jobs/v2",
+    body,
+    refererPage
+  );
+  if (!r.ok || !r.data) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: r.message,
+      query: body,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const rows = r.data.jobs ?? [];
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAMPUS_PAGE,
-    positions: [],
+    query: body,
+    page,
+    page_size: pageSize,
+    total: r.data.jobStats?.total ?? rows.length,
+    positions: rows.map((j) => summarize(j, channel, siteId)),
   };
 }
 
 // ---------- fetchAllPositions ----------
 
 export async function fetchAllPositions(
-  _opts: SearchOptions & { maxPages?: number } = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-  fetched: number;
-  positions: PositionSummary[];
-}> {
+  opts: { keyword?: string; maxPages?: number; pageSize?: number; channel?: "campus" | "social" } = {}
+) {
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
+  const maxPages = Math.max(1, opts.maxPages ?? 20);
+
+  const bucket: PositionSummary[] = [];
+  let total: number | undefined;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await searchPositions({
+      keyword: opts.keyword,
+      page,
+      pageSize,
+      channel: opts.channel,
+    });
+    if (!r.ok) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: r.message,
+        total: 0,
+        fetched: bucket.length,
+        positions: bucket,
+      };
+    }
+    if (total === undefined) total = r.total;
+    if (!r.positions.length) break;
+    bucket.push(...r.positions);
+    if (total !== undefined && bucket.length >= total) break;
+  }
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAMPUS_PAGE,
-    fetched: 0,
-    positions: [],
+    total: total ?? bucket.length,
+    fetched: bucket.length,
+    positions: bucket,
   };
 }
 
 // ---------- fetchPositionDetail ----------
 
-export async function fetchPositionDetail(
-  _postId: string
-): Promise<{ ok: false; source: string; message: string; apply_url: string }> {
+interface RawJobDetail extends RawJob {
+  description?: string;
+  requirement?: string;
+  responsibility?: string;
+}
+
+export async function fetchPositionDetail(postId: string) {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required", post_id: id };
+  const r = await post<RawJobDetail>("/api/outer/ats-apply/website/job", {
+    orgId: ORG_ID,
+    siteId: CAMPUS_SITE_ID,
+    jobId: id,
+  });
+  if (!r.ok || !r.data) {
+    return { ok: false as const, source: SOURCE, message: r.message || "no detail returned", post_id: id };
+  }
+  const raw = r.data;
+  const cities = (raw.locations ?? [])
+    .map((l) => [l.provinceName, l.cityName].filter(Boolean).join("·"))
+    .join(", ");
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAMPUS_PAGE,
+    post_id: String(raw.id ?? id),
+    title: raw.title ?? "",
+    project: raw.projectFolder?.name ?? "",
+    department: raw.department?.name ?? "",
+    description: (raw.description ?? raw.responsibility ?? "").trim(),
+    requirements: (raw.requirement ?? "").trim(),
+    work_cities: cities,
+    commitment: raw.commitment ?? "",
+    published_at: raw.publishedAt ?? raw.openedAt ?? "",
+    apply_url: `https://app.mokahr.com/campus-recruitment/sina/${CAMPUS_SITE_ID}/job/${encodeURIComponent(
+      String(raw.id ?? id)
+    )}`,
   };
 }
 
 // ---------- fetchDictionaries ----------
 
-export async function fetchDictionaries(): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-}> {
+export async function fetchDictionaries() {
+  const r = await post<unknown>(
+    "/api/outer/ats-apply/website/jobs/v2/filterFieldsAggregations",
+    { orgId: ORG_ID, siteId: CAMPUS_SITE_ID }
+  );
   return {
-    ok: false,
+    ok: r.ok,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAMPUS_PAGE,
+    api_host: API_ROOT,
+    verified_at: new Date().toISOString(),
+    filter_fields: r.data ?? null,
+    channels: { campus: CAMPUS_SITE_ID, social: SOCIAL_SITE_ID },
   };
 }
 
-// ---------- notices (no public endpoint) ----------
+// ---------- notices (no public endpoint on Moka tenant) ----------
 
-export async function listNotices(): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-}> {
-  return {
-    ok: false,
-    source: SOURCE,
-    message: "Weibo: no public notices endpoint",
-  };
+const NO_NOTICES = "Weibo/Sina Moka tenant does not expose a public notices/announcements endpoint.";
+
+export async function listNotices() {
+  return { ok: false as const, source: SOURCE, message: NO_NOTICES, notices: [] as never[] };
 }
-
-export async function getNotice(
-  _id: string
-): Promise<{ ok: false; source: string; message: string }> {
-  return {
-    ok: false,
-    source: SOURCE,
-    message: "Weibo: no public notices endpoint",
-  };
+export async function getNotice(noticeId: string) {
+  return { ok: false as const, source: SOURCE, message: NO_NOTICES, notice_id: noticeId };
 }
-
 export async function findNoticesByQuestion(
-  _question: string,
+  question: string,
   _opts: { questionTime?: string; topK?: number } = {}
-): Promise<{ ok: false; source: string; message: string }> {
-  return {
-    ok: false,
-    source: SOURCE,
-    message: "Weibo: no public notices endpoint",
-  };
+) {
+  return { ok: false as const, source: SOURCE, question, message: NO_NOTICES, matches: [] as never[] };
 }
 
 // ---------- matchResume ----------
-// Resume matching cannot fetch live position data without auth.
-// We surface the signals extracted from the resume and direct the user to
-// the Weibo campus page to search manually.
 
-export async function matchResume(
-  text: string,
-  opts: { topN?: number; candidates?: number } = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-  extracted_terms?: string[];
-  city_preferences?: string[];
-}> {
-  void opts;
+export async function matchResume(text: string, opts: { topN?: number; candidates?: number } = {}) {
   const { terms, cities } = extractResumeSignals(text ?? "");
+  const topN = Math.max(1, opts.topN ?? 5);
+  const candidates = Math.max(topN, opts.candidates ?? 200);
+
+  const all = await fetchAllPositions({ pageSize: 50, maxPages: Math.ceil(candidates / 50) });
+  if (!all.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: all.message,
+      extracted_terms: terms,
+      city_preferences: cities,
+      matches: [] as PositionSummary[],
+    };
+  }
+
+  type Scored = { score: number; position: PositionSummary };
+  const scored: Scored[] = [];
+  for (const p of all.positions) {
+    const haystack = `${p.title} ${p.project} ${p.bgs} ${p.work_cities}`;
+    const score = scoreOverlap(haystack, terms, cities).score;
+    if (score > 0) scored.push({ score, position: p });
+  }
+  scored.sort((a, b) => b.score - a.score);
+
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAMPUS_PAGE,
     extracted_terms: terms,
     city_preferences: cities,
+    candidate_pool: all.positions.length,
+    matches: scored.slice(0, topN).map((s) => s.position),
   };
 }
 
-// Export scoreOverlap so callers that import helpers from this module can use them.
 export { extractResumeSignals, scoreOverlap };

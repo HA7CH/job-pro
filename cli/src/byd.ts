@@ -1,64 +1,57 @@
-// Thin client stub for BYD (比亚迪) campus-recruiting portal at job.byd.com.
+// BYD (比亚迪) recruiting adapter — job.byd.com.
 //
 // ============================================================
-// Endpoint discovery (probed 2026-05, JS bundle app.e46eb97b.js +
-// chunk-e8fe.d262cda1.js, chunk-ac75.7dee0692.js, chunk-a7e5.62aed375.js,
-// chunk-76ac.cedb4013.js, chunk-dbeb.0075e53e.js):
+// API DISCOVERY (probed 2026-05-15)
 //
-// Portal entry:
-//   https://job.byd.com/            → redirects to https://job.byd.com/portal/pc/
-//   https://careers.byd.com/        → Vite/Vue marketing page (static, no job listings)
-//   https://job.byd.com/portal/pc/  → main Vue SPA (webpack, ElementUI)
+// The job.byd.com SPA exposes two distinct API namespaces:
 //
-// Axios instance (t3Un module in app.e46eb97b.js):
-//   baseURL = "/portal/api"
-//   Interceptor: adds header Authorization: "bearer <token>" from Vuex store.
-//   Code 4001 → "Token无效或已过期: Not Authenticated" (auto-redirect to login).
+//   /portal/api/...              → authenticated; every endpoint returns
+//                                  {"code":4001,"msg":"Token无效或已过期"}
+//                                  for unauthenticated requests.
+//   /portal/api/portal-api/...   → ANONYMOUS public endpoints used by the SPA's
+//                                  home/experienced/campus landing flows. These
+//                                  return job listings, notices, materials, and
+//                                  recruit topics without any token.
 //
-// Campus-related API endpoints found in JS bundles:
-//   POST /portal/api/school/queryJobList           → campus job list
-//   POST /portal/api/position/queryList            → position list (also skiller/social)
-//   POST /portal/api/position/queryDetail          → position detail
-//   POST /portal/api/other-info/notice/query-list  → campus notices
-//   POST /portal/api/position/schedule/query-list  → campus schedule / timeline
-//   GET  /portal/api/siteInfo/faq                  → FAQ
-//   POST /portal/api/common/queryCodeTree          → code dictionary
+// The working anonymous search endpoint is:
 //
-// All endpoints probed 2026-05: EVERY request returns:
-//   HTTP 200, body: {"code":4001,"timestamp":...,"msg":"Token无效或已过期: Not Authenticated"}
+//   POST /portal/api/portal-api/position/queryList
 //
-// Auth model:
-//   Requires a JWT bearer token obtained through BYD account login
-//   (POST /portal/api/account/login, then GET /portal/api/account/user-info).
-//   There is NO public/anonymous browsing API — even the FAQ and code-tree
-//   endpoints are gated behind a valid token.
+// Required headers: a normal Chrome User-Agent, Content-Type application/json,
+// a job.byd.com Referer, and `lang: en_US` (vivo accepts both en_US and zh_CN).
 //
-// careers.byd.com investigation:
-//   careers.byd.com is an internationalised marketing SPA (Vite + Vue 3).
-//   Its BydPage-6104aa3e.js uses baseURL "/global-portal/api" with two
-//   known endpoints:
-//     GET /global-portal-api/global-material/getGlobalMaterial → 404
-//     GET /global-portal-api/global-country/getCountryNetwork  → 404
-//   The site is a static landing page that links to job.byd.com; it does
-//   not expose any independent job-search API.
+// Body shape:
+//   {
+//     positionTypeArr:     [],   // 职位类型 codes
+//     positionProvinceArr: [],   // 省 codes
+//     positionCityArr:     [],   // 市 codes
+//     positionOrgArr:      [],   // 事业群 codes
+//     vagueCondition:      "",   // free-text keyword (matches title)
+//     searchType:          1,    // 1 = title search
+//     zpType:              "00251",  // 招聘类型 — see table below
+//     pageNum:             0,    // zero-based
+//     pageSize:            20
+//   }
 //
-// ============================================================
-// Summary: BYD has no publicly accessible campus-job search API.
-//   All API calls require a logged-in user JWT.
-//   This adapter is an honest stub — every function returns ok:false with
-//   an informative message. It will be upgraded once an authenticated
-//   (scrape-friendly) path is identified.
+// `zpType` controls the recruit channel:
+//   "00251"  社招   (Experienced; 1647+ live postings)
+//   "00252"  技师   (Technician — empty as of probe)
+//   "00253"  操作工 (Operator / blue-collar — empty as of probe)
+//   (Campus 校招 listings live behind a separate `school/*` flow that is fully
+//   auth-gated; the public anon channel exposes social hire only.)
 //
-// ============================================================
-// PositionSummary field mapping (BYD → canonical, documented for future use):
-//   post_id       ← item.positionId or item.id  (string)
-//   title         ← item.positionName           (e.g. "校招-软件开发工程师")
-//   project       ← item.positionTypeName       (职位类型, e.g. "研发")
-//   recruit_label ← item.recruitTypeName        (e.g. "应届生" / "实习生")
-//   bgs           ← ""                          (not exposed in API)
-//   work_cities   ← item.workPlace or item.city (free-text Chinese city string)
-//   apply_url     ← https://job.byd.com/portal/pc/school/schoolPositionApply
-//                     ?positionId={id}
+// Response envelope: {"code":0, "data":{"total":N, "data":[...]}}.
+//
+// Endpoint inventory (anonymous):
+//   POST /portal/api/portal-api/position/queryList       → paginated jobs
+//   GET  /portal/api/portal-api/material/getMaterial?ids=…    → site materials
+//   POST /portal/api/portal-api/other-info/notice/query-list  → notices
+//   POST /portal/api/portal-api/other-info/resource/query-list→ downloadables
+//   GET  /portal/api/portal-api/common/queryCodeTree?ids=…    → filter taxonomy
+//   POST /portal/api/portal-api/common/queryDeptTree          → org tree
+//   POST /portal/api/portal-api/Recruitment/getMessageList    → marketing msgs
+//   GET  /portal/api/portal-api/resumeSend/school-topic/info?zpNature=…
+//                                                             → campus topics
 //
 // ============================================================
 
@@ -66,9 +59,75 @@ import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 export { checkResume };
 
 const SOURCE = "job.byd.com";
-const CAMPUS_PAGE = "https://job.byd.com/portal/pc/school/home";
+const API_ROOT = "https://job.byd.com";
+const SITE_ROOT = "https://job.byd.com/portal/pc/";
+const DETAIL_PAGE = (id: string) =>
+  `https://job.byd.com/portal/pc/#/social/detail?positionCode=${encodeURIComponent(id)}`;
 
-// ---- canonical type ----
+const DEFAULT_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  Referer: SITE_ROOT,
+  Origin: API_ROOT,
+  lang: "zh_CN",
+};
+
+interface BydEnvelope<T> {
+  code?: number;
+  msg?: string;
+  message?: string;
+  data?: T;
+}
+
+async function call<T>(
+  method: "GET" | "POST",
+  path: string,
+  opts: { body?: unknown; query?: Record<string, string | number | undefined> } = {}
+): Promise<{ ok: boolean; data?: T; message: string }> {
+  let url = `${API_ROOT}${path}`;
+  if (opts.query) {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(opts.query)) {
+      if (v !== undefined && v !== "") params.set(k, String(v));
+    }
+    const qs = params.toString();
+    if (qs) url += (path.includes("?") ? "&" : "?") + qs;
+  }
+  const headers: Record<string, string> = { ...DEFAULT_HEADERS };
+  let body: string | undefined;
+  if (opts.body !== undefined) {
+    body = JSON.stringify(opts.body);
+    headers["Content-Type"] = "application/json;charset=UTF-8";
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, { method, headers, body });
+  } catch (err) {
+    return {
+      ok: false,
+      message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!response.ok) {
+    return { ok: false, message: `HTTP ${response.status}: ${response.statusText}` };
+  }
+  let payload: BydEnvelope<T>;
+  try {
+    payload = (await response.json()) as BydEnvelope<T>;
+  } catch (err) {
+    return { ok: false, message: `bad JSON: ${err instanceof Error ? err.message : err}` };
+  }
+  return {
+    ok: payload.code === 0,
+    data: payload.data,
+    message: payload.msg || payload.message || (payload.code === 0 ? "ok" : "upstream error"),
+  };
+}
+
+// ---------- types ----------
 
 export interface PositionSummary {
   post_id: string;
@@ -80,174 +139,346 @@ export interface PositionSummary {
   apply_url: string;
 }
 
-// ---- SearchOptions (documented for when auth becomes available) ----
-
 export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /** "campus" = 应届生 (new-grad), "intern" = 实习生.  Default: "campus". */
-  recruitType?: "campus" | "intern";
-  /** Work-city filter, e.g. "深圳", "上海", "北京". */
-  city?: string;
+  /** zpType — recruit channel. Default "00251" (Experienced / 社招). */
+  zpType?: string;
+  /** position-type codes from queryCodeTree ids=0030 */
+  positionTypeIds?: string[];
+  /** province codes from queryCodeTree ids=0009 */
+  provinceCodes?: string[];
+  /** city codes from queryCodeTree ids=0009 (leaves) */
+  cityCodes?: string[];
+  /** 事业群 codes from queryDeptTree (fatherOrg) */
+  orgCodes?: string[];
 }
 
-// ---- stub reason ----
+interface RawPosition {
+  id?: string;
+  positionCode?: string;
+  positionName?: string;
+  positionTypeId?: string;
+  fatherOrgAliasName?: string;
+  fatherOrgName?: string;
+  orgAliasName?: string;
+  orgName?: string;
+  city?: string;
+  province?: string;
+  enCity?: string;
+  enProvince?: string;
+  peopleNumLimit?: string;
+  createTime?: string;
+}
 
-const STUB_REASON =
-  "BYD job.byd.com: all API endpoints require a valid JWT bearer token " +
-  "(code 4001 — Token无效或已过期). No public/anonymous job search API exists. " +
-  "Visit https://job.byd.com/portal/pc/school/home to browse positions after login.";
-
-// ---- searchPositions ----
-
-export async function searchPositions(
-  _opts: SearchOptions = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  campus_page: string;
-  positions: PositionSummary[];
-}> {
+function summarize(item: RawPosition): PositionSummary {
+  const id = String(item.positionCode ?? item.id ?? "");
+  const city = [item.province, item.city].filter(Boolean).join("·");
   return {
-    ok: false,
-    source: SOURCE,
-    message: STUB_REASON,
-    campus_page: CAMPUS_PAGE,
-    positions: [],
+    post_id: id,
+    title: (item.positionName ?? "").trim(),
+    project: (item.fatherOrgAliasName ?? item.fatherOrgName ?? "").trim(),
+    recruit_label: "社招",
+    bgs: (item.orgAliasName ?? item.orgName ?? "").trim(),
+    work_cities: city,
+    apply_url: id ? DETAIL_PAGE(id) : SITE_ROOT,
   };
 }
 
-// ---- fetchAllPositions ----
+// ---------- searchPositions ----------
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+  const body = {
+    positionTypeArr: opts.positionTypeIds ?? [],
+    positionProvinceArr: opts.provinceCodes ?? [],
+    positionCityArr: opts.cityCodes ?? [],
+    positionOrgArr: opts.orgCodes ?? [],
+    vagueCondition: (opts.keyword ?? "").trim().slice(0, 60),
+    searchType: 1,
+    zpType: opts.zpType ?? "00251",
+    pageNum: page - 1, // BYD uses 0-based
+    pageSize,
+  };
+  const r = await call<{ total?: number; data?: RawPosition[] }>(
+    "POST",
+    "/portal/api/portal-api/position/queryList",
+    { body }
+  );
+  if (!r.ok || !r.data) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: r.message,
+      query: body,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const rows = r.data.data ?? [];
+  return {
+    ok: true as const,
+    source: SOURCE,
+    query: body,
+    page,
+    page_size: pageSize,
+    total: r.data.total ?? rows.length,
+    positions: rows.map(summarize),
+  };
+}
+
+// ---------- fetchAllPositions ----------
 
 export async function fetchAllPositions(
-  _opts: SearchOptions & { maxPages?: number } = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  campus_page: string;
-  fetched: number;
-  positions: PositionSummary[];
-}> {
+  opts: { keyword?: string; maxPages?: number; pageSize?: number; zpType?: string } = {}
+) {
+  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 50));
+  const maxPages = Math.max(1, opts.maxPages ?? 40);
+
+  const bucket: PositionSummary[] = [];
+  let total: number | undefined;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await searchPositions({
+      keyword: opts.keyword,
+      page,
+      pageSize,
+      zpType: opts.zpType,
+    });
+    if (!r.ok) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: r.message,
+        total: 0,
+        fetched: bucket.length,
+        positions: bucket,
+      };
+    }
+    if (total === undefined) total = r.total;
+    if (!r.positions.length) break;
+    bucket.push(...r.positions);
+    if (total !== undefined && bucket.length >= total) break;
+  }
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_REASON,
-    campus_page: CAMPUS_PAGE,
-    fetched: 0,
-    positions: [],
+    total: total ?? bucket.length,
+    fetched: bucket.length,
+    positions: bucket,
   };
 }
 
-// ---- fetchPositionDetail ----
+// ---------- fetchPositionDetail ----------
+//
+// The detail endpoint /portal/api/position/queryDetail requires auth, but the
+// public list endpoint returns enough info per row that we surface a "row+link"
+// detail instead of a fully gated 4001 stub.
 
-export async function fetchPositionDetail(
-  _postId: string
-): Promise<{ ok: false; source: string; message: string }> {
-  return { ok: false, source: SOURCE, message: STUB_REASON };
-}
+export async function fetchPositionDetail(postId: string) {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required", post_id: id };
 
-// ---- fetchDictionaries ----
-
-export async function fetchDictionaries(): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  note: string;
-  known_endpoints: string[];
-}> {
+  // Page through the social-hire list looking for the row. This is the best we
+  // can do without a logged-in JWT; in practice the row is usually within the
+  // first few hundred records and matchResume already pages through the full
+  // catalogue.
+  const r = await searchPositions({ keyword: id, pageSize: 5 });
+  const hit = r.ok ? r.positions.find((p) => p.post_id === id) : undefined;
+  if (!hit) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message:
+        "Position detail endpoint (POST /portal/api/position/queryDetail) requires a logged-in JWT. " +
+        "Public anon API can list positions but not return per-position bodies.",
+      post_id: id,
+      apply_url: DETAIL_PAGE(id),
+    };
+  }
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_REASON,
+    post_id: hit.post_id,
+    title: hit.title,
+    project: hit.project,
+    bgs: hit.bgs,
+    recruit_label: hit.recruit_label,
+    work_cities: hit.work_cities,
+    description: "",
+    requirements: "",
+    apply_url: hit.apply_url,
     note:
-      "BYD: no public filter-taxonomy endpoint. " +
-      "POST /portal/api/common/queryCodeTree returns 4001 without a token.",
-    known_endpoints: [
-      "POST /portal/api/school/queryJobList          (campus job list — auth required)",
-      "POST /portal/api/position/queryList           (position list — auth required)",
-      "POST /portal/api/position/queryDetail         (position detail — auth required)",
-      "POST /portal/api/other-info/notice/query-list (notices — auth required)",
-      "POST /portal/api/position/schedule/query-list (campus schedule — auth required)",
-      "GET  /portal/api/siteInfo/faq                 (FAQ — auth required)",
-      "POST /portal/api/common/queryCodeTree         (code tree — auth required)",
-    ],
+      "Description and requirements are not available without authentication; " +
+      "visit apply_url for the full posting after login.",
   };
 }
 
-// ---- listNotices ----
+// ---------- fetchDictionaries ----------
 
-export async function listNotices(): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-}> {
+export async function fetchDictionaries() {
+  const [codeTree, deptTree] = await Promise.all([
+    call<unknown>("GET", "/portal/api/portal-api/common/queryCodeTree", {
+      query: { ids: "0009,0030" },
+    }),
+    call<unknown>("POST", "/portal/api/portal-api/common/queryDeptTree", { body: {} }),
+  ]);
   return {
-    ok: false,
+    ok: codeTree.ok || deptTree.ok,
     source: SOURCE,
-    message: "BYD: notices endpoint (POST /portal/api/other-info/notice/query-list) requires authentication.",
+    api_host: API_ROOT,
+    verified_at: new Date().toISOString(),
+    code_tree: codeTree.data ?? null,
+    dept_tree: deptTree.data ?? null,
+    zp_types: {
+      "00251": "社招 (Experienced)",
+      "00252": "技师 (Technician)",
+      "00253": "操作工 (Operator)",
+    },
+    note:
+      "Campus (校招) jobs are not exposed by the anon public API — the school/* " +
+      "endpoints all require a JWT bearer token.",
   };
 }
 
-// ---- getNotice ----
+// ---------- notices ----------
 
-export async function getNotice(
-  _id: string
-): Promise<{ ok: false; source: string; message: string }> {
+interface RawNotice {
+  id?: number | string;
+  title?: string;
+  noticeTitle?: string;
+  publishTime?: string;
+  createTime?: string;
+  noticeContent?: string;
+  content?: string;
+  noticeType?: string;
+}
+
+export async function listNotices() {
+  const r = await call<{ data?: RawNotice[]; list?: RawNotice[]; total?: number }>(
+    "POST",
+    "/portal/api/portal-api/other-info/notice/query-list",
+    { body: { pageNum: 0, pageSize: 30 } }
+  );
+  if (!r.ok) return { ok: false as const, source: SOURCE, message: r.message, notices: [] };
+  const items = r.data?.data ?? r.data?.list ?? [];
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: "BYD: no public notices endpoint (auth required).",
+    count: items.length,
+    notices: items.map((n) => ({
+      id: String(n.id ?? ""),
+      title: n.title ?? n.noticeTitle ?? "",
+      publish_time: n.publishTime ?? n.createTime ?? "",
+      tag: n.noticeType ?? "",
+      detail_url: SITE_ROOT,
+    })),
   };
 }
 
-// ---- findNoticesByQuestion ----
+export async function getNotice(noticeId: string) {
+  const id = (noticeId ?? "").trim();
+  if (!id) return { ok: false as const, source: SOURCE, message: "notice_id is required" };
+  const all = await listNotices();
+  if (!all.ok) return { ok: false as const, source: SOURCE, message: all.message };
+  const hit = all.notices.find((n) => n.id === id);
+  if (!hit)
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: `notice ${id} not in the latest /notice/query-list page`,
+    };
+  return { ok: true as const, source: SOURCE, ...hit, content_html: "" };
+}
 
 export async function findNoticesByQuestion(
-  _question: string,
-  _opts: { questionTime?: string; topK?: number } = {}
-): Promise<{ ok: false; source: string; message: string }> {
+  question: string,
+  opts: { questionTime?: string; topK?: number } = {}
+) {
+  const listing = await listNotices();
+  if (!listing.ok) return { ok: false as const, source: SOURCE, message: listing.message, matches: [] };
+
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+  const text = (question ?? "").trim();
+  for (const m of text.match(/[A-Za-z0-9]{2,}/g) ?? []) {
+    const k = m.toLowerCase();
+    if (!seen.has(k)) {
+      seen.add(k);
+      tokens.push(k);
+    }
+  }
+  for (const run of text.match(/[一-鿿]+/g) ?? []) {
+    for (let i = 0; i < run.length - 1; i++) {
+      const bigram = run.slice(i, i + 2);
+      if (!seen.has(bigram)) {
+        seen.add(bigram);
+        tokens.push(bigram);
+      }
+      if (tokens.length >= 40) break;
+    }
+  }
+
+  const topK = Math.max(1, opts.topK ?? 3);
+  const scored = listing.notices
+    .map((n) => {
+      const hay = `${n.title} ${n.tag}`.toLowerCase();
+      const score = tokens.filter((t) => hay.includes(t)).length;
+      return { score, notice: n };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: "BYD: no public notices endpoint (auth required).",
+    question,
+    question_time: opts.questionTime,
+    matched_tokens: tokens,
+    matches: scored.slice(0, topK).map((s) => ({ ...s.notice, excerpt: "" })),
   };
 }
 
-// ---- matchResume ----
-// Resume matching is best-effort using extractResumeSignals/scoreOverlap from
-// tencent.ts, but since the position listing API is gated, we can only return
-// a stub with the extracted signals and a pointer to the campus page.
+// ---------- matchResume ----------
 
-export async function matchResume(
-  text: string,
-  opts: { topN?: number; candidates?: number } = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  campus_page: string;
-  extracted_terms: string[];
-  city_preferences: string[];
-}> {
-  // Extract signals so the caller knows what was parsed from the resume
+export async function matchResume(text: string, opts: { topN?: number; candidates?: number } = {}) {
   const { terms, cities } = extractResumeSignals(text ?? "");
-  void opts; // unused until API becomes accessible
+  const topN = Math.max(1, opts.topN ?? 5);
+  const candidates = Math.max(topN, opts.candidates ?? 200);
+
+  const all = await fetchAllPositions({
+    pageSize: 50,
+    maxPages: Math.ceil(candidates / 50),
+  });
+  if (!all.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: all.message,
+      extracted_terms: terms,
+      city_preferences: cities,
+      matches: [] as PositionSummary[],
+    };
+  }
+
+  type Scored = { score: number; position: PositionSummary };
+  const scored: Scored[] = [];
+  for (const p of all.positions) {
+    const haystack = `${p.title} ${p.project} ${p.bgs} ${p.work_cities}`;
+    const score = scoreOverlap(haystack, terms, cities).score;
+    if (score > 0) scored.push({ score, position: p });
+  }
+  scored.sort((a, b) => b.score - a.score);
 
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message:
-      "BYD: cannot search positions — API requires authentication. " +
-      `Extracted resume signals: [${terms.slice(0, 10).join(", ")}]. ` +
-      "Visit the campus page to search manually.",
-    campus_page: CAMPUS_PAGE,
     extracted_terms: terms,
     city_preferences: cities,
+    candidate_pool: all.positions.length,
+    matches: scored.slice(0, topN).map((s) => s.position),
   };
 }
 
-// ---- re-export helpers so the tencent resume signals are accessible ----
 export { extractResumeSignals, scoreOverlap };

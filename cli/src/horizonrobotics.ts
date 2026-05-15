@@ -1,39 +1,56 @@
 // 地平线 (Horizon Robotics) — stub adapter for `job-pro`.
 //
-// STATUS: stub-only. Horizon's careers portal is hosted on Moka and gated
-// behind the Moka SPA's login flow; the per-slug JSON endpoint returns the
-// "您访问的页面不存在" Moka error page for anonymous requests.
+// STATUS: stub-only.
 //
 // ============================================================
 // RECONNAISSANCE RESULTS (probed 2026-05):
 //
-//   https://career.horizon.ai             — 000 (no public DNS / unreachable)
-//   https://campus.horizon.ai             — 000 (no public DNS / unreachable)
-//   https://horizon.app.mokahr.com        — Moka SPA shell renders, but
-//     /api/career/website/horizon/jobs returns {"code":-1,"message":"您访问的页面不存在"}
+//   The earlier note in this file (Moka careers portal slug=horizonrobotics)
+//   is INCORRECT. The current public Horizon homepage is www.horizon.auto,
+//   and its "加入我们" links point to a Beisen wecruit (北森) ATS, NOT Moka:
 //
-//   Feishu ATSX:    horizonrobotics.jobs.feishu.cn — HTTP 405 (DNS but no portal)
-//                   horizon.jobs.feishu.cn         — HTTP 405
-//                   horizon-robotics.jobs.feishu.cn — HTTP 400 (no portal)
-//   Greenhouse:     horizon / horizon-robotics    — HTTP 404
-//   Lever:          horizonrobotics                — HTTP 404
+//     https://wecruit.hotjob.cn/SU6409ef49bef57c635fd390a6/pb/interns.html
+//     https://wecruit.hotjob.cn/SU6409ef49bef57c635fd390a6/pb/school.html
+//     https://wecruit.hotjob.cn/SU64819a4f2f9d2433ba8b043a/pb/custom.html
+//     https://wecruit.hotjob.cn/SU64819a4f2f9d2433ba8b043a/pb/social.html
 //
-//   The Moka portal exists (the slug 'horizonrobotics' returns 200 page
-//   shell) but the underlying job-list endpoint requires the Moka SPA's
-//   user-session JWT, which is only minted post-login.
+//   The Beisen wecruit positionInfo/listPosition endpoint is the same
+//   stack as SenseTime (see cli/src/sensetime.ts header for full details):
+//   every POST to /positionInfo/listPosition/{channelId} (with or without
+//   /pb/ prefix, with or without /SU{id}/ prefix) returns HTTP 405 from
+//   the Nginx WAF unless a valid session cookie / JWT is attached, which
+//   only comes from enterprise SSO (phone OTP / WeChat OAuth / SAML).
 //
-// Conclusion: no unauthenticated public API. Visit Moka careers shell at
-// https://app.mokahr.com/social-recruitment/horizonrobotics for the portal.
+//   Moka legacy probes (`horizonrobotics` slug at app.mokahr.com) now
+//   return 404 — that portal has been retired.
+//
+// ============================================================
+// WHY THIS IS A STUB (unauthenticated access is impossible):
+//
+//   Horizon Robotics outsources recruiting to Beisen wecruit, whose WAF
+//   blocks all anonymous POST traffic to the public positionInfo paths.
+//   There is no anonymous JSON job-listing endpoint at any Horizon-owned
+//   domain (www.horizon.auto has no inline job data either — it links
+//   straight out to the Beisen portal).
+//
+//   Alternatives for job discovery:
+//     (a) Apply via https://wecruit.hotjob.cn/SU64819a4f2f9d2433ba8b043a/pb/social.html
+//         (requires WeChat OAuth / phone OTP)
+//     (b) Monitor third-party boards: 牛客网, 实习僧, BOSS直聘 for Horizon listings
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 export { checkResume };
 
-const SOURCE = "app.mokahr.com/horizonrobotics";
+const SOURCE = "wecruit.hotjob.cn/horizon";
+const SOCIAL_URL = "https://wecruit.hotjob.cn/SU64819a4f2f9d2433ba8b043a/pb/social.html";
+const CAMPUS_URL = "https://wecruit.hotjob.cn/SU6409ef49bef57c635fd390a6/pb/school.html";
+
 const STUB_MESSAGE =
-  "Horizon Robotics (地平线): Moka careers portal (slug horizonrobotics) is gated — the public " +
-  "/api/career/website/horizon/jobs endpoint returns the Moka 'page not found' error for anonymous " +
-  "requests; positions are visible only after a candidate session is established. No Greenhouse / Lever / " +
-  "Feishu tenant provisioned. No unauthenticated public API available.";
+  "Horizon Robotics (地平线): no public job API — careers run through Beisen wecruit " +
+  "(channel SU64819a4f2f9d2433ba8b043a for social, SU6409ef49bef57c635fd390a6 for campus). " +
+  "The Beisen WAF blocks all anonymous POSTs to /positionInfo/listPosition with HTTP 405. " +
+  "Session cookies are only minted by enterprise SSO (phone OTP / WeChat OAuth). " +
+  "No unauthenticated public API available.";
 
 export interface PositionSummary {
   post_id: string;
@@ -52,7 +69,14 @@ export interface SearchOptions {
 }
 
 export async function searchPositions(_opts: SearchOptions = {}) {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE, query: {}, positions: [] as PositionSummary[] };
+  return {
+    ok: false as const,
+    source: SOURCE,
+    message: STUB_MESSAGE,
+    query: {},
+    positions: [] as PositionSummary[],
+    apply_url: SOCIAL_URL,
+  };
 }
 
 export async function fetchAllPositions(_opts: { keyword?: string; maxPages?: number; pageSize?: number } = {}) {
@@ -64,7 +88,12 @@ export async function fetchPositionDetail(postId: string) {
 }
 
 export async function fetchDictionaries() {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE };
+  return {
+    ok: false as const,
+    source: SOURCE,
+    message: STUB_MESSAGE,
+    portals: { social: SOCIAL_URL, campus: CAMPUS_URL },
+  };
 }
 
 export async function listNotices() {

@@ -1,175 +1,387 @@
-// Thin client for 阶跃星辰 / StepFun campus-recruiting portal.
+// 阶跃星辰 / StepFun recruiting via app.mokahr.com.
 //
 // ============================================================
-// RECONNAISSANCE RESULTS (probed 2026-05):
+// HOW THIS WORKS (probed 2026-05):
 //
-//   https://stepfun.com/careers         → 404 (Next.js app, no career page)
-//   https://www.stepfun.com/careers     → 404 (same Next.js shell)
-//   https://stepfun.com/join-us         → 404
-//   https://jobs.stepfun.com            → TLS/SSL error (domain not registered)
+//   SSR HTML at https://app.mokahr.com/social-recruitment/step/94904 embeds
+//   `<input id="init-data" value="<JSON>">` with the first 15 jobs and
+//   `jobStats.total`. Deeper pages come from
+//   POST /api/outer/ats-apply/website/jobs/v2?orgId=step (AES-128-CBC
+//   envelope: key=necromancer, iv=aesIv from SSR HTML).
 //
-// Feishu ATSX tenants probed (all return HTTP 400 / empty body):
-//   stepfun.jobs.feishu.cn
-//   step.jobs.feishu.cn
-//   jiebuxingchen.jobs.feishu.cn
-//   stepai.jobs.feishu.cn
-//   stepfunai.jobs.feishu.cn
-//   step-fun.jobs.feishu.cn
-//   jieyu.jobs.feishu.cn
-//   steppfun.jobs.feishu.cn
+// CONFIRMED MOKA ORG:
+//   slug=step, siteId=94904, mode=social
+//   Portal: https://app.mokahr.com/social-recruitment/step/94904
 //
-//   HTTP 400 with an empty body is Feishu's "tenant subdomain not configured
-//   on the ATSX backend" response (documented in feishu.ts discovery notes).
-//   None of the above subdomains are live Feishu tenants.
-//
-// Moka ATS — app.mokahr.com/social-recruitment/step/94904:
-//   The URL slug "step" / orgId 94904 exists (the bare path redirects to itself
-//   rather than 404-ing), but the page requires a browser session.
-//   All public API paths return {"message":"您访问的页面不存在","code":-1}:
-//     /api/campus/v1/org/step/positions     → 404
-//     /api/campus/v1/jobs?orgSlug=step       → 404
-//     /api/v1/jobs?orgSlug=step              → 404
-//     /api/v1/social/positions?orgSlug=step  → 404
-//     /api/campus/v2/positions?orgSlug=step  → 404
-//   This matches the Moka "social-only" posture described in the task brief
-//   (auth-gated, no unauthenticated public position-list endpoint).
-//
-// ============================================================
-// INFRASTRUCTURE NOTES:
-//
-//   StepFun (阶跃星辰) is a Beijing-based AI lab founded 2023.  Their public
-//   website (stepfun.com) is a Next.js consumer-facing chat app.  They have
-//   not published a public unauthenticated job-search API on any discovered
-//   subdomain or ATS platform.
-//
-//   POSSIBLE FUTURE UNBLOCKING:
-//     (a) StepFun activating a Feishu ATSX tenant (watch *.jobs.feishu.cn)
-//     (b) StepFun activating the Moka public social-recruitment module
-//     (c) StepFun building a custom career page with an open JSON API
-//     (d) Third-party aggregators: Boss直聘, 拉勾, 实习僧 (separate adapters)
-//
-// ============================================================
-// STUB CONTRACT:
-//   All functions return ok:false with STUB_MESSAGE.
-//   checkResume is re-exported from tencent.ts (works offline on resume text).
-//   PositionSummary matches the canonical shape used by every other adapter.
-//
-// ============================================================
-// ---- PositionSummary field mapping (StepFun → canonical, for when API becomes accessible) ----
-//   post_id       ← position ID from Feishu ATSX or Moka publishId
-//   title         ← position name / 职位名称
-//   project       ← job category / 职位类别 (e.g. "算法研究", "后端开发", "大模型")
-//   recruit_label ← recruit type / 招聘类型 (e.g. "社招", "校招", "实习")
-//   bgs           ← business line — not exposed in known public payloads → ""
-//   work_cities   ← work location / 工作地点 (e.g. "北京" / "上海")
-//   apply_url     ← https://app.mokahr.com/social-recruitment/step/94904  (portal URL)
+// PositionSummary field mapping:
+//   post_id       ← job.id
+//   title         ← job.title
+//   project       ← job.zhineng?.name (e.g. "算法类")
+//   recruit_label ← job.commitment || hireMode label
+//   bgs           ← job.department?.name
+//   work_cities   ← locations[].cityId → label via jobsGroupedByLocation
+//   apply_url     ← portal#/jobs/{id}
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
-export { checkResume };
+import { createDecipheriv } from "node:crypto";
+export { checkResume, extractResumeSignals, scoreOverlap };
 
-const SOURCE = "stepfun.com";
-const PORTAL_URL = "https://app.mokahr.com/social-recruitment/step/94904";
+const SOURCE = "app.mokahr.com/step";
+const ORG_SLUG = "step";
+const SITE_ID = 94904;
+const PORTAL_URL = `https://app.mokahr.com/social-recruitment/${ORG_SLUG}/${SITE_ID}`;
+const API_ENDPOINT = "https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2";
 
-const STUB_MESSAGE =
-  "StepFun (阶跃星辰): no public job API accessible without authentication. " +
-  "stepfun.com has no career page; all *.jobs.feishu.cn subdomains return HTTP 400 " +
-  "(tenant not configured in Feishu ATSX backend). Moka orgSlug 'step' / orgId 94904 " +
-  "exists but all /api/* endpoints are auth-gated (return 404). " +
-  "To browse StepFun jobs, visit the Moka portal directly: " +
-  PORTAL_URL + ". Documented in cli/src/stepfun.ts header.";
-
-// ---- PositionSummary (canonical shape — matches every other adapter) ----
+const DEFAULT_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
 
 export interface PositionSummary {
   post_id: string;
   title: string;
-  /** Job category / 职位类别 (e.g. "算法研究", "后端开发", "大模型") */
   project: string;
-  /** Recruit type / 招聘类型 (e.g. "社招", "校招", "实习") */
   recruit_label: string;
-  /** Business line — not exposed in known public payloads */
   bgs: string;
   work_cities: string;
   apply_url: string;
 }
-
-// ---- SearchOptions (canonical shape) ----
-
 export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /**
-   * Recruit type filter (for when API becomes accessible):
-   *   "social"      = 社招 (full-time, Moka portal active)
-   *   "campus"      = 校园招聘 (new-grad, Feishu ATSX if activated)
-   *   "internship"  = 实习
-   */
-  recruitType?: "social" | "campus" | "internship";
-  /** Filter by job category / 职位类别 (for when API becomes accessible) */
-  jobCategoryIdList?: string[];
-  /** Filter by city codes (for when API becomes accessible) */
-  cityIdList?: string[];
 }
 
-// ---- searchPositions ----
+interface MokaJob {
+  id: string;
+  title: string;
+  hireMode?: number;
+  commitment?: string;
+  zhineng?: { name?: string };
+  department?: { name?: string };
+  locations?: Array<{ cityId?: number | null; country?: string }>;
+}
+interface MokaLocationGroup {
+  label?: string;
+  cityId?: number | null;
+}
+interface MokaInitData {
+  aesIv?: string;
+  jobs?: MokaJob[];
+  jobStats?: { total?: number };
+  jobsGroupedByLocation?: MokaLocationGroup[];
+}
 
-export async function searchPositions(_opts: SearchOptions = {}) {
+function htmlDecode(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'");
+}
+function parseInitData(html: string): MokaInitData | null {
+  const m = html.match(/<input[^>]*id="init-data"[^>]*value="([^"]+)"/);
+  if (!m) return null;
+  try {
+    return JSON.parse(htmlDecode(m[1])) as MokaInitData;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPortalHtml(): Promise<{
+  ok: boolean;
+  html?: string;
+  cookieHeader?: string;
+  message: string;
+}> {
+  let r1: Response;
+  try {
+    r1 = await fetch(PORTAL_URL, { method: "GET", headers: DEFAULT_HEADERS, redirect: "manual" });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  const cookies: string[] = [];
+  const headersAny = r1.headers as unknown as { getSetCookie?: () => string[] };
+  if (typeof headersAny.getSetCookie === "function") {
+    for (const v of headersAny.getSetCookie.call(r1.headers) ?? []) {
+      const c = v.split(";")[0];
+      if (c) cookies.push(c);
+    }
+  }
+  if (cookies.length === 0) {
+    const raw = r1.headers.get("set-cookie");
+    if (raw) cookies.push(...raw.split(/,(?=[^;]+=)/).map((c) => c.split(";")[0].trim()));
+  }
+  const cookieHeader = cookies.join("; ");
+  let r2: Response;
+  try {
+    r2 = await fetch(PORTAL_URL, {
+      method: "GET",
+      headers: { ...DEFAULT_HEADERS, Cookie: cookieHeader },
+      redirect: "follow",
+    });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!r2.ok) return { ok: false, message: `HTTP ${r2.status}` };
+  return { ok: true, html: await r2.text(), cookieHeader, message: "ok" };
+}
+
+function decryptMoka(envelope: { data?: string; necromancer?: string }, aesIv: string): unknown {
+  if (!envelope.data || !envelope.necromancer) return null;
+  try {
+    const decipher = createDecipheriv(
+      "aes-128-cbc",
+      Buffer.from(envelope.necromancer, "utf8"),
+      Buffer.from(aesIv, "utf8")
+    );
+    const plain = Buffer.concat([
+      decipher.update(Buffer.from(envelope.data, "base64")),
+      decipher.final(),
+    ]);
+    return JSON.parse(plain.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function fetchEncryptedPage(
+  pageNum: number,
+  pageSize: number,
+  aesIv: string,
+  cookieHeader: string
+): Promise<{ ok: boolean; jobs?: MokaJob[]; total?: number; message: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_ENDPOINT}?orgId=${encodeURIComponent(ORG_SLUG)}`, {
+      method: "POST",
+      headers: {
+        ...DEFAULT_HEADERS,
+        Accept: "application/json,*/*",
+        "Content-Type": "application/json",
+        Origin: "https://app.mokahr.com",
+        Referer: PORTAL_URL,
+        Cookie: cookieHeader,
+      },
+      body: JSON.stringify({
+        orgId: ORG_SLUG,
+        siteId: String(SITE_ID),
+        pageNum,
+        pageSize,
+        needStat: true,
+      }),
+    });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
+  let envelope: { data?: string; necromancer?: string; code?: number; msg?: string };
+  try {
+    envelope = await response.json();
+  } catch {
+    return { ok: false, message: "bad JSON" };
+  }
+  const decoded = decryptMoka(envelope, aesIv) as
+    | { code?: number; data?: { jobs?: MokaJob[]; jobStats?: { total?: number } }; msg?: string }
+    | null;
+  if (!decoded || decoded.code !== 0 || !decoded.data) {
+    return { ok: false, message: decoded?.msg || envelope.msg || "decrypt error" };
+  }
   return {
-    ok: false as const,
-    source: SOURCE,
-    message: STUB_MESSAGE,
-    endpoint_candidates: [
-      `GET  ${PORTAL_URL}   (Moka social portal — browser auth required)`,
-      "GET  stepfun.jobs.feishu.cn   (HTTP 400 — Feishu tenant not configured)",
-    ],
-    query: {
-      keyword: _opts.keyword ?? "",
-      page: _opts.page ?? 1,
-      pageSize: _opts.pageSize ?? 20,
-      recruitType: _opts.recruitType ?? "social",
-    },
-    positions: [] as PositionSummary[],
-    total: 0,
+    ok: true,
+    jobs: decoded.data.jobs ?? [],
+    total: decoded.data.jobStats?.total ?? 0,
+    message: "ok",
   };
 }
 
-// ---- fetchAllPositions ----
+function buildCityMap(groups: MokaLocationGroup[] | undefined): Record<number, string> {
+  const out: Record<number, string> = {};
+  if (!groups) return out;
+  for (const g of groups) {
+    if (typeof g.cityId === "number" && g.label) out[g.cityId] = g.label;
+  }
+  return out;
+}
+function workCities(job: MokaJob, cityMap: Record<number, string>): string {
+  const uniq: string[] = [];
+  for (const loc of job.locations ?? []) {
+    const label =
+      (typeof loc.cityId === "number" && cityMap[loc.cityId]) || loc.country || "";
+    if (label && !uniq.includes(label)) uniq.push(label);
+  }
+  return uniq.join(" / ");
+}
+function recruitLabel(job: MokaJob): string {
+  if (job.commitment) return job.commitment;
+  if (job.hireMode === 1) return "全职";
+  if (job.hireMode === 2) return "实习";
+  return "";
+}
+function summarize(job: MokaJob, cityMap: Record<number, string>): PositionSummary {
+  return {
+    post_id: String(job.id),
+    title: job.title ?? "",
+    project: job.zhineng?.name ?? "",
+    recruit_label: recruitLabel(job),
+    bgs: job.department?.name ?? "",
+    work_cities: workCities(job, cityMap),
+    apply_url: `${PORTAL_URL}#/jobs/${encodeURIComponent(job.id)}`,
+  };
+}
+function matchesKeyword(job: MokaJob, kw: string): boolean {
+  if (!kw) return true;
+  const lc = kw.toLowerCase();
+  return (
+    (job.title ?? "").toLowerCase().includes(lc) ||
+    (job.zhineng?.name ?? "").toLowerCase().includes(lc) ||
+    (job.department?.name ?? "").toLowerCase().includes(lc)
+  );
+}
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  const pageSize = opts.pageSize ?? 20;
+  const page = opts.page ?? 1;
+  const keyword = opts.keyword ?? "";
+
+  const portal = await fetchPortalHtml();
+  if (!portal.ok || !portal.html) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: portal.message,
+      query: { keyword, page, pageSize },
+      positions: [] as PositionSummary[],
+      total: 0,
+    };
+  }
+  const init = parseInitData(portal.html);
+  if (!init || !init.jobs || !init.jobStats) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "Moka init-data missing jobs/jobStats",
+      query: { keyword, page, pageSize },
+      positions: [] as PositionSummary[],
+      total: 0,
+    };
+  }
+  const cityMap = buildCityMap(init.jobsGroupedByLocation);
+  let jobs = init.jobs;
+  const total = init.jobStats.total ?? jobs.length;
+  if (page > 1 && init.aesIv && portal.cookieHeader) {
+    const more = await fetchEncryptedPage(page, pageSize, init.aesIv, portal.cookieHeader);
+    if (!more.ok || !more.jobs) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: `pagination failed: ${more.message}`,
+        query: { keyword, page, pageSize },
+        positions: [] as PositionSummary[],
+        total,
+      };
+    }
+    jobs = more.jobs;
+  }
+  const filtered = jobs.filter((j) => matchesKeyword(j, keyword)).slice(0, pageSize);
+  return {
+    ok: true as const,
+    source: SOURCE,
+    query: { keyword, page, pageSize },
+    page,
+    page_size: pageSize,
+    total,
+    positions: filtered.map((j) => summarize(j, cityMap)),
+  };
+}
 
 export async function fetchAllPositions(
-  _opts: SearchOptions & { maxPages?: number } = {}
+  opts: SearchOptions & { maxPages?: number } = {}
 ) {
+  const pageSize = opts.pageSize ?? 20;
+  const maxPages = Math.max(1, opts.maxPages ?? 50);
+  const keyword = opts.keyword ?? "";
+
+  const portal = await fetchPortalHtml();
+  if (!portal.ok || !portal.html) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: portal.message,
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const init = parseInitData(portal.html);
+  if (!init || !init.jobs || !init.jobStats || !init.aesIv) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "Moka init-data missing required fields",
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const cityMap = buildCityMap(init.jobsGroupedByLocation);
+  const total = init.jobStats.total ?? 0;
+  const collected: MokaJob[] = [...init.jobs];
+  let page = 2;
+  while (collected.length < total && page <= maxPages) {
+    const more = await fetchEncryptedPage(
+      page,
+      pageSize,
+      init.aesIv,
+      portal.cookieHeader ?? ""
+    );
+    if (!more.ok || !more.jobs || more.jobs.length === 0) break;
+    collected.push(...more.jobs);
+    page += 1;
+  }
+  const filtered = collected.filter((j) => matchesKeyword(j, keyword));
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
-    fetched: 0,
-    positions: [] as PositionSummary[],
-    total: 0,
+    total,
+    fetched: filtered.length,
+    positions: filtered.map((j) => summarize(j, cityMap)),
   };
 }
 
-// ---- fetchPositionDetail ----
-
-export async function fetchPositionDetail(_postId: string) {
+export async function fetchPositionDetail(postId: string) {
   return {
     ok: false as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
+    message:
+      "Moka detail endpoint is also AES-encrypted and not implemented; " +
+      "use the apply_url deeplink for the full JD.",
+    post_id: postId,
+    apply_url: `${PORTAL_URL}#/jobs/${encodeURIComponent(postId)}`,
   };
 }
-
-// ---- fetchDictionaries ----
 
 export async function fetchDictionaries() {
+  const portal = await fetchPortalHtml();
+  if (!portal.ok || !portal.html) {
+    return { ok: false as const, source: SOURCE, message: portal.message };
+  }
+  const init = parseInitData(portal.html);
+  if (!init) {
+    return { ok: false as const, source: SOURCE, message: "Moka init-data missing" };
+  }
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
+    locations: init.jobsGroupedByLocation ?? [],
+    moka_org: { slug: ORG_SLUG, siteId: SITE_ID, url: PORTAL_URL },
   };
 }
-
-// ---- notices ----
 
 export async function listNotices() {
   return {
@@ -178,7 +390,6 @@ export async function listNotices() {
     message: "StepFun (阶跃星辰): no public notices endpoint",
   };
 }
-
 export async function getNotice(_id: string) {
   return {
     ok: false as const,
@@ -186,7 +397,6 @@ export async function getNotice(_id: string) {
     message: "StepFun (阶跃星辰): no public notices endpoint",
   };
 }
-
 export async function findNoticesByQuestion(
   _question: string,
   _opts: { questionTime?: string; topK?: number } = {}
@@ -198,18 +408,40 @@ export async function findNoticesByQuestion(
   };
 }
 
-// ---- matchResume ----
-
 export async function matchResume(
-  _text: string,
-  _opts: { topN?: number; candidates?: number } = {}
+  text: string,
+  opts: { topN?: number; candidates?: number } = {}
 ) {
+  const { terms, cities } = extractResumeSignals(text ?? "");
+  const candidates = Math.max(20, opts.candidates ?? 100);
+  const all = await fetchAllPositions({
+    pageSize: 20,
+    maxPages: Math.ceil(candidates / 15),
+  });
+  if (!all.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      extracted_terms: terms,
+      city_preferences: cities,
+      matches: [] as PositionSummary[],
+      message: all.message,
+    };
+  }
+  const topN = Math.max(1, opts.topN ?? 10);
+  const scored = all.positions
+    .map((p) => ({
+      p,
+      score: scoreOverlap(`${p.title} ${p.project} ${p.bgs}`, terms, cities).score,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+    .map((x) => x.p);
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
-    matches: [] as PositionSummary[],
+    extracted_terms: terms,
+    city_preferences: cities,
+    matches: scored,
   };
 }
-
-export { extractResumeSignals, scoreOverlap };

@@ -1,215 +1,496 @@
-// Thin client for 旷视科技 / Megvii / Face++ campus-recruiting portal.
+// Thin client for 旷视科技 / Megvii / Face++ recruiting portal at app.mokahr.com.
 //
 // ============================================================
-// RECONNAISSANCE RESULTS (probed 2026-05):
+// HOW THIS WORKS (probed 2026-05):
 //
-//   https://www.megvii.com/careers
-//     → 302 redirect to https://www.megvii.com/ (marketing homepage)
+//   Moka social-recruitment SSR HTML at
+//     https://app.mokahr.com/social-recruitment/megviihr/38641
+//   embeds the entire first page of jobs INLINE in a hidden input
+//   `<input id="init-data" value="<HTML-escaped JSON>">`. The JSON
+//   shape is documented in the call helper below; the important keys are
+//   `jobs[]` (first 15 entries) and `jobStats.total` (full count).
 //
-//   https://www.megvii.com/join_us
-//     → Reachable: SSR marketing page (~118 KB), no public job API,
-//       no embedded JSON job data, no fetch/axios calls in HTML.
-//       Footer links point to /join_us/campus (校园招聘) and Moka.
+//   The same SSR HTML is also emitted for the campus portal at
+//     https://app.mokahr.com/campus_apply/megviihr/38642
 //
-//   https://hr.megvii.com/        → HTTP 404
-//   https://careers.megvii.com/   → HTTP 404
-//   https://campus.megvii.com/    → HTTP 404
+//   For deeper pagination the SPA POSTs to
+//     /api/outer/ats-apply/website/jobs/v2?orgId=megviihr
+//   with body { orgId, siteId, pageNum, pageSize, needStat:true } and
+//   receives an AES-CBC encrypted envelope {data, necromancer}. We
+//   decrypt using key=necromancer (raw utf8) and iv=aesIv (raw utf8,
+//   served in the SSR HTML as a constant — observed value is the
+//   same Moka-wide string across orgs).
 //
-//   http://joinus.megvii.com
-//     → 302 → https://app.mokahr.com/campus_apply/megviihr/38642
-//       (Moka campus portal, orgSlug="megviihr", orgId=38642)
-//       The Moka SPA enters a redirect loop without a valid session cookie.
-//       Every route under /campus_apply/megviihr/38642 returns:
-//         init-data: {"message":"您访问的页面不存在",...}
-//
-//   http://zhaopin.megvii.com
-//     → 302 → https://app.mokahr.com/social-recruitment/megviihr/38641
-//       (Moka social portal, orgSlug="megviihr", orgId=38641)
-//
-// ============================================================
-// MOKA API PROBE RESULTS:
-//
-//   All Moka REST API patterns tested (probed 2026-05):
-//
-//   GET  /api/campus/v1/organizations/megviihr/jobs?pageSize=N
-//   GET  /api/campus/v1/organizations/megviihr/38642/jobs?pageSize=N
-//   GET  /api/campus/v1/organizations/megviihr/38642/positions?pageSize=N
-//   GET  /api/campus/v2/organizations/megviihr/positions?pageSize=N
-//   POST /api/campus/v1/jobs/search  { orgId:"38642", ... }
-//   POST /api/campus/v1/organizations/megviihr/jobs/search
-//   GET  /api/social/v1/organizations/megviihr/jobs?pageSize=N
-//
-//   All return: HTTP 200, body { "message":"您访问的页面不存在","code":-1 }
-//
-//   Root cause: Moka ATS requires an active applicant session (cookie-based)
-//   for ALL candidate-facing API calls. The session is obtained via:
-//     - WeChat OAuth (most common)
-//     - Phone OTP login
-//   There is no anonymous/public API surface on Moka for job listings.
-//   This is consistent with Moka's design as a closed ATS — unlike
-//   ByteDance (jobs.bytedance.com) or Tencent (join.qq.com) which expose
-//   purpose-built public portals with unauthenticated search APIs.
-//
-// ============================================================
 // CONFIRMED MOKA ORG IDs:
+//   Campus (校园招聘): orgSlug=megviihr, siteId=38642
+//     URL: https://app.mokahr.com/campus_apply/megviihr/38642
+//   Social  (社会招聘): orgSlug=megviihr, siteId=38641
+//     URL: https://app.mokahr.com/social-recruitment/megviihr/38641
 //
-//   Campus (校园招聘): orgSlug=megviihr, orgId=38642
-//     Entry:   http://joinus.megvii.com
-//              → https://app.mokahr.com/campus_apply/megviihr/38642
-//
-//   Social  (社会招聘): orgSlug=megviihr, orgId=38641
-//     Entry:   http://zhaopin.megvii.com
-//              → https://app.mokahr.com/social-recruitment/megviihr/38641
-//
-//   Note: The task brief flagged orgId 38641 as "social hires only" —
-//   confirmed. Campus (38642) is a separate org on the same Moka tenant.
-//
-// ============================================================
-// WHY THIS IS A STUB (unauthenticated access is impossible):
-//
-//   Megvii outsources all recruiting to Moka ATS, which requires
-//   a valid applicant session for every API call. There is no
-//   anonymous-accessible job search API at any Megvii domain.
-//
-//   Alternatives for job discovery:
-//     (a) Apply directly via https://app.mokahr.com/campus_apply/megviihr/38642
-//         (requires WeChat login)
-//     (b) Monitor third-party boards: 牛客网, 实习僧, boss直聘 for Megvii listings
-//     (c) Watch for a future public API migration (Feishu Recruiting / custom portal)
-//
-// ============================================================
-// STUB CONTRACT: All functions return ok:false with STUB_MESSAGE.
-// checkResume is re-exported from tencent.ts (works offline on resume text).
-// When/if Megvii opens a public API, rewrite this file — the export shape
-// is already locked by the PositionSummary interface below.
-//
-// ---- PositionSummary field mapping (Moka → canonical) ----
-//   post_id      ← job.id (Moka internal job ID)
-//   title        ← job.name (职位名称)
-//   project      ← job.departmentName or job.categoryName (部门/职类)
-//   recruit_label ← job.recruitTypeName (校园招聘 / 社会招聘 / 实习)
-//   bgs          ← "" (Moka does not expose BG/事业群 in public search)
-//   work_cities  ← job.cities joined with " / "
-//   apply_url    ← https://app.mokahr.com/campus_apply/megviihr/38642#/jobs/{id}
+// PositionSummary field mapping (Moka raw → canonical):
+//   post_id      ← job.id           (UUID, used as positionId in detail deeplink)
+//   title        ← job.title
+//   project      ← job.zhineng?.name (职位类别, e.g. "算法类", "职能类")
+//   recruit_label ← job.commitment || hireMode-derived label
+//   bgs          ← job.department?.name (部门)
+//   work_cities  ← job.locations[].cityId resolved via jobsGroupedByLocation
+//                  (concatenated with " / "); falls back to job.location.country
+//   apply_url    ← portal URL + "#/jobs/{id}"
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
-export { checkResume };
+import { createDecipheriv } from "node:crypto";
+export { checkResume, extractResumeSignals, scoreOverlap };
 
-const SOURCE = "app.mokahr.com/campus_apply/megviihr/38642";
-const CAMPUS_URL = "https://app.mokahr.com/campus_apply/megviihr/38642";
-const SOCIAL_URL = "https://app.mokahr.com/social-recruitment/megviihr/38641";
+const SOURCE = "app.mokahr.com/megviihr";
+const ORG_SLUG = "megviihr";
+const CAMPUS_SITE_ID = 38642;
+const SOCIAL_SITE_ID = 38641;
+const CAMPUS_URL = `https://app.mokahr.com/campus_apply/${ORG_SLUG}/${CAMPUS_SITE_ID}`;
+const SOCIAL_URL = `https://app.mokahr.com/social-recruitment/${ORG_SLUG}/${SOCIAL_SITE_ID}`;
+const API_ENDPOINT = "https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2";
 
-const STUB_MESSAGE =
-  "Megvii (旷视科技): no public job API — all recruiting runs through Moka ATS " +
-  "(campus orgId=38642 at app.mokahr.com/campus_apply/megviihr/38642, " +
-  "social orgId=38641 at app.mokahr.com/social-recruitment/megviihr/38641). " +
-  "Moka requires an active applicant session (WeChat OAuth / phone OTP) for every API call; " +
-  "all unauthenticated API probes return {code:-1, message:'您访问的页面不存在'}. " +
-  "hr.megvii.com / careers.megvii.com / campus.megvii.com are all HTTP 404. " +
-  "Documented in cli/src/megvii.ts header.";
+const DEFAULT_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
 
-// ---- PositionSummary (canonical shape — matches every other adapter) ----
+// ---- PositionSummary (canonical shape) ----
 
 export interface PositionSummary {
   post_id: string;
   title: string;
-  /** Job department / category (e.g. 算法研究, 软件研发, 视觉感知) */
+  /** 职位类别 (zhineng.name) */
   project: string;
-  /** Recruit type label (e.g. 校园招聘, 实习, 社会招聘) */
+  /** 招聘类型 / commitment (e.g. 全职 / 实习) */
   recruit_label: string;
-  /** Business group — not exposed in public search results (always "") */
+  /** Department name */
   bgs: string;
   work_cities: string;
   apply_url: string;
 }
 
-// ---- SearchOptions (canonical shape) ----
-
 export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /**
-   * Filter by recruit type. Moka values (when API becomes accessible):
-   *   "campus"  = 校园招聘 (orgId 38642, campus new-grad + intern)
-   *   "social"  = 社会招聘 (orgId 38641, experienced hire)
-   * Default: "campus" (matches the joinus.megvii.com entry point).
-   */
+  /** "campus" = orgId 38642, "social" (default) = orgId 38641 */
   recruitType?: "campus" | "social";
+}
+
+// ---- raw Moka shapes ----
+
+interface MokaJob {
+  id: string;
+  title: string;
+  hireMode?: number;
+  commitment?: string;
+  zhineng?: { id?: number; name?: string };
+  department?: { id?: number; name?: string };
+  locations?: Array<{ id?: number; cityId?: number | null; country?: string; address?: string }>;
+  location?: { id?: number; cityId?: number | null; country?: string };
+}
+
+interface MokaLocationGroup {
+  id?: string;
+  label?: string;
+  cityId?: number | null;
+  jobCount?: number;
+}
+
+interface MokaInitData {
+  org?: { id?: string; siteId?: number; type?: string };
+  siteId?: number;
+  mode?: string;
+  aesIv?: string;
+  jobs?: MokaJob[];
+  jobStats?: { orgId?: string; total?: number };
+  jobsGroupedByLocation?: MokaLocationGroup[];
+}
+
+// ---- helpers ----
+
+/** HTML-decode &quot; / &amp; / &lt; / &gt; / &#x27; */
+function htmlDecode(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'");
+}
+
+/** Parse the init-data JSON blob out of Moka SSR HTML. */
+function parseInitData(html: string): MokaInitData | null {
+  const m = html.match(/<input[^>]*id="init-data"[^>]*value="([^"]+)"/);
+  if (!m) return null;
+  try {
+    return JSON.parse(htmlDecode(m[1])) as MokaInitData;
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch SSR HTML for a Moka portal URL with a fresh cookie jar in-memory. */
+async function fetchPortalHtml(url: string): Promise<{
+  ok: boolean;
+  html?: string;
+  cookieHeader?: string;
+  status?: number;
+  message: string;
+}> {
+  // Two-fetch dance: first request bounces with Set-Cookie + 302 to self;
+  // we capture cookies and re-issue with them attached.
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "GET", headers: DEFAULT_HEADERS, redirect: "manual" });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  const cookies: string[] = [];
+  // getSetCookie() must be called bound to the Headers object (Node undici brandCheck)
+  const headersAny = response.headers as unknown as { getSetCookie?: () => string[] };
+  if (typeof headersAny.getSetCookie === "function") {
+    for (const v of headersAny.getSetCookie.call(response.headers) ?? []) {
+      const c = v.split(";")[0];
+      if (c) cookies.push(c);
+    }
+  }
+  // Some runtimes only expose combined header
+  if (cookies.length === 0) {
+    const raw = response.headers.get("set-cookie");
+    if (raw) cookies.push(...raw.split(/,(?=[^;]+=)/).map((c) => c.split(";")[0].trim()));
+  }
+  const cookieHeader = cookies.join("; ");
+
+  // Now fetch with cookies (follow redirects automatically)
+  let r2: Response;
+  try {
+    r2 = await fetch(url, {
+      method: "GET",
+      headers: { ...DEFAULT_HEADERS, Cookie: cookieHeader },
+      redirect: "follow",
+    });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!r2.ok) {
+    return { ok: false, status: r2.status, message: `HTTP ${r2.status}` };
+  }
+  const html = await r2.text();
+  return { ok: true, html, cookieHeader, status: r2.status, message: "ok" };
+}
+
+/** AES-128-CBC decrypt of Moka encrypted job payload. */
+function decryptMokaEnvelope(envelope: { data?: string; necromancer?: string }, aesIv: string): unknown {
+  if (!envelope.data || !envelope.necromancer) return null;
+  try {
+    const key = Buffer.from(envelope.necromancer, "utf8");
+    const iv = Buffer.from(aesIv, "utf8");
+    const decipher = createDecipheriv("aes-128-cbc", key, iv);
+    const plain = Buffer.concat([
+      decipher.update(Buffer.from(envelope.data, "base64")),
+      decipher.final(),
+    ]);
+    return JSON.parse(plain.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch a deeper page via the encrypted POST endpoint. */
+async function fetchEncryptedPage(
+  orgSlug: string,
+  siteId: number,
+  pageNum: number,
+  pageSize: number,
+  aesIv: string,
+  cookieHeader: string,
+  portalUrl: string
+): Promise<{ ok: boolean; jobs?: MokaJob[]; total?: number; message: string }> {
+  const url = `${API_ENDPOINT}?orgId=${encodeURIComponent(orgSlug)}`;
+  const body = {
+    orgId: orgSlug,
+    siteId: String(siteId),
+    pageNum,
+    pageSize,
+    needStat: true,
+  };
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        ...DEFAULT_HEADERS,
+        Accept: "application/json,*/*",
+        "Content-Type": "application/json",
+        Origin: "https://app.mokahr.com",
+        Referer: portalUrl,
+        Cookie: cookieHeader,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
+  let envelope: { data?: string; necromancer?: string; code?: number; msg?: string };
+  try {
+    envelope = await response.json();
+  } catch {
+    return { ok: false, message: "bad JSON from upstream" };
+  }
+  const decoded = decryptMokaEnvelope(envelope, aesIv) as
+    | { code?: number; data?: { jobs?: MokaJob[]; jobStats?: { total?: number } }; msg?: string }
+    | null;
+  if (!decoded || decoded.code !== 0 || !decoded.data) {
+    return { ok: false, message: decoded?.msg || envelope?.msg || "decrypt or upstream error" };
+  }
+  return {
+    ok: true,
+    jobs: decoded.data.jobs ?? [],
+    total: decoded.data.jobStats?.total ?? 0,
+    message: "ok",
+  };
+}
+
+/** Build cityId → city label map from jobsGroupedByLocation. */
+function buildCityMap(groups: MokaLocationGroup[] | undefined): Record<number, string> {
+  const out: Record<number, string> = {};
+  if (!groups) return out;
+  for (const g of groups) {
+    if (typeof g.cityId === "number" && g.label) out[g.cityId] = g.label;
+  }
+  return out;
+}
+
+function workCitiesFor(job: MokaJob, cityMap: Record<number, string>): string {
+  const cities = (job.locations ?? [])
+    .map((l) => {
+      if (typeof l.cityId === "number" && cityMap[l.cityId]) return cityMap[l.cityId];
+      return l.country || "";
+    })
+    .filter((s) => s.length > 0);
+  const uniq: string[] = [];
+  for (const c of cities) if (!uniq.includes(c)) uniq.push(c);
+  return uniq.join(" / ");
+}
+
+function commitmentFor(job: MokaJob): string {
+  if (typeof job.commitment === "string" && job.commitment.length > 0) return job.commitment;
+  if (job.hireMode === 1) return "全职";
+  if (job.hireMode === 2) return "实习";
+  return "";
+}
+
+function summarize(job: MokaJob, cityMap: Record<number, string>, portalUrl: string): PositionSummary {
+  return {
+    post_id: String(job.id),
+    title: job.title ?? "",
+    project: job.zhineng?.name ?? "",
+    recruit_label: commitmentFor(job),
+    bgs: job.department?.name ?? "",
+    work_cities: workCitiesFor(job, cityMap),
+    apply_url: `${portalUrl}#/jobs/${encodeURIComponent(job.id)}`,
+  };
+}
+
+function matchesKeyword(job: MokaJob, kw: string): boolean {
+  if (!kw) return true;
+  const lc = kw.toLowerCase();
+  return (
+    (job.title ?? "").toLowerCase().includes(lc) ||
+    (job.zhineng?.name ?? "").toLowerCase().includes(lc) ||
+    (job.department?.name ?? "").toLowerCase().includes(lc)
+  );
+}
+
+function portalUrlFor(recruitType: "campus" | "social"): string {
+  return recruitType === "campus" ? CAMPUS_URL : SOCIAL_URL;
+}
+
+function siteIdFor(recruitType: "campus" | "social"): number {
+  return recruitType === "campus" ? CAMPUS_SITE_ID : SOCIAL_SITE_ID;
 }
 
 // ---- searchPositions ----
 
-export async function searchPositions(_opts: SearchOptions = {}) {
-  const recruitType = _opts.recruitType ?? "campus";
-  const applyUrl = recruitType === "social" ? SOCIAL_URL : CAMPUS_URL;
+export async function searchPositions(opts: SearchOptions = {}) {
+  const recruitType = opts.recruitType ?? "social";
+  const portalUrl = portalUrlFor(recruitType);
+  const pageSize = opts.pageSize ?? 20;
+  const page = opts.page ?? 1;
+  const keyword = opts.keyword ?? "";
+
+  const portal = await fetchPortalHtml(portalUrl);
+  if (!portal.ok || !portal.html) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: portal.message,
+      query: { recruitType, keyword, page, pageSize },
+      positions: [] as PositionSummary[],
+      total: 0,
+    };
+  }
+  const init = parseInitData(portal.html);
+  if (!init || !init.jobs || !init.jobStats) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "Moka init-data missing jobs/jobStats",
+      query: { recruitType, keyword, page, pageSize },
+      positions: [] as PositionSummary[],
+      total: 0,
+    };
+  }
+  const cityMap = buildCityMap(init.jobsGroupedByLocation);
+  let jobs = init.jobs;
+  const total = init.jobStats.total ?? jobs.length;
+
+  // If caller requested page > 1, fetch via encrypted POST
+  if (page > 1 && init.aesIv && portal.cookieHeader) {
+    const more = await fetchEncryptedPage(
+      ORG_SLUG,
+      siteIdFor(recruitType),
+      page,
+      pageSize,
+      init.aesIv,
+      portal.cookieHeader,
+      portalUrl
+    );
+    if (!more.ok || !more.jobs) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: `pagination failed: ${more.message}`,
+        query: { recruitType, keyword, page, pageSize },
+        positions: [] as PositionSummary[],
+        total,
+      };
+    }
+    jobs = more.jobs;
+  }
+
+  // Client-side keyword filter — Moka server-side keyword on this endpoint
+  // is observed to be ignored on first-page SSR, so we filter locally.
+  const filtered = jobs.filter((j) => matchesKeyword(j, keyword));
+  const sliced = filtered.slice(0, pageSize);
+  const positions = sliced.map((j) => summarize(j, cityMap, portalUrl));
+
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
-    // Expose the would-be Moka endpoint so callers can see what we'd target
-    endpoint:
-      recruitType === "social"
-        ? `GET https://app.mokahr.com/api/social/v1/organizations/megviihr/jobs?pageSize=${_opts.pageSize ?? 20}&pageIndex=${_opts.page ?? 1}`
-        : `GET https://app.mokahr.com/api/campus/v1/organizations/megviihr/jobs?pageSize=${_opts.pageSize ?? 20}&pageIndex=${_opts.page ?? 1}`,
-    query: {
-      orgSlug: "megviihr",
-      orgId: recruitType === "social" ? 38641 : 38642,
-      recruitType,
-      pageSize: _opts.pageSize ?? 20,
-      pageIndex: _opts.page ?? 1,
-      ...(_opts.keyword ? { keyword: _opts.keyword } : {}),
-    },
-    apply_url: applyUrl,
-    positions: [] as PositionSummary[],
-    total: 0,
+    query: { recruitType, keyword, page, pageSize },
+    page,
+    page_size: pageSize,
+    total,
+    positions,
   };
 }
 
 // ---- fetchAllPositions ----
 
 export async function fetchAllPositions(
-  _opts: SearchOptions & { maxPages?: number } = {}
+  opts: SearchOptions & { maxPages?: number } = {}
 ) {
+  const recruitType = opts.recruitType ?? "social";
+  const portalUrl = portalUrlFor(recruitType);
+  const pageSize = opts.pageSize ?? 20;
+  const maxPages = Math.max(1, opts.maxPages ?? 50);
+  const keyword = opts.keyword ?? "";
+
+  const portal = await fetchPortalHtml(portalUrl);
+  if (!portal.ok || !portal.html) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: portal.message,
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const init = parseInitData(portal.html);
+  if (!init || !init.jobs || !init.jobStats || !init.aesIv) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "Moka init-data missing required fields",
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const cityMap = buildCityMap(init.jobsGroupedByLocation);
+  const total = init.jobStats.total ?? 0;
+  const collected: MokaJob[] = [...init.jobs];
+
+  // Page 1 came from SSR; for subsequent pages use encrypted POST.
+  // SSR returns ~15 per page; we cap with maxPages * pageSize.
+  let page = 2;
+  while (collected.length < total && page <= maxPages) {
+    const more = await fetchEncryptedPage(
+      ORG_SLUG,
+      siteIdFor(recruitType),
+      page,
+      pageSize,
+      init.aesIv,
+      portal.cookieHeader ?? "",
+      portalUrl
+    );
+    if (!more.ok || !more.jobs || more.jobs.length === 0) break;
+    collected.push(...more.jobs);
+    page += 1;
+  }
+  const filtered = collected.filter((j) => matchesKeyword(j, keyword));
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
-    total: 0,
-    fetched: 0,
-    positions: [] as PositionSummary[],
+    total,
+    fetched: filtered.length,
+    positions: filtered.map((j) => summarize(j, cityMap, portalUrl)),
   };
 }
 
 // ---- fetchPositionDetail ----
+//
+// The Moka detail endpoint /api/outer/ats-apply/website/job is also AES-encrypted
+// and requires a fresh session cookie. For now we return the deeplink + a
+// note — keeping the verb honest rather than fake-successful.
 
 export async function fetchPositionDetail(postId: string) {
   return {
     ok: false as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
+    message:
+      "Moka detail endpoint /api/outer/ats-apply/website/job requires the same encrypted-session " +
+      "flow; not implemented in this adapter. Use the apply_url deeplink for the full JD.",
     post_id: postId,
+    apply_url: `${SOCIAL_URL}#/jobs/${encodeURIComponent(postId)}`,
   };
 }
 
 // ---- fetchDictionaries ----
-//
-// When Moka session is available, the campus org filter taxonomy would come from:
-//   GET https://app.mokahr.com/api/campus/v1/organizations/megviihr/38642/searchConfig
-//   (returns: departments, job types, cities, recruit types)
 
 export async function fetchDictionaries() {
+  const portal = await fetchPortalHtml(SOCIAL_URL);
+  if (!portal.ok || !portal.html) {
+    return { ok: false as const, source: SOURCE, message: portal.message };
+  }
+  const init = parseInitData(portal.html);
+  if (!init) {
+    return { ok: false as const, source: SOURCE, message: "Moka init-data missing" };
+  }
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MESSAGE,
-    note:
-      "When Moka session is available: " +
-      "GET /api/campus/v1/organizations/megviihr/38642/searchConfig " +
-      "returns departments, job types, cities, recruit types.",
+    locations: init.jobsGroupedByLocation ?? [],
     moka_orgs: {
-      campus: { slug: "megviihr", id: 38642, url: CAMPUS_URL },
-      social: { slug: "megviihr", id: 38641, url: SOCIAL_URL },
+      campus: { slug: ORG_SLUG, id: CAMPUS_SITE_ID, url: CAMPUS_URL },
+      social: { slug: ORG_SLUG, id: SOCIAL_SITE_ID, url: SOCIAL_URL },
     },
   };
 }
@@ -254,32 +535,41 @@ export async function findNoticesByQuestion(
 }
 
 // ---- matchResume ----
-//
-// Because the position search API is inauthenticated-inaccessible via Moka,
-// we cannot retrieve live listings to score against the resume.
-// Return ok:false with the extracted signals so the caller can display
-// what terms were parsed — useful for cross-referencing with other adapters.
 
 export async function matchResume(
   text: string,
-  _opts: { topN?: number; candidates?: number } = {}
+  opts: { topN?: number; candidates?: number } = {}
 ) {
   const { terms, cities } = extractResumeSignals(text ?? "");
+  const candidates = Math.max(20, opts.candidates ?? 100);
+  const search = await fetchAllPositions({
+    pageSize: 20,
+    maxPages: Math.ceil(candidates / 15),
+  });
+  if (!search.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      extracted_terms: terms,
+      city_preferences: cities,
+      matches: [] as PositionSummary[],
+      message: search.message,
+    };
+  }
+  const topN = Math.max(1, opts.topN ?? 10);
+  const scored = search.positions
+    .map((p) => ({
+      p,
+      score: scoreOverlap(`${p.title} ${p.project} ${p.bgs}`, terms, cities).score,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+    .map((x) => x.p);
   return {
-    ok: false as const,
+    ok: true as const,
     source: SOURCE,
     extracted_terms: terms,
     city_preferences: cities,
-    matches: [] as PositionSummary[],
-    message: STUB_MESSAGE,
-    apply_url: CAMPUS_URL,
-    note:
-      "Resume signals extracted successfully. " +
-      "To find matching Megvii roles, visit the campus portal directly (requires WeChat login).",
+    matches: scored,
   };
 }
-
-// Explicitly re-export scoreOverlap so callers that import * from megvii get the full toolkit,
-// consistent with bytedance.ts. The function is unused internally (no live search to score
-// against), but keeping the export shape uniform avoids surprises when the adapter is upgraded.
-export { scoreOverlap };

@@ -1,48 +1,47 @@
-// 01.AI / 零一万物 — stub adapter for `job-pro`.
+// Thin client for 01.AI / 零一万物 recruiting portal.
 //
-// STATUS: stub-only. 01.AI (Kai-Fu Lee's AI lab) lists careers via a SPA
-// without a public anonymous JSON endpoint discoverable from outside CN.
-// Probe results:
-//   www.01.ai/careers / 01.ai/careers → 200 HTML SPA, no inline data
-//   01ai.jobs.feishu.cn, lingyiwanwu.jobs.feishu.cn → no real Feishu tenant
-// When 01.AI opens a public API we rewrite this in one pass.
+// Portal: https://01ai.jobs.feishu.cn/
+// Platform: Feishu Recruiting (ATSX) SaaS — same API surface as nio.ts / moonshot.ts.
+//
+// ============================================================
+// Discovery (2026-05):
+//
+//   www.01.ai/                    → Strikingly site, links to portal
+//   01ai.jobs.feishu.cn/index/    → Feishu ATSX, channel "index"
+//                                    tenant "零一万物" / "社招官网"
+//
+//   The portal channel slug is "index" (not "social" / "campus") — the
+//   tenant only configured one channel and it's named "index".
+//
+// ============================================================
+// PositionSummary field mapping (Feishu → canonical):
+//   post_id       ← String(item.id)
+//   title         ← item.title
+//   project       ← item.job_category?.name ?? item.job_function?.name
+//   recruit_label ← item.recruit_type?.name
+//   bgs           ← ""  (not exposed in public search)
+//   work_cities   ← city_list joined " / "  (city_info used as fallback)
+//   apply_url     ← https://01ai.jobs.feishu.cn/index/position/${id}/detail
 
-import { extractResumeSignals, checkResume } from "./tencent.js";
-export { checkResume };
+import { createAdapter } from "./feishu.js";
+import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 
-const SOURCE = "www.01.ai";
-const STUB_MESSAGE =
-  "01.AI / 零一万物: no public job API discovered. Corporate careers page is SPA " +
-  "with no embedded job data; no Feishu/Moka tenant resolves anonymously.";
+export { extractResumeSignals, scoreOverlap, checkResume };
 
-export interface PositionSummary {
-  post_id: string; title: string; project: string; recruit_label: string;
-  bgs: string; work_cities: string; apply_url: string;
-}
-export interface SearchOptions { keyword?: string; page?: number; pageSize?: number; }
+export type { PositionSummary, SearchOptions } from "./feishu.js";
 
-export async function searchPositions(_opts: SearchOptions = {}) {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE, query: {}, positions: [] as PositionSummary[] };
-}
-export async function fetchAllPositions(_opts: { keyword?: string; maxPages?: number; pageSize?: number } = {}) {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE, total: 0, fetched: 0, positions: [] as PositionSummary[] };
-}
-export async function fetchPositionDetail(postId: string) {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE, post_id: postId };
-}
-export async function fetchDictionaries() {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE };
-}
-export async function listNotices() {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE, notices: [] };
-}
-export async function getNotice(noticeId: string) {
-  return { ok: false as const, source: SOURCE, message: STUB_MESSAGE, notice_id: noticeId };
-}
-export async function findNoticesByQuestion(question: string, _opts: { questionTime?: string; topK?: number } = {}) {
-  return { ok: false as const, source: SOURCE, question, message: STUB_MESSAGE, matches: [] };
-}
-export async function matchResume(text: string, _opts: { topN?: number; candidates?: number } = {}) {
-  const { terms, cities } = extractResumeSignals(text ?? "");
-  return { ok: false as const, source: SOURCE, extracted_terms: terms, city_preferences: cities, matches: [] as PositionSummary[], message: STUB_MESSAGE };
-}
+const _adapter = createAdapter({
+  host: "01ai.jobs.feishu.cn",
+  channel: "index",
+  label: "01.AI (零一万物)",
+  applyUrlPrefix: "https://01ai.jobs.feishu.cn/index/position",
+});
+
+export const searchPositions = _adapter.searchPositions;
+export const fetchAllPositions = _adapter.fetchAllPositions;
+export const fetchPositionDetail = _adapter.fetchPositionDetail;
+export const fetchDictionaries = _adapter.fetchDictionaries;
+export const listNotices = _adapter.listNotices;
+export const getNotice = _adapter.getNotice;
+export const findNoticesByQuestion = _adapter.findNoticesByQuestion;
+export const matchResume = _adapter.matchResume;

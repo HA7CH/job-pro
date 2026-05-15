@@ -1,69 +1,469 @@
-// Thin client for Moonshot AI (月之暗面 / Kimi) recruiting portal.
-//
-// Portal: https://moonshot.jobs.feishu.cn/
-// Platform: Feishu Recruiting (ATSX) SaaS — same API surface as nio.ts / minimax.ts.
+// Moonshot AI (月之暗面 / Kimi) recruiting via app.mokahr.com.
 //
 // ============================================================
-// Endpoint inventory (probed 2026-05):
+// HOW THIS WORKS (probed 2026-05):
 //
-//   POST https://moonshot.jobs.feishu.cn/api/v1/search/job/posts
-//   GET  https://moonshot.jobs.feishu.cn/api/v1/config/job/filters/social
+//   Moonshot's Feishu tenant (moonshot.jobs.feishu.cn) has zero published
+//   positions — they migrated their listings to Moka. The kimi.com careers
+//   page links to two Moka short URLs:
 //
-//   Both return HTTP 200 + code:0 unauthenticated. The portal-channel
-//   and website-path headers must be "social" (the only registered portal).
+//     mokahr.com/su/phmkug → social-recruitment/moonshot/148506
+//     mokahr.com/su/gblcus → campus-recruitment/moonshot/148507
 //
-// ============================================================
-// Portal discovery (2026-05):
+//   This adapter targets the social portal (148506) — the larger of the two
+//   (129+ open positions vs ~65 campus) and the one most users want by default.
 //
-//   moonshot.cn/careers        → bare nginx page (no portal)
-//   kimi.moonshot.cn/careers   → 302 → kimi.com/careers → 302 → / (no portal)
-//   moonshot.jobs.feishu.cn/   → Feishu ATSX, channel "social" ("Kimi社招官网")
-//   moonshot.jobs.feishu.cn/campus/position → channel "campus" → code:0, count:0
+//   The SSR HTML at the portal URL embeds the first page of jobs in an
+//   `<input id="init-data">` blob. `jobStats.total` is the canonical total
+//   count. Deeper pages come from POST /api/outer/ats-apply/website/jobs/v2
+//   with `?orgId=moonshot` (AES-128-CBC encrypted envelope; key=necromancer,
+//   iv=aesIv from init-data). Same mechanism as deepseek.ts.
 //
-//   The only active Feishu portal is the "social" channel.
-//   Moka orgId 148507 (app.mokahr.com/campus-recruitment/moonshot/148507) exists
-//   but is auth-gated — direct API calls return 404.
+// CONFIRMED MOKA ORG:
+//   slug=moonshot, siteId=148506, mode=social
+//   Portal: https://app.mokahr.com/social-recruitment/moonshot/148506
 //
-// ============================================================
-// Current job count (probed 2026-05):
-//
-//   social channel:    count: 0  (API live, no published positions)
-//   campus channel:    count: 0  (API live, no published positions)
-//
-//   The API is fully functional and returns the correct JSON envelope.
-//   Moonshot appears to have temporarily unpublished all listings.
-//   The adapter will return ok:true with an empty positions array until
-//   they resume publishing; no code changes are needed when that happens.
-//
-// ============================================================
-// PositionSummary field mapping (Feishu → canonical):
-//   post_id       ← String(item.id)
-//   title         ← item.title
-//   project       ← item.job_category?.name ?? item.job_function?.name
-//   recruit_label ← item.recruit_type?.name
-//   bgs           ← ""  (not exposed in public search)
-//   work_cities   ← city_list joined " / "  (city_info used as fallback)
-//   apply_url     ← https://moonshot.jobs.feishu.cn/social/${id}/detail
+// PositionSummary field mapping:
+//   post_id       ← job.id
+//   title         ← job.title
+//   project       ← job.zhineng?.name
+//   recruit_label ← job.commitment || hireMode label
+//   bgs           ← job.department?.name
+//   work_cities   ← locations[].cityId → label via jobsGroupedByLocation
+//   apply_url     ← portal#/jobs/{id}
 
-import { createAdapter } from "./feishu.js";
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { createDecipheriv } from "node:crypto";
+export { checkResume, extractResumeSignals, scoreOverlap };
 
-export { extractResumeSignals, scoreOverlap, checkResume };
+const SOURCE = "app.mokahr.com/moonshot";
+const ORG_SLUG = "moonshot";
+const SITE_ID = 148506;
+const PORTAL_URL = `https://app.mokahr.com/social-recruitment/${ORG_SLUG}/${SITE_ID}`;
+const API_ENDPOINT = "https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2";
 
-export type { PositionSummary, SearchOptions } from "./feishu.js";
+const DEFAULT_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
 
-const _adapter = createAdapter({
-  host: "moonshot.jobs.feishu.cn",
-  channel: "social",
-  label: "Moonshot AI (Kimi)",
-  applyUrlPrefix: "https://moonshot.jobs.feishu.cn/social/position",
-});
+export interface PositionSummary {
+  post_id: string;
+  title: string;
+  project: string;
+  recruit_label: string;
+  bgs: string;
+  work_cities: string;
+  apply_url: string;
+}
 
-export const searchPositions = _adapter.searchPositions;
-export const fetchAllPositions = _adapter.fetchAllPositions;
-export const fetchPositionDetail = _adapter.fetchPositionDetail;
-export const fetchDictionaries = _adapter.fetchDictionaries;
-export const listNotices = _adapter.listNotices;
-export const getNotice = _adapter.getNotice;
-export const findNoticesByQuestion = _adapter.findNoticesByQuestion;
-export const matchResume = _adapter.matchResume;
+export interface SearchOptions {
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+interface MokaJob {
+  id: string;
+  title: string;
+  hireMode?: number;
+  commitment?: string;
+  zhineng?: { name?: string };
+  department?: { name?: string };
+  locations?: Array<{ cityId?: number | null; country?: string }>;
+}
+interface MokaLocationGroup {
+  label?: string;
+  cityId?: number | null;
+}
+interface MokaInitData {
+  aesIv?: string;
+  jobs?: MokaJob[];
+  jobStats?: { total?: number };
+  jobsGroupedByLocation?: MokaLocationGroup[];
+}
+
+function htmlDecode(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'");
+}
+
+function parseInitData(html: string): MokaInitData | null {
+  const m = html.match(/<input[^>]*id="init-data"[^>]*value="([^"]+)"/);
+  if (!m) return null;
+  try {
+    return JSON.parse(htmlDecode(m[1])) as MokaInitData;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPortalHtml(): Promise<{
+  ok: boolean;
+  html?: string;
+  cookieHeader?: string;
+  message: string;
+}> {
+  let r1: Response;
+  try {
+    r1 = await fetch(PORTAL_URL, { method: "GET", headers: DEFAULT_HEADERS, redirect: "manual" });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  const cookies: string[] = [];
+  const headersAny = r1.headers as unknown as { getSetCookie?: () => string[] };
+  if (typeof headersAny.getSetCookie === "function") {
+    for (const v of headersAny.getSetCookie.call(r1.headers) ?? []) {
+      const c = v.split(";")[0];
+      if (c) cookies.push(c);
+    }
+  }
+  if (cookies.length === 0) {
+    const raw = r1.headers.get("set-cookie");
+    if (raw) cookies.push(...raw.split(/,(?=[^;]+=)/).map((c) => c.split(";")[0].trim()));
+  }
+  const cookieHeader = cookies.join("; ");
+  let r2: Response;
+  try {
+    r2 = await fetch(PORTAL_URL, {
+      method: "GET",
+      headers: { ...DEFAULT_HEADERS, Cookie: cookieHeader },
+      redirect: "follow",
+    });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!r2.ok) return { ok: false, message: `HTTP ${r2.status}` };
+  return { ok: true, html: await r2.text(), cookieHeader, message: "ok" };
+}
+
+function decryptMoka(envelope: { data?: string; necromancer?: string }, aesIv: string): unknown {
+  if (!envelope.data || !envelope.necromancer) return null;
+  try {
+    const decipher = createDecipheriv(
+      "aes-128-cbc",
+      Buffer.from(envelope.necromancer, "utf8"),
+      Buffer.from(aesIv, "utf8")
+    );
+    const plain = Buffer.concat([
+      decipher.update(Buffer.from(envelope.data, "base64")),
+      decipher.final(),
+    ]);
+    return JSON.parse(plain.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function fetchEncryptedPage(
+  pageNum: number,
+  pageSize: number,
+  aesIv: string,
+  cookieHeader: string
+): Promise<{ ok: boolean; jobs?: MokaJob[]; total?: number; message: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_ENDPOINT}?orgId=${encodeURIComponent(ORG_SLUG)}`, {
+      method: "POST",
+      headers: {
+        ...DEFAULT_HEADERS,
+        Accept: "application/json,*/*",
+        "Content-Type": "application/json",
+        Origin: "https://app.mokahr.com",
+        Referer: PORTAL_URL,
+        Cookie: cookieHeader,
+      },
+      body: JSON.stringify({
+        orgId: ORG_SLUG,
+        siteId: String(SITE_ID),
+        pageNum,
+        pageSize,
+        needStat: true,
+      }),
+    });
+  } catch (err) {
+    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
+  let envelope: { data?: string; necromancer?: string; code?: number; msg?: string };
+  try {
+    envelope = await response.json();
+  } catch {
+    return { ok: false, message: "bad JSON" };
+  }
+  const decoded = decryptMoka(envelope, aesIv) as
+    | { code?: number; data?: { jobs?: MokaJob[]; jobStats?: { total?: number } }; msg?: string }
+    | null;
+  if (!decoded || decoded.code !== 0 || !decoded.data) {
+    return { ok: false, message: decoded?.msg || envelope.msg || "decrypt error" };
+  }
+  return {
+    ok: true,
+    jobs: decoded.data.jobs ?? [],
+    total: decoded.data.jobStats?.total ?? 0,
+    message: "ok",
+  };
+}
+
+function buildCityMap(groups: MokaLocationGroup[] | undefined): Record<number, string> {
+  const out: Record<number, string> = {};
+  if (!groups) return out;
+  for (const g of groups) {
+    if (typeof g.cityId === "number" && g.label) out[g.cityId] = g.label;
+  }
+  return out;
+}
+
+function workCities(job: MokaJob, cityMap: Record<number, string>): string {
+  const uniq: string[] = [];
+  for (const loc of job.locations ?? []) {
+    const label =
+      (typeof loc.cityId === "number" && cityMap[loc.cityId]) || loc.country || "";
+    if (label && !uniq.includes(label)) uniq.push(label);
+  }
+  return uniq.join(" / ");
+}
+
+function recruitLabel(job: MokaJob): string {
+  if (job.commitment) return job.commitment;
+  if (job.hireMode === 1) return "全职";
+  if (job.hireMode === 2) return "实习";
+  return "";
+}
+
+function summarize(job: MokaJob, cityMap: Record<number, string>): PositionSummary {
+  return {
+    post_id: String(job.id),
+    title: job.title ?? "",
+    project: job.zhineng?.name ?? "",
+    recruit_label: recruitLabel(job),
+    bgs: job.department?.name ?? "",
+    work_cities: workCities(job, cityMap),
+    apply_url: `${PORTAL_URL}#/jobs/${encodeURIComponent(job.id)}`,
+  };
+}
+
+function matchesKeyword(job: MokaJob, kw: string): boolean {
+  if (!kw) return true;
+  const lc = kw.toLowerCase();
+  return (
+    (job.title ?? "").toLowerCase().includes(lc) ||
+    (job.zhineng?.name ?? "").toLowerCase().includes(lc) ||
+    (job.department?.name ?? "").toLowerCase().includes(lc)
+  );
+}
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  const pageSize = opts.pageSize ?? 20;
+  const page = opts.page ?? 1;
+  const keyword = opts.keyword ?? "";
+
+  const portal = await fetchPortalHtml();
+  if (!portal.ok || !portal.html) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: portal.message,
+      query: { keyword, page, pageSize },
+      positions: [] as PositionSummary[],
+      total: 0,
+    };
+  }
+  const init = parseInitData(portal.html);
+  if (!init || !init.jobs || !init.jobStats) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "Moka init-data missing jobs/jobStats",
+      query: { keyword, page, pageSize },
+      positions: [] as PositionSummary[],
+      total: 0,
+    };
+  }
+  const cityMap = buildCityMap(init.jobsGroupedByLocation);
+  let jobs = init.jobs;
+  const total = init.jobStats.total ?? jobs.length;
+  if (page > 1 && init.aesIv && portal.cookieHeader) {
+    const more = await fetchEncryptedPage(page, pageSize, init.aesIv, portal.cookieHeader);
+    if (!more.ok || !more.jobs) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: `pagination failed: ${more.message}`,
+        query: { keyword, page, pageSize },
+        positions: [] as PositionSummary[],
+        total,
+      };
+    }
+    jobs = more.jobs;
+  }
+  const filtered = jobs.filter((j) => matchesKeyword(j, keyword)).slice(0, pageSize);
+  return {
+    ok: true as const,
+    source: SOURCE,
+    query: { keyword, page, pageSize },
+    page,
+    page_size: pageSize,
+    total,
+    positions: filtered.map((j) => summarize(j, cityMap)),
+  };
+}
+
+export async function fetchAllPositions(
+  opts: { keyword?: string; maxPages?: number; pageSize?: number } = {}
+) {
+  const pageSize = opts.pageSize ?? 20;
+  const maxPages = Math.max(1, opts.maxPages ?? 50);
+  const keyword = opts.keyword ?? "";
+
+  const portal = await fetchPortalHtml();
+  if (!portal.ok || !portal.html) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: portal.message,
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const init = parseInitData(portal.html);
+  if (!init || !init.jobs || !init.jobStats || !init.aesIv) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "Moka init-data missing required fields",
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const cityMap = buildCityMap(init.jobsGroupedByLocation);
+  const total = init.jobStats.total ?? 0;
+  const collected: MokaJob[] = [...init.jobs];
+  let page = 2;
+  while (collected.length < total && page <= maxPages) {
+    const more = await fetchEncryptedPage(
+      page,
+      pageSize,
+      init.aesIv,
+      portal.cookieHeader ?? ""
+    );
+    if (!more.ok || !more.jobs || more.jobs.length === 0) break;
+    collected.push(...more.jobs);
+    page += 1;
+  }
+  const filtered = collected.filter((j) => matchesKeyword(j, keyword));
+  return {
+    ok: true as const,
+    source: SOURCE,
+    total,
+    fetched: filtered.length,
+    positions: filtered.map((j) => summarize(j, cityMap)),
+  };
+}
+
+export async function fetchPositionDetail(postId: string) {
+  return {
+    ok: false as const,
+    source: SOURCE,
+    message:
+      "Moka detail endpoint is also AES-encrypted and not implemented; " +
+      "use the apply_url deeplink for the full JD.",
+    post_id: postId,
+    apply_url: `${PORTAL_URL}#/jobs/${encodeURIComponent(postId)}`,
+  };
+}
+
+export async function fetchDictionaries() {
+  const portal = await fetchPortalHtml();
+  if (!portal.ok || !portal.html) {
+    return { ok: false as const, source: SOURCE, message: portal.message };
+  }
+  const init = parseInitData(portal.html);
+  if (!init) {
+    return { ok: false as const, source: SOURCE, message: "Moka init-data missing" };
+  }
+  return {
+    ok: true as const,
+    source: SOURCE,
+    locations: init.jobsGroupedByLocation ?? [],
+    moka_org: { slug: ORG_SLUG, siteId: SITE_ID, url: PORTAL_URL },
+  };
+}
+
+export async function listNotices() {
+  return {
+    ok: false as const,
+    source: SOURCE,
+    message: "Moonshot: no public notices endpoint",
+    notices: [] as never[],
+  };
+}
+
+export async function getNotice(noticeId: string) {
+  return {
+    ok: false as const,
+    source: SOURCE,
+    message: "Moonshot: no public notices endpoint",
+    notice_id: noticeId,
+  };
+}
+
+export async function findNoticesByQuestion(
+  question: string,
+  _opts: { questionTime?: string; topK?: number } = {}
+) {
+  return {
+    ok: false as const,
+    source: SOURCE,
+    question,
+    message: "Moonshot: no public notices endpoint",
+    matches: [] as never[],
+  };
+}
+
+export async function matchResume(
+  text: string,
+  opts: { topN?: number; candidates?: number } = {}
+) {
+  const { terms, cities } = extractResumeSignals(text ?? "");
+  const candidates = Math.max(20, opts.candidates ?? 100);
+  const all = await fetchAllPositions({
+    pageSize: 20,
+    maxPages: Math.ceil(candidates / 15),
+  });
+  if (!all.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      extracted_terms: terms,
+      city_preferences: cities,
+      matches: [] as PositionSummary[],
+      message: all.message,
+    };
+  }
+  const topN = Math.max(1, opts.topN ?? 10);
+  const scored = all.positions
+    .map((p) => ({
+      p,
+      score: scoreOverlap(`${p.title} ${p.project} ${p.bgs}`, terms, cities).score,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+    .map((x) => x.p);
+  return {
+    ok: true as const,
+    source: SOURCE,
+    extracted_terms: terms,
+    city_preferences: cities,
+    matches: scored,
+  };
+}

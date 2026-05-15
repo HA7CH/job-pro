@@ -1,7 +1,7 @@
 // Thin client for 拼多多 (PDD / Pinduoduo) campus-recruiting portal at careers.pinduoduo.com.
 //
 // ============================================================
-// API discovery (probed 2026-05, Next.js bundle 4SRcl1zmo3aLPqQ_wcJ6T):
+// API discovery (re-probed 2026-05; bundles under pfile.pddpic.com/ei-pub):
 //
 // The frontend is a Next.js SPA hosted at careers.pinduoduo.com/campus/.
 // All XHR calls go through a sourceSDK.wrappedRequest helper (module 96211)
@@ -9,52 +9,56 @@
 //
 //   https://careers.pinduoduo.com/api/careers/<relative-url>
 //
-// ---- Probed endpoints and their accessibility (2026-05) ----
+// ---- PUBLIC endpoints (no auth required, verified 2026-05) ----
 //
-// PUBLIC (no auth required):
-//   POST /api/careers/api/campus/moment/list
-//        Body: { pageSize:<int>, page:<int> }
-//        Response: { success:true, result:{ list:[MomentItem], total:<int> } }
-//        MomentItem: { guid, momentTitle, momentLabel:[string], publishDate:<ms>, topFlag:bool }
+// POST /api/careers/api/recruit/position/list
+//      Body: { pageSize:<int>, page:<int> }   (keyword/recruitType IGNORED server-side)
+//      Response: { success:true, result:{ list:[Position], total:"<int>" } }
+//      Position: { id (uuid), name, code, workLocation, workLocationName,
+//                  job (eng key), jobName (zh), releaseTime (ms),
+//                  jobDuty (full JD HTML/text), labelList[], recruitTypeName }
+//      Pagination: page size is FIXED at 10 regardless of pageSize param.
+//      Total returned across all pages (e.g. 30 for grad, 7 for intern).
 //
-//   POST /api/careers/api/campus/moment/detail
-//        Body: { guid:<string> }
-//        Response: { success:true, result:{ guid, momentTitle, momentContent:<html> } }
+// POST /api/careers/api/recruit/position/train/list
+//      Same shape as /list but only intern (实习生 / 2027届研发实习生) positions.
 //
-//   POST /api/careers/api/recruit/qa/common/list
-//        Body: {} (no params needed)
-//        Response: { success:true, result:[{ question, questionCode }] }
-//        Note: only 2 FAQ items are currently surfaced publicly (2026-05).
+// POST /api/careers/api/recruit/position/detail/type
+//      Body: {} → returns the job-type dictionary
+//      Result: [{job:"technology", jobName:"技术"}, {job:"general", jobName:"职能"},
+//               {job:"product", jobName:"产品"}, {job:"language", jobName:"语言"},
+//               {job:"market", jobName:"市场营销"}, {job:"visual", jobName:"视觉类"},
+//               {job:"investment", jobName:"运营"}, {job:"vegetable", jobName:"区域业务"}]
 //
-//   POST /api/careers/api/campus/careers/enum
-//        Body: {} → { success:true, result:{ enumMap:{} } }  (empty in public response)
+// POST /api/careers/api/campus/moment/list      (notices / 公告)
+//      Body: { pageSize:<int>, page:<int> }
+//      Response: { success:true, result:{ list:[MomentItem], total:<int> } }
+//      MomentItem: { guid, momentTitle, momentLabel:[string], publishDate:<ms>, topFlag:bool }
 //
-// AUTH-REQUIRED (401 Unauthorized without valid login token):
-//   POST /api/careers/api/recruit/position/queryPosition   ← main job list
-//   POST /api/careers/api/recruit/position/querySecondPosition
-//   POST /api/careers/api/recruit/site/query
-//   POST /api/careers/api/campus/area/full/list
-//   POST /api/careers/api/campus/education/major/query
-//   POST /api/careers/api/recruit/qa/list
-//   POST /api/careers/api/recruit/queryByShortLink
+// POST /api/careers/api/campus/moment/detail
+//      Body: { guid:<string> }
+//      Response: { success:true, result:{ guid, momentTitle, momentContent:<html> } }
 //
-// ANTI-BOT BLOCKED (403 without Anti-Content token):
-//   The old /api/* paths (without /api/careers/ prefix) return 403
-//   from PDD's yak/openresty CDN layer. These require a dynamically
-//   generated Anti-Content header produced by PDD's JS risk-control SDK.
+// POST /api/careers/api/campus/trip/list        (校招行程 / on-campus events)
+//      Body: {} → { tripList:null|[...], explainTrip:{ recruitmentTripType, tripContent:<html> } }
 //
-// ---- Conclusion ----
-// The position search/detail APIs require a registered PDD account login
-// token. There is no publicly accessible job listing endpoint. This adapter
-// provides honest stubs for positions and implements real data for notices
-// (moment/list) and the FAQ (qa/common/list).
+// POST /api/careers/api/recruit/qa/common/list  (FAQ)
+//      Body: {} → [{ question, questionCode }] (only ~2 items publicly)
+//
+// POST /api/careers/api/campus/careers/enum     (enum map, empty for anon)
+//
+// ---- AUTH-REQUIRED endpoints (HTTP 401 without login token) ----
+//   /api/recruit/position/queryPosition          (rich search with all filters)
+//   /api/recruit/position/querySecondPosition
+//   /api/recruit/site/query, /campus/area/full/list, /campus/education/major/query
+//   /api/recruit/qa/list, /api/recruit/queryByShortLink
 //
 // ---- RecruitType taxonomy (from JS bundle, probed 2026-05) ----
 //   headquarters    = 管培生 (headquarters management trainee)
 //   region          = 区域业务管培生 (regional business management trainee)
 //   technical_session = 技术专场 (technical session / R&D)
 //   warehouse_trainee = 仓储类管培生 (warehouse management trainee)
-//   yunhu_plan      = 云弧计划 (LLM / elite tech talent program, equivalent to ByteDance 顶尖)
+//   yunhu_plan      = 云弧计划 (LLM / elite tech talent program)
 //   intern          = 实习生 (intern, 2027届)
 //
 // ---- Campus batches active at time of probing (2026-05) ----
@@ -62,6 +66,17 @@
 //   2027届研发实习生 (intern, 2027 batch)          → route /intern
 //   云弧计划 (elite LLM/AI talent program, 2026) → route /grad?recruitType=yunhu_plan
 //
+// ============================================================
+// IMPLEMENTATION NOTES
+//   - searchPositions: uses /api/recruit/position/list (grad track). Server
+//     ignores `keyword` and `pageSize`; we filter client-side by keyword and
+//     slice the response to honour the requested pageSize. Server returns
+//     fixed pages of 10.
+//   - fetchAllPositions: paginates through both /list and /train/list to
+//     surface every public position.
+//   - fetchPositionDetail: there is no per-position detail endpoint; the
+//     /list response already includes the full jobDuty. We scan the list to
+//     locate the matching record by id.
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
@@ -163,120 +178,258 @@ export interface SearchOptions {
   recruitType?: string;
 }
 
+// ---------- raw position shape (verified 2026-05) ----------
+
+interface RawPosition {
+  id?: string;
+  name?: string;
+  code?: string;
+  workLocation?: string;
+  workLocationName?: string;
+  job?: string;
+  jobName?: string;
+  releaseTime?: number;
+  jobDuty?: string;
+  labelList?: string[];
+  recruitTypeName?: string;
+}
+
+interface RawPositionList {
+  list?: RawPosition[] | null;
+  total?: string | number;
+}
+
+const DETAIL_URL = (id: string) =>
+  `${GRAD_PAGE}?id=${encodeURIComponent(id)}`;
+
+function summarizePosition(raw: RawPosition): PositionSummary {
+  const id = raw.id ?? "";
+  return {
+    post_id: id,
+    title: raw.name ?? "",
+    project: raw.jobName ?? "",
+    recruit_label: raw.recruitTypeName ?? "",
+    bgs: (raw.labelList ?? []).join(" / "),
+    work_cities: raw.workLocationName ?? raw.workLocation ?? "",
+    apply_url: id ? DETAIL_URL(id) : GRAD_PAGE,
+  };
+}
+
+// Server returns 10 items/page regardless of pageSize. Treat that as the upstream chunk.
+const UPSTREAM_PAGE_SIZE = 10;
+
+function asNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
 // ---------- searchPositions ----------
-// PDD's position search API (queryPosition) requires a logged-in user token.
-// All calls return HTTP 401 without a valid session. This stub documents the
-// attempted endpoint and returns ok:false so callers can degrade gracefully.
+// Uses the public /api/recruit/position/list endpoint. The server ignores
+// `keyword` and `pageSize` (always returns 10 items/page in releaseTime order),
+// so we paginate upstream, then filter+slice client-side to honour the
+// caller-requested keyword/pageSize.
 
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+  const keyword = (opts.keyword ?? "").trim().slice(0, 60).toLowerCase();
+  const includeIntern = opts.recruitType === "intern";
 
-  const payload: Record<string, unknown> = {
-    pageSize,
-    page,
-    ...(keyword ? { keyword } : {}),
-    ...(opts.recruitType ? { recruitType: opts.recruitType } : {}),
-  };
+  // Walk upstream until we have enough filtered rows to satisfy the requested page.
+  const collected: RawPosition[] = [];
+  let upstreamTotal = 0;
+  const need = page * pageSize;
+  const maxUpstreamPages = 10; // safety cap (10 pages × 10 = 100 positions)
 
-  // Attempt the real API — expected to return 401 without auth token.
-  const response = await call<unknown>("/api/recruit/position/queryPosition", payload);
+  const endpoints = includeIntern
+    ? ["/api/recruit/position/train/list"]
+    : ["/api/recruit/position/list"];
 
-  // If the server starts accepting unauthenticated requests in the future,
-  // this block will handle the data. For now it always falls through to the
-  // stub error return below.
-  if (response.ok && response.data) {
-    // Future-proofing: if API becomes public, parse and return positions.
-    return {
-      ok: true,
-      source: "careers.pinduoduo.com",
-      query: payload,
-      page,
-      page_size: pageSize,
-      total: 0,
-      positions: [] as PositionSummary[],
-      note: "Position data returned by server but field mapping not yet implemented — please file an issue.",
-    };
+  for (const path of endpoints) {
+    for (let p = 1; p <= maxUpstreamPages; p++) {
+      const response = await call<RawPositionList>(path, {
+        pageSize: UPSTREAM_PAGE_SIZE,
+        page: p,
+      });
+      if (!response.ok || !response.data) {
+        // Surface auth-style failures as ok:false.
+        if (collected.length === 0) {
+          return {
+            ok: false as const,
+            source: "careers.pinduoduo.com",
+            query: { pageSize, page, keyword: keyword || undefined, recruitType: opts.recruitType },
+            page,
+            page_size: pageSize,
+            total: 0,
+            positions: [] as PositionSummary[],
+            message: response.message,
+            apply_at: GRAD_PAGE,
+          };
+        }
+        break;
+      }
+      upstreamTotal = Math.max(upstreamTotal, asNumber(response.data.total));
+      const batch = response.data.list ?? [];
+      if (!batch.length) break;
+      for (const item of batch) {
+        if (!keyword) {
+          collected.push(item);
+        } else {
+          const hay = `${item.name ?? ""} ${item.recruitTypeName ?? ""} ${item.jobName ?? ""} ${item.workLocationName ?? ""} ${item.jobDuty ?? ""}`.toLowerCase();
+          if (hay.includes(keyword)) collected.push(item);
+        }
+      }
+      // Continue paginating until we have enough or exhausted the upstream pool.
+      if (collected.length >= need && p * UPSTREAM_PAGE_SIZE >= upstreamTotal) break;
+      if (batch.length < UPSTREAM_PAGE_SIZE) break;
+    }
   }
 
-  const isAuth = response.httpStatus === 401;
+  const start = (page - 1) * pageSize;
+  const slice = collected.slice(start, start + pageSize);
+
   return {
-    ok: false,
+    ok: true as const,
     source: "careers.pinduoduo.com",
-    query: payload,
+    query: { pageSize, page, keyword: keyword || undefined, recruitType: opts.recruitType },
     page,
     page_size: pageSize,
-    total: 0,
-    positions: [] as PositionSummary[],
-    message: isAuth
-      ? "PDD position API requires a registered account login token (HTTP 401). " +
-        "The endpoint POST /api/careers/api/recruit/position/queryPosition was reached " +
-        "but rejected unauthenticated requests. Apply at: " + GRAD_PAGE
-      : response.message,
+    total: keyword ? collected.length : upstreamTotal || collected.length,
+    positions: slice.map(summarizePosition),
     apply_at: GRAD_PAGE,
   };
 }
 
 // ---------- fetchAllPositions ----------
+// Walks both grad (/list) and intern (/train/list) tracks until exhaustion.
 
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
-  // Delegates to searchPositions; inherits the auth stub.
-  const result = await searchPositions(opts);
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
+  const maxPages = Math.max(1, opts.maxPages ?? 20);
+  const keyword = (opts.keyword ?? "").trim().slice(0, 60).toLowerCase();
+
+  const bucket: RawPosition[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+
+  for (const path of ["/api/recruit/position/list", "/api/recruit/position/train/list"]) {
+    let pathTotal = 0;
+    for (let p = 1; p <= maxPages; p++) {
+      const response = await call<RawPositionList>(path, {
+        pageSize: UPSTREAM_PAGE_SIZE,
+        page: p,
+      });
+      if (!response.ok || !response.data) break;
+      pathTotal = Math.max(pathTotal, asNumber(response.data.total));
+      const batch = response.data.list ?? [];
+      if (!batch.length) break;
+      for (const item of batch) {
+        const id = item.id ?? "";
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        if (keyword) {
+          const hay = `${item.name ?? ""} ${item.jobName ?? ""} ${item.recruitTypeName ?? ""} ${item.workLocationName ?? ""} ${item.jobDuty ?? ""}`.toLowerCase();
+          if (!hay.includes(keyword)) continue;
+        }
+        bucket.push(item);
+      }
+      if (batch.length < UPSTREAM_PAGE_SIZE) break;
+    }
+    total += pathTotal;
+    if (bucket.length >= pageSize * maxPages) break;
+  }
+
   return {
-    ok: result.ok,
+    ok: true as const,
     source: "careers.pinduoduo.com",
-    total: result.total ?? 0,
-    fetched: 0,
-    positions: [] as PositionSummary[],
-    message: (result as { message?: string }).message,
+    total: keyword ? bucket.length : total || bucket.length,
+    fetched: bucket.length,
+    positions: bucket.map(summarizePosition),
     apply_at: GRAD_PAGE,
   };
 }
 
 // ---------- fetchPositionDetail ----------
+// There is no per-position detail endpoint; the list response already carries
+// the full jobDuty. We scan grad + intern lists for the matching uuid.
 
 export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
   if (!id) {
     return {
-      ok: false,
+      ok: false as const,
       source: "careers.pinduoduo.com",
       message: "post_id is required",
     };
   }
 
-  // There is no public detail endpoint; queryPosition (which lists with detail)
-  // also requires auth. Return a stub with the closest apply URL.
+  for (const path of ["/api/recruit/position/list", "/api/recruit/position/train/list"]) {
+    for (let p = 1; p <= 10; p++) {
+      const response = await call<RawPositionList>(path, {
+        pageSize: UPSTREAM_PAGE_SIZE,
+        page: p,
+      });
+      if (!response.ok || !response.data) break;
+      const batch = response.data.list ?? [];
+      if (!batch.length) break;
+      const hit = batch.find((row) => row.id === id);
+      if (hit) {
+        const summary = summarizePosition(hit);
+        return {
+          ok: true as const,
+          source: "careers.pinduoduo.com",
+          ...summary,
+          description: hit.jobDuty ?? "",
+          requirements: "",
+          work_cities: hit.workLocationName ? [hit.workLocationName] : [],
+          release_time: hit.releaseTime
+            ? new Date(hit.releaseTime).toISOString().slice(0, 10)
+            : "",
+          code: hit.code ?? "",
+          labels: hit.labelList ?? [],
+        };
+      }
+      if (batch.length < UPSTREAM_PAGE_SIZE) break;
+    }
+  }
+
   return {
-    ok: false,
+    ok: false as const,
     source: "careers.pinduoduo.com",
     post_id: id,
-    description: "",
-    requirements: "",
-    work_cities: [],
     apply_url: GRAD_PAGE,
     message:
-      "PDD position detail API requires account auth (HTTP 401). " +
-      `Visit ${GRAD_PAGE} to browse positions.`,
+      "Position not found in current public list. The position may have been " +
+      "closed or moved to an auth-only track. " +
+      `Visit ${GRAD_PAGE} to browse current openings.`,
   };
 }
 
 // ---------- fetchDictionaries ----------
 // The /api/careers/api/campus/careers/enum endpoint is publicly accessible
 // but returns an empty enumMap. Recruit types are documented in the header
-// comment above (extracted from the JS bundle).
+// comment above (extracted from the JS bundle). Live job-type dictionary is
+// pulled from /api/recruit/position/detail/type.
+
+interface JobType {
+  job?: string;
+  jobName?: string;
+}
 
 export async function fetchDictionaries() {
-  const response = await call<{ enumMap?: Record<string, unknown> }>(
-    "/api/campus/careers/enum",
-    {}
-  );
+  const [enumResp, typeResp] = await Promise.all([
+    call<{ enumMap?: Record<string, unknown> }>("/api/campus/careers/enum", {}),
+    call<JobType[]>("/api/recruit/position/detail/type", {}),
+  ]);
 
   return {
-    ok: response.ok,
+    ok: enumResp.ok || typeResp.ok,
     source: "careers.pinduoduo.com",
     api_host: API_ROOT,
     verified_at: new Date().toISOString(),
@@ -288,12 +441,14 @@ export async function fetchDictionaries() {
       { value: "technical_session", label: "技术专场", note: "Technical session / R&D" },
       { value: "warehouse_trainee", label: "仓储类管培生", note: "Warehouse management trainee" },
       { value: "yunhu_plan", label: "云弧计划", note: "LLM/AI elite talent program (≈ ByteDance 顶尖实习)" },
+      { value: "intern", label: "实习生", note: "Intern (2027届)" },
     ],
+    job_types: (typeResp.data ?? []).map((t) => ({ value: t.job ?? "", label: t.jobName ?? "" })),
     current_batch: "2026届春季校招 / 2027届研发实习生",
     grad_page: GRAD_PAGE,
     intern_page: INTERN_PAGE,
-    enum_map: response.data?.enumMap ?? {},
-    note: "Position search requires account login; dict shows static bundle data + live enum endpoint.",
+    enum_map: enumResp.data?.enumMap ?? {},
+    note: "Position list is public via /api/recruit/position/list — see header comment.",
   };
 }
 
@@ -463,75 +618,83 @@ export async function findNoticesByQuestion(
 }
 
 // ---------- matchResume ----------
-// Mirrors bytedance.ts/tencent.ts algo but acknowledges that position data
-// is unavailable. Returns extracted signals and the apply URL for the user
-// to manually browse matching positions.
+// Pulls every public position (grad + intern), scores each against the resume's
+// extracted terms and city preferences, and returns the top-N matches.
 
 export async function matchResume(
   text: string,
   opts: { topN?: number; candidates?: number } = {}
 ) {
   const { terms, cities } = extractResumeSignals(text ?? "");
+  const topN = Math.max(1, opts.topN ?? 5);
 
   if (!terms.length) {
     return {
-      ok: false,
+      ok: false as const,
       source: "careers.pinduoduo.com",
       message: "could not extract any technical signals from the text",
       preview: (text ?? "").slice(0, 120),
     };
   }
 
-  // We cannot search positions (auth required), so we return a best-effort
-  // recommendation: which PDD recruit type best matches the resume signals,
-  // with a direct link to the appropriate page.
-  const isTechnical = terms.some((t) =>
-    ["python", "java", "go", "golang", "c++", "cpp", "rust", "typescript",
-     "javascript", "react", "vue", "spring", "pytorch", "tensorflow",
-     "kubernetes", "docker", "linux", "llm", "rag", "transformer",
-     "后端", "前端", "算法", "推荐", "搜索", "大模型", "测试", "运维", "安全"].includes(t.toLowerCase())
-  );
-  const isLLM = terms.some((t) =>
-    ["llm", "rag", "transformer", "bert", "gpt", "diffusion", "大模型", "强化学习", "多模态"].includes(t.toLowerCase())
-  );
+  const all = await fetchAllPositions({ maxPages: 10, pageSize: UPSTREAM_PAGE_SIZE });
+  if (!all.ok) {
+    return {
+      ok: false as const,
+      source: "careers.pinduoduo.com",
+      extracted_terms: terms,
+      city_preferences: cities,
+      matches: [] as PositionSummary[],
+      message: (all as { message?: string }).message ?? "failed to fetch positions",
+      apply_at: GRAD_PAGE,
+    };
+  }
 
-  type SuggestedTrack = { recruitType: string; label: string; url: string; reason: string };
-  const suggested: SuggestedTrack[] = [];
-  if (isLLM) {
-    suggested.push({
-      recruitType: "yunhu_plan",
-      label: "云弧计划 (LLM Elite)",
-      url: `${GRAD_PAGE}?recruitType=yunhu_plan`,
-      reason: "LLM/AI signals detected: " + terms.filter((t) =>
-        ["llm", "rag", "transformer", "bert", "gpt", "diffusion", "大模型"].includes(t.toLowerCase())
-      ).slice(0, 3).join(", "),
-    });
+  // Score against the raw positions we already have via fetchAllPositions's caller.
+  // Re-pull as raw to retain jobDuty for scoring.
+  const rawCorpus: RawPosition[] = [];
+  for (const path of ["/api/recruit/position/list", "/api/recruit/position/train/list"]) {
+    for (let p = 1; p <= 10; p++) {
+      const response = await call<RawPositionList>(path, {
+        pageSize: UPSTREAM_PAGE_SIZE,
+        page: p,
+      });
+      if (!response.ok || !response.data) break;
+      const batch = response.data.list ?? [];
+      if (!batch.length) break;
+      rawCorpus.push(...batch);
+      if (batch.length < UPSTREAM_PAGE_SIZE) break;
+    }
   }
-  if (isTechnical) {
-    suggested.push({
-      recruitType: "technical_session",
-      label: "技术专场 (R&D)",
-      url: `${GRAD_PAGE}?recruitType=technical_session`,
-      reason: "Technical signals detected: " + terms.slice(0, 3).join(", "),
-    });
+
+  type Scored = { raw: RawPosition; score: number; matched_terms: string[]; city_match: boolean };
+  const scored: Scored[] = [];
+  for (const raw of rawCorpus) {
+    const hay = `${raw.name ?? ""} ${raw.jobName ?? ""} ${raw.recruitTypeName ?? ""} ${raw.jobDuty ?? ""}`.toLowerCase();
+    const matched = terms.filter((t) => hay.includes(t.toLowerCase()));
+    const overlap = scoreOverlap(hay, terms, cities).score;
+    const city_match = cities.length === 0 ? false :
+      cities.some((c) => (raw.workLocationName ?? raw.workLocation ?? "").includes(c));
+    if (!matched.length && !city_match) continue;
+    const score = overlap * 100 + matched.length * 5 + (city_match ? 8 : 0);
+    scored.push({ raw, score, matched_terms: matched, city_match });
   }
-  suggested.push({
-    recruitType: "headquarters",
-    label: "管培生 (Management Trainee)",
-    url: `${GRAD_PAGE}?recruitType=headquarters`,
-    reason: "General campus track",
-  });
+  scored.sort((a, b) => b.score - a.score);
+
+  const matches = scored.slice(0, topN).map((s) => ({
+    ...summarizePosition(s.raw),
+    score: s.score,
+    matched_terms: s.matched_terms,
+    city_match: s.city_match,
+  }));
 
   return {
-    ok: true,
+    ok: true as const,
     source: "careers.pinduoduo.com",
     extracted_terms: terms,
     city_preferences: cities,
-    note:
-      "PDD position search API requires account auth — cannot rank individual JDs. " +
-      "Suggested tracks are derived from resume signals against static recruit-type taxonomy.",
-    suggested_tracks: suggested.slice(0, opts.topN ?? 3),
-    matches: [] as PositionSummary[],
+    total_scanned: rawCorpus.length,
+    matches,
     apply_at: GRAD_PAGE,
   };
 }
