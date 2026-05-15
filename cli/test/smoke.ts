@@ -133,7 +133,6 @@ const KNOWN_LIMITED: ReadonlySet<string> = new Set([
   "hikvision",
   "lilith",
   "cicc",
-  "iflytek",
   "cainiao",
   "geely",
   "webank",
