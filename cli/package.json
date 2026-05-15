@@ -1,7 +1,7 @@
 {
   "name": "job-pro",
-  "version": "0.7.3",
-  "description": "Query Chinese big-tech campus recruiting from your terminal. 50 companies, 45 live: Tencent, ByteDance, Alibaba, Meituan, Xiaohongshu, JD, Kuaishou, Xiaomi, Baidu, NetEase, Didi, Bilibili, PDD, NIO, MiniMax, Huawei, Weibo, miHoYo, Ping An, SenseTime, Trip.com, Unitree, BYD, Ant Group, Li Auto, Moonshot, Zhipu, iQIYI, Megvii, Agibot, DeepSeek, 01.AI, Galaxy Universal, StepFun, Baichuan, XPeng, WeRide, HoYoverse, iFlytek, OPPO, vivo, SF Express, Horizon Robotics, Cambricon, Geely. No signup, no token, no server.",
+  "version": "0.7.4",
+  "description": "Query Chinese big-tech campus recruiting from your terminal. 50 companies, 46 live (incl. Lilith via local Chrome / puppeteer-core). No signup, no token, no server.",
   "homepage": "https://job.ha7ch.com",
   "repository": "https://github.com/HA7CH/job-pro",
   "license": "MIT",
@@ -30,9 +30,11 @@
     "test": "tsx test/smoke.ts",
     "prepublishOnly": "npm run build"
   },
+  "dependencies": {
+    "puppeteer-core": "^25.0.2"
+  },
   "devDependencies": {
     "@types/node": "^20",
-    "puppeteer-core": "^25.0.2",
     "tsx": "^4",
     "typescript": "^5"
   },

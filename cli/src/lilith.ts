@@ -1,89 +1,73 @@
-// 莉莉丝游戏 (Lilith Games) campus-recruiting adapter.
+// 莉莉丝游戏 (Lilith Games) careers adapter — Feishu portal_type=6 via CDP.
 //
 // ============================================================
-// API DISCOVERY (probed 2026-05-14)
+// API DISCOVERY (probed 2026-05-16)
 //
-// The canonical career entry point is https://jobs.lilith.com/
-// The page hosts navigation links (social/campus/intern) that all
-// redirect to the Feishu Recruitment (飞书招聘) portal:
+// Lilith's careers feed is hosted at `lilithgames.jobs.feishu.cn` (Feishu
+//招聘 / ATSX). It looks like a standard Feishu tenant on the surface, BUT
+// the `/api/v1/search/job/posts` POST is rejected with `HTTP 405` from
+// ByteDance Tengine for any anonymous caller — Lilith's tenant is one of
+// the few that requires the in-browser `_signature` anti-bot token. The
+// signature is computed by `verifycenter` (`lf-cdn-tos.bytescm.com/.../rc-verifycenter`)
+// at runtime and appended to the URL query string + headers; it's
+// session-bound and short-lived.
 //
-//   Social hire:  https://lilithgames.jobs.feishu.cn/career
-//   Campus hire:  https://lilithgames.jobs.feishu.cn/campus
-//   Intern hire:  https://lilithgames.jobs.feishu.cn/intern
+// Reverse-engineering verifycenter is non-trivial. We work around it by
+// using `puppeteer-core` to drive the user's real Chrome (see cli/src/cdp.ts):
+// navigate to the careers page, wait for the SPA's own `search/job/posts`
+// XHR, and read the JSON straight off the network response. Same data
+// shape as `cli/src/feishu.ts`, just sourced through a real browser.
 //
-// Reconnaissance also flagged a Moka org_id 7803 but
-// app.mokahr.com/campus-recruitment/lilith/7803 returns
-// "当前网页已关停" (page suspended).
-//
-// ============================================================
-// Feishu Recruitment API (reverse-engineered from the saas-career JS bundle,
-// chunk 4026.f23f1edc.js, fetched 2026-05-14)
-//
-//   POST https://lilithgames.jobs.feishu.cn/api/v1/search/job/posts
-//   Headers: Content-Type: application/json
-//            Referer: https://lilithgames.jobs.feishu.cn/career
-//   Payload:
-//     {
-//       keyword:                  string,           // search term
-//       limit:                    number,           // page size
-//       offset:                   number,           // (current-1)*limit
-//       job_hot_flag:             undefined,
-//       portal_type:              6,                // SaasCareer portal type
-//       job_category_id_list:     string[],         // category filter
-//       tag_id_list:              string[],
-//       location_code_list:       string[],         // CT_11=北京, CT_125=上海, etc.
-//       subject_id_list:          string[],
-//       recruitment_id_list:      string[],
-//       job_function_id_list:     string[],
-//       storefront_id_list:       string[],
-//     }
-//   Response: { code: 0, data: { job_post_list: RawJobPost[], count: number }, message: "ok" }
-//
-// Raw job post field mapping (from N() mapper in bundle):
-//   id                            → post_id
-//   title                         → title
-//   job_category.name             → project
-//   recruit_type.name             → recruit_label
-//   department_info               → bgs (Lilith does not expose BG in the public payload)
-//   city_info.name                → work_cities (or city_info_list_for_delivery for multi-city)
-//
-// ============================================================
-// NETWORK ACCESSIBILITY (probed 2026-05-14)
-//
-// lilithgames.jobs.feishu.cn resolves to 198.18.1.152 (IANA RFC 2544
-// benchmarking range). All feishu.cn/larksuite.com subdomains resolve
-// into 198.18.0.0/15 from the current environment, indicating a
-// DNS-level network block. TLS connects but every HTTP path (including
-// /api/v1/search/job/posts) is answered by a ByteDance headhunter
-// platform stub page rather than the Feishu Recruitment API.
-// The Feishu API is structurally identical to ByteDance's campus API
-// (same city-code format CT_XX, same payload shape, same response envelope)
-// but is NOT callable without a network path that bypasses the block.
-//
-// VERDICT: API is fully discovered but unreachable from this environment.
-// This adapter is an honest stub that returns ok:false with a clear
-// message. The apply_url values point to the live portal.
-//
-// ============================================================
-// PositionSummary field mapping (canonical keys, matches all other adapters)
-//   post_id       — string job identifier
-//   title         — position title
-//   project       — job category (job_category.name)
-//   recruit_label — recruit type label (recruit_type.name)
-//   bgs           — business group (not exposed in public API payload, always "")
-//   work_cities   — work location (city_info.name)
-//   apply_url     — deep link to the Feishu Recruitment job detail
-// ============================================================
+// Probed 2026-05-16: portal_type=6, channel id 7055353811552127239, default
+// limit=10. The career page filters by `location_code_list` query string;
+// we pass through search options the same way.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { withPage } from "./cdp.js";
 export { checkResume };
 
 const SOURCE = "lilithgames.jobs.feishu.cn";
-const CAREER_PAGE = "https://lilithgames.jobs.feishu.cn/career";
-const CAMPUS_PAGE = "https://lilithgames.jobs.feishu.cn/campus";
-const INTERN_PAGE = "https://lilithgames.jobs.feishu.cn/intern";
+const HOST = "https://lilithgames.jobs.feishu.cn";
+const CAREER_PAGE = `${HOST}/career/`;
+const DETAIL_PAGE = (id: string) => `${HOST}/career/${encodeURIComponent(id)}/detail`;
 
-// ---------- PositionSummary ----------
+// ---------- raw shapes (subset of Feishu envelope) ----------
+
+interface RawCity {
+  code?: string;
+  name?: string;
+  en_name?: string;
+}
+
+interface RawJobCategory {
+  id?: string;
+  name?: string;
+  parent?: RawJobCategory | null;
+}
+
+interface RawJobPost {
+  id?: string | number;
+  title?: string;
+  city_info?: RawCity | null;
+  city_list?: RawCity[];
+  recruit_type?: { id?: string; name?: string };
+  job_category?: RawJobCategory | null;
+  job_function?: RawJobCategory | null;
+  description?: string;
+  requirement?: string;
+  code?: string;
+}
+
+interface RawSearchEnvelope {
+  code?: number;
+  message?: string;
+  data?: {
+    job_post_list?: RawJobPost[];
+    count?: number;
+  };
+}
+
+// ---------- canonical types ----------
 
 export interface PositionSummary {
   post_id: string;
@@ -95,165 +79,309 @@ export interface PositionSummary {
   apply_url: string;
 }
 
-// ---------- SearchOptions ----------
-
 export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /** Feishu location code (e.g. CT_11=北京, CT_22=成都, CT_75=旧金山). */
+  cityCode?: string;
 }
 
-// ---------- stub message ----------
-
-const STUB_MSG =
-  "Lilith Games (莉莉丝游戏) recruiting is hosted on Feishu Recruitment (飞书招聘) at " +
-  "lilithgames.jobs.feishu.cn. The API endpoint POST /api/v1/search/job/posts has been " +
-  "reverse-engineered (portal_type:6, same payload shape as ByteDance campus API) but the " +
-  "domain resolves to IANA-reserved 198.18.x.x from this environment — a DNS-level network " +
-  "block prevents all API calls. The Moka org (org_id 7803) page is also suspended. " +
-  `Apply directly at ${CAREER_PAGE} (社会招聘) or ${CAMPUS_PAGE} (校园招聘).`;
-
-// ---------- searchPositions ----------
-
-export async function searchPositions(
-  _opts: SearchOptions = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-  positions: PositionSummary[];
-}> {
+function summarize(item: RawJobPost): PositionSummary {
+  const id = String(item.id ?? "");
+  const cityList = item.city_list ?? [];
+  const work_cities =
+    cityList.length > 1
+      ? cityList.map((c) => c.name ?? "").filter(Boolean).join(" / ")
+      : cityList[0]?.name ?? item.city_info?.name ?? "";
+  const project = item.job_category?.name ?? item.job_function?.name ?? "";
   return {
-    ok: false,
-    source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAREER_PAGE,
-    positions: [],
+    post_id: id,
+    title: item.title ?? "",
+    project,
+    recruit_label: item.recruit_type?.name ?? "",
+    bgs: "",
+    work_cities,
+    apply_url: id ? DETAIL_PAGE(id) : CAREER_PAGE,
   };
 }
 
-// ---------- fetchAllPositions ----------
+function STUB_MESSAGE(reason: string): string {
+  return (
+    "Lilith Games (莉莉丝): feishu portal_type=6 requires a browser-minted " +
+    "`_signature` ByteDance anti-bot token. " +
+    `Could not run the browser fallback: ${reason}. ` +
+    "Install Google Chrome (or set $JOB_PRO_CHROME=/path/to/chrome) and " +
+    "ensure puppeteer-core is installed (it ships with this CLI by default)."
+  );
+}
+
+// ---------- core via CDP ----------
+
+type SearchResult = {
+  ok: true;
+  total: number;
+  positions: PositionSummary[];
+  rawJobs: RawJobPost[];
+};
+
+async function searchViaBrowser(opts: SearchOptions): Promise<
+  { ok: true; result: SearchResult } | { ok: false; message: string }
+> {
+  const limit = Math.max(1, Math.min(50, opts.pageSize ?? 10));
+  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+  const cityCode = (opts.cityCode ?? "").trim();
+
+  // The career page URL itself drives the SPA's initial XHR with the
+  // matching filters baked in. We construct a URL that yields the desired
+  // search response without needing post-load interactions.
+  const params = new URLSearchParams({
+    keywords: keyword,
+    location: cityCode,
+    project: "",
+    type: "",
+    category: "",
+    current: String(opts.page ?? 1),
+    limit: String(limit),
+    functionCategory: "",
+  });
+  const targetUrl = `${CAREER_PAGE}?${params.toString()}`;
+
+  const r = await withPage(async (page) => {
+    // We arm a response waiter BEFORE goto so we don't miss the XHR.
+    // The Feishu SPA fires multiple identical XHRs (one for filters, one
+    // for the actual search); we filter to the one that includes
+    // `search/job/posts` in the URL AND has non-zero content-length.
+    const responsePromise = page.waitForResponse(
+      (resp) => {
+        const u = resp.url();
+        return resp.status() === 200 && /\/api\/v1\/search\/job\/posts/.test(u);
+      },
+      { timeout: 25000 }
+    );
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    const resp = await responsePromise;
+    return (await resp.json()) as RawSearchEnvelope;
+  });
+
+  if (!r.ok) {
+    return { ok: false, message: STUB_MESSAGE(r.error.message) };
+  }
+  const env = r.value;
+  if (env.code !== 0 || !env.data) {
+    return {
+      ok: false,
+      message: `upstream returned code=${env.code} (${env.message ?? "unknown"})`,
+    };
+  }
+  const rawJobs = env.data.job_post_list ?? [];
+  return {
+    ok: true,
+    result: {
+      ok: true,
+      total: env.data.count ?? rawJobs.length,
+      positions: rawJobs.map(summarize),
+      rawJobs,
+    },
+  };
+}
+
+// ---------- public API ----------
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  const r = await searchViaBrowser(opts);
+  if (!r.ok) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: r.message,
+      query: opts,
+      positions: [] as PositionSummary[],
+    };
+  }
+  return {
+    ok: true as const,
+    source: SOURCE,
+    query: opts,
+    page: opts.page ?? 1,
+    page_size: opts.pageSize ?? 10,
+    total: r.result.total,
+    positions: r.result.positions,
+  };
+}
 
 export async function fetchAllPositions(
-  _opts: SearchOptions & { maxPages?: number } = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-  fetched: number;
-  positions: PositionSummary[];
-}> {
+  opts: SearchOptions & { maxPages?: number } = {}
+) {
+  const limit = Math.max(1, Math.min(50, opts.pageSize ?? 30));
+  const maxPages = Math.max(1, opts.maxPages ?? 20);
+  const bucket: PositionSummary[] = [];
+  let total = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await searchViaBrowser({ ...opts, page, pageSize: limit });
+    if (!r.ok) {
+      if (bucket.length === 0) {
+        return {
+          ok: false as const,
+          source: SOURCE,
+          message: r.message,
+          total: 0,
+          fetched: 0,
+          positions: [] as PositionSummary[],
+        };
+      }
+      break;
+    }
+    if (page === 1) total = r.result.total;
+    if (!r.result.positions.length) break;
+    bucket.push(...r.result.positions);
+    if (bucket.length >= total) break;
+  }
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAREER_PAGE,
-    fetched: 0,
-    positions: [],
+    total,
+    fetched: bucket.length,
+    positions: bucket,
   };
 }
 
-// ---------- fetchPositionDetail ----------
+// fetchPositionDetail: Feishu has no per-id REST endpoint; scan via search.
 
-export async function fetchPositionDetail(
-  _postId: string
-): Promise<{ ok: false; source: string; message: string; apply_url: string }> {
+export async function fetchPositionDetail(postId: string) {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required" };
+  const limit = 50;
+  const maxPages = 10;
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await searchViaBrowser({ page, pageSize: limit });
+    if (!r.ok) return { ok: false as const, source: SOURCE, post_id: id, message: r.message };
+    const found = r.result.rawJobs.find((p) => String(p.id) === id);
+    if (found) {
+      const summary = summarize(found);
+      return {
+        ok: true as const,
+        source: SOURCE,
+        post_id: id,
+        title: found.title ?? "",
+        project: summary.project,
+        recruit_label: summary.recruit_label,
+        description: found.description ?? "",
+        requirements: found.requirement ?? "",
+        work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
+        apply_url: summary.apply_url,
+      };
+    }
+    if (r.result.rawJobs.length < limit) break;
+  }
   return {
-    ok: false,
+    ok: false as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAREER_PAGE,
+    post_id: id,
+    message: `post ${id} not found in browser-driven search (scanned up to ${maxPages * limit} posts)`,
   };
 }
 
-// ---------- fetchDictionaries ----------
+// fetchDictionaries: synthesize from one page of results.
 
-export async function fetchDictionaries(): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-}> {
-  return {
-    ok: false,
+let _dictCache:
+  | { ok: true; source: string; total: number; sample_categories: string[]; sample_cities: string[] }
+  | { ok: false; source: string; message: string }
+  | null = null;
+
+export async function fetchDictionaries() {
+  if (_dictCache !== null) return _dictCache;
+  const r = await searchViaBrowser({ pageSize: 50 });
+  if (!r.ok) {
+    const result = { ok: false as const, source: SOURCE, message: r.message };
+    _dictCache = result;
+    return result;
+  }
+  const cats = new Set<string>();
+  const cities = new Set<string>();
+  for (const j of r.result.rawJobs) {
+    const name = j.job_category?.name ?? j.job_function?.name;
+    if (name) cats.add(name);
+    for (const c of j.city_list ?? []) if (c.name) cities.add(c.name);
+    if (j.city_info?.name) cities.add(j.city_info.name);
+  }
+  const result = {
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAREER_PAGE,
+    total: r.result.total,
+    sample_categories: [...cats].sort(),
+    sample_cities: [...cities].sort(),
   };
+  _dictCache = result;
+  return result;
 }
 
-// ---------- notices (no public endpoint) ----------
+const NOTICES_MSG = "Lilith Games (莉莉丝): no public notices endpoint on Feishu tenant";
 
-export async function listNotices(): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-}> {
-  return {
-    ok: false,
-    source: SOURCE,
-    message: "Lilith Games: no public notices endpoint",
-  };
+export async function listNotices() {
+  return { ok: false as const, source: SOURCE, message: NOTICES_MSG, notices: [] as never[] };
 }
 
-export async function getNotice(
-  _id: string
-): Promise<{ ok: false; source: string; message: string }> {
-  return {
-    ok: false,
-    source: SOURCE,
-    message: "Lilith Games: no public notices endpoint",
-  };
+export async function getNotice(noticeId: string) {
+  return { ok: false as const, source: SOURCE, message: NOTICES_MSG, notice_id: noticeId };
 }
 
 export async function findNoticesByQuestion(
-  _question: string,
+  question: string,
   _opts: { questionTime?: string; topK?: number } = {}
-): Promise<{ ok: false; source: string; message: string }> {
-  return {
-    ok: false,
-    source: SOURCE,
-    message: "Lilith Games: no public notices endpoint",
-  };
+) {
+  return { ok: false as const, source: SOURCE, question, message: NOTICES_MSG, matches: [] as unknown[] };
 }
-
-// ---------- matchResume ----------
-// Resume matching cannot fetch live position data.
-// We surface signals extracted from the resume and direct the user to
-// the Lilith Games career portal for manual search.
 
 export async function matchResume(
   text: string,
   opts: { topN?: number; candidates?: number } = {}
-): Promise<{
-  ok: false;
-  source: string;
-  message: string;
-  apply_url: string;
-  extracted_terms?: string[];
-  city_preferences?: string[];
-}> {
-  void opts;
+) {
+  const topN = Math.max(1, opts.topN ?? 5);
+  const candidates = Math.max(topN, opts.candidates ?? 20);
   const { terms, cities } = extractResumeSignals(text ?? "");
+  if (!terms.length) {
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: "could not extract any technical signals from the text",
+      preview: (text ?? "").slice(0, 120),
+    };
+  }
+  const keyword = terms.slice(0, 3).join(" ");
+  const r = await searchViaBrowser({ keyword, pageSize: 50 });
+  if (!r.ok) {
+    return { ok: false as const, source: SOURCE, message: r.message, positions: [] };
+  }
+  type Scored = { score: number; position: PositionSummary; reasons: string[] };
+  const scored: Scored[] = [];
+  for (const p of r.result.positions) {
+    const blob = [p.title, p.project, p.recruit_label, p.work_cities].join(" ");
+    const { score, reasons } = scoreOverlap(blob, terms, cities);
+    if (score > 0) scored.push({ score, position: p, reasons });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  let shortlist = scored.slice(0, Math.max(topN, candidates));
+  if (!shortlist.length) {
+    shortlist = r.result.positions.slice(0, candidates).map((position) => ({ score: 0, position, reasons: [] }));
+  }
+  const matches = shortlist.slice(0, topN).map((s) => {
+    const mr =
+      s.reasons.length > 0
+        ? s.reasons.slice(0, 5)
+        : ["no specific keyword overlap — surfaced from initial keyword search"];
+    return { ...s.position, match_reasons: mr };
+  });
   return {
-    ok: false,
+    ok: true as const,
     source: SOURCE,
-    message: STUB_MSG,
-    apply_url: CAREER_PAGE,
     extracted_terms: terms,
     city_preferences: cities,
+    matches,
+    note:
+      "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
+      "The only authority on selection is HR.",
   };
 }
 
-// Export helpers so callers that import from this module can use them.
 export { extractResumeSignals, scoreOverlap };
-
-// Expose portal page URLs for external reference.
-export const PORTAL_URLS = {
-  social: CAREER_PAGE,
-  campus: CAMPUS_PAGE,
-  intern: INTERN_PAGE,
-  homepage: "https://jobs.lilith.com/",
-} as const;

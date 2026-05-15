@@ -202,7 +202,7 @@ const COMPANIES: Company[] = [
   {
     name: "Lilith Games",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/lilith.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {

@@ -7,13 +7,14 @@ settings:
 importers:
 
   .:
+    dependencies:
+      puppeteer-core:
+        specifier: ^25.0.2
+        version: 25.0.2
     devDependencies:
       '@types/node':
         specifier: ^20
         version: 20.19.41
-      puppeteer-core:
-        specifier: ^25.0.2
-        version: 25.0.2
       tsx:
         specifier: ^4
         version: 4.22.0
