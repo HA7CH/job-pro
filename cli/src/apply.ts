@@ -223,12 +223,18 @@ export interface ApplyFormSchema {
   /** Human-readable note about how submission actually fires (e.g. Feishu's 3-step). */
   submit_notes?: string;
   /**
-   * True iff the submit_endpoint has been end-to-end verified (anon multipart
-   * adapters via `pnpm test:debug-submit` against httpbin echo). Bespoke
-   * "needs validation" endpoints stay false until somebody confirms with a
-   * real session that the URL accepts a submit payload. Surfaced by
-   * `apply --schema` and the dry-run formatter; `--really-submit` warns
-   * (but doesn't block) when false.
+   * True iff the submit_endpoint URL is verified to be a real route. Two
+   * qualifying conditions:
+   *   1. End-to-end smoked via `pnpm test:debug-submit` against httpbin —
+   *      URL + body shape both confirmed (3 anon Greenhouse/Lever boards).
+   *   2. Anonymous probe returned a real-route signal — HTTP 401/403 auth
+   *      gate, a structured business error, or the family's encrypted
+   *      envelope. NOT 404 / NOT HTML fallthrough. Body shape still
+   *      requires a real session to validate, but the URL itself is known
+   *      to exist.
+   * False/undefined: endpoint is inferred but unprobed, or probe found 404
+   * / HTML fallthrough — the URL is likely wrong.
+   * `--really-submit` requires `true` OR `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
    */
   endpoint_verified?: boolean;
   questions: ApplyQuestion[];
@@ -603,6 +609,8 @@ export interface BespokeApplySchemaConfig {
   submitEndpoint?: string;
   submitKind?: SubmitKind;
   submitNotes?: string;
+  /** Set true when the endpoint URL is verified to exist (anon probe ≠ 404). */
+  endpointVerified?: boolean;
   extraQuestions?: ApplyQuestion[];
 }
 
@@ -622,6 +630,7 @@ export function buildBespokeApplySchema(cfg: BespokeApplySchemaConfig): ApplyFor
     submit_method: cfg.submitEndpoint ? "POST" : undefined,
     submit_kind: cfg.submitKind ?? "multipart-session",
     submit_notes: cfg.submitNotes,
+    endpoint_verified: cfg.endpointVerified,
     questions: [...standard, ...(cfg.extraQuestions ?? [])],
   };
 }

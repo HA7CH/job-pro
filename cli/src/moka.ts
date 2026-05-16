@@ -571,6 +571,7 @@ export function createAdapter(cfg: MokaAdapterConfig) {
         submit_endpoint: "https://app.mokahr.com/api/outer/ats-apply/website/apply",
         submit_method: "POST",
         submit_kind: "moka-aes",
+        endpoint_verified: true,
         submit_notes:
           "Moka apply flow: GET /api/get_job_apply_form (questions) → " +
           "POST /applicant-limit-check (rate-limit) → POST /getValidateConfig + " +

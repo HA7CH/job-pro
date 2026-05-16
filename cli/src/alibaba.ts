@@ -699,6 +699,7 @@ export async function fetchApplicationSchema(postId: string): Promise<
       applyUrl,
       submitEndpoint: "https://campus-talent.alibaba.com/campus/applyPosition.json",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
         "Alibaba — POST /campus/applyPosition.json with session cookie. Alipay OAuth gates the session. Endpoint anon-probed → HTTP 403 (auth gate, not 404 — confirms real route). Body shape still needs validation against a real candidate session.",
     }),

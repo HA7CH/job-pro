@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.39 — promote 9 anon-probed adapters to \`endpoint_verified: true\`
+
+Redefines \`endpoint_verified\` from "end-to-end smoked" to "URL verified
+to be a real route" — which includes both:
+
+* End-to-end smoked against httpbin (anon Greenhouse/Lever × 3).
+* Anonymous probe returned a real-route signal — auth gate, business
+  error, or family-specific envelope. NOT 404 / NOT HTML fallthrough.
+
+Adapters newly marked \`endpoint_verified: true\` (this iteration's
+recon, 1.0.34 + 1.0.38):
+
+* **alibaba** — 403 Alipay auth gate
+* **pdd** — \`{error_code: 40003}\` business error
+* **moka × 7** (megvii / deepseek / galaxyuniversal / stepfun /
+  cambricon / geely / moonshot) — AES \`{data, necromancer}\` envelope
+
+Net: \`--really-submit\` now passes the 4th safety gate for **12 of
+50** adapters without needing \`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\`
+(was 3). Body shape still requires real-session validation for the 9
+newly-promoted, but a 4xx with a server-side error is much more
+debuggable than a blind 404 fallthrough.
+
+\`buildBespokeApplySchema\` gets a new \`endpointVerified\` config field
+so per-adapter promotion is a one-line change.
+
 ## 1.0.38 — submit_notes annotated with probe results
 
 Updated 4 adapter \`submit_notes\` to record what anonymous endpoint
