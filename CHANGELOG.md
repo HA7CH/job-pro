@@ -4,6 +4,36 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.72 — \`recon\` ⚠ icon when schema-verified but probe disagrees
+
+When an adapter has \`endpoint_verified: true\` in its schema but the
+anon probe returns 404/HTML, that means the schema's verification
+round was deeper than what curl can see (framework wrapped responses,
+host-specific routing nuances, etc). Examples:
+
+* **huawei** — Jalor framework returns \`{code:"unknown",httpCode:404}\`
+  for any path name under the registered \`/services/portal/portaluser/\`
+  service. Probe sees 404, but the route taxonomy is real.
+* **xpeng / weride / hoyoverse** — multipart-anon Greenhouse/Lever
+  routes expect multipart body, not JSON. Anon \`{}\` probe gets HTTP
+  Basic auth gate; the URL itself is end-to-end smoked.
+* **sensetime / horizonrobotics** — Beisen Wecruit needs
+  \`X-Requested-With: XMLHttpRequest\`; without it, Nginx returns SPA HTML.
+
+Previously these rendered \`✗\` despite the 🟢 schema tag, confusing
+the read. Now they render \`⚠\` to signal "schema asserts verified,
+probe disagrees — see submit_notes for why".
+
+Final recon tally at 1.0.72 (50/50 adapters):
+
+\`\`\`
+verified-real     37  (✓ probe agrees with schema)
+html-fallthrough   5  (⚠ probe disagrees, schema-verified)
+speculative-404    1  (⚠ huawei — Jalor framework)
+external           5  (⛔)
+probe-error        2  (lilith CDP skip + 1 transient)
+\`\`\`
+
 ## 1.0.71 — fix: \`executeFeishu3Step\` step 3 follows schema's submit_endpoint
 
 1.0.62 updated the Feishu factory's \`submit_endpoint\` from

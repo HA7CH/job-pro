@@ -1569,7 +1569,13 @@ async function main() {
     for (const r of results) {
       const tag = r.status ? `${r.status}` : "—";
       const vTag = r.already_verified ? " 🟢" : "";
-      console.log(`  ${ICON[r.classification]} ${r.company.padEnd(width)}  ${tag.padEnd(4)} ${r.classification.padEnd(17)}${vTag}  ${r.detail}`);
+      // If the schema asserts endpoint_verified: true but the anon probe
+      // sees 404/HTML, the framework's response is misleading — schema's
+      // probe round was deeper. Surface a ⚠ icon instead of ✗ to signal
+      // "schema says verified, probe disagrees".
+      const probeOK = r.classification === "verified-real" || r.classification === "external";
+      const icon = r.already_verified && !probeOK ? "⚠" : ICON[r.classification];
+      console.log(`  ${icon} ${r.company.padEnd(width)}  ${tag.padEnd(4)} ${r.classification.padEnd(17)}${vTag}  ${r.detail}`);
     }
     console.log(`\n  Tally:`);
     for (const [k, v] of [...tally.entries()].sort()) {
