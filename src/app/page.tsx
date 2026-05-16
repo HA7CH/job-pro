@@ -456,10 +456,11 @@ export default function Home() {
       <section className="phase2-card" aria-labelledby="phase2-title">
         <h2 id="phase2-title" className="phase2-title">Phase 2 — submit, not just search</h2>
         <p className="phase2-lede">
-          50 / 50 companies expose an application schema. 45 of them have a
-          submitter wired today (3 Greenhouse/Lever fire anonymously; the
-          rest need a captured browser session). 5 are intentionally
-          external — Liepin recruiter chat / WeChat mini-program.
+          50 / 50 companies expose an application schema. <strong>45 / 50 have
+          end-to-end-verified apply endpoints</strong> (3 Greenhouse/Lever
+          fire anonymously; 42 need a captured browser session). 5 are
+          intentionally external — Liepin recruiter chat / WeChat mini-program,
+          structurally non-API.
         </p>
         <pre className="phase2-snippet">{`# one-time setup
 job-pro profile init --interactive      # prompts 5 essential fields
@@ -472,7 +473,8 @@ job-pro find "intern" --apply-ready --text   # only show buckets you can fire to
 job-pro xpeng apply <id> --schema                  # peek at the form
 job-pro xpeng apply <id> --interactive --remember  # fill in terminal; persist answers
 
-# actually submit (3-layer safety gate)
+# actually submit (4-layer safety gate: env attest + staged.ready
+# + endpoint_verified + session.json <30d)
 JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
   job-pro xpeng apply <id> --really-submit`}</pre>
         <p className="phase2-detail">
