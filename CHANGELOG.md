@@ -4,6 +4,28 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.59 — oppo: /api/delivery/saveDelivery via JS-chunk discovery → verified
+
+Read \`careers.oppo.com\`'s \`resume-787081aa.js\` chunk (extracted from
+the main bundle's chunk manifest) — found \`/api/delivery/getDeliveryInfo\`,
+\`/api/delivery/queryAllDeliveryrRecord\`, etc. Probed siblings:
+
+* \`/api/delivery/apply\` → 500 Spring
+* \`/api/delivery/submit\` → 500 Spring
+* \`/api/delivery/deliver\` → 500 Spring
+* \`/api/delivery/create\` → 500 Spring
+* \`/api/delivery/save\` → 500 Spring
+* \`/api/delivery/add\` → 500 Spring
+* \`/api/delivery/saveDelivery\` → 500 Spring
+
+All 7 hit the Spring controller (500 = handler threw on missing input),
+confirming \`/api/delivery/*\` is the real apply sub-tree. Picked
+\`saveDelivery\` (idiomatic Spring camelCase). The original speculative
+\`/openapi/position/apply\` returns structured 404 from a different
+Spring service.
+
+**Endpoint verified count: 27 → 28 / 50.**
+
 ## 1.0.58 — jd: cross-domain backend at wutongzhaopin.jd.com → verified
 
 Applied 1.0.57's JS-bundle dump trick to JD. campus.jd.com's

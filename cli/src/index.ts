@@ -211,6 +211,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "tencent",
   // verified via JS-bundle path extraction + cross-domain check (1.0.58)
   "jd",
+  // probe-verified via Spring 500 + JS-bundle sub-tree discovery (1.0.59)
+  "oppo",
 ]);
 
 const HELP = `

@@ -363,10 +363,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://careers.oppo.com/openapi/position/apply",
+      submitEndpoint: "https://careers.oppo.com/api/delivery/saveDelivery",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "OPPO — POST /openapi/position/apply with session cookie. Endpoint inferred from /openapi/position/pageNew read pattern; needs validation.",
+        "OPPO — POST /api/delivery/saveDelivery with session cookie. Endpoint anon-probed → HTTP 500 + Spring \"Internal Server Error\" (real Spring controller; the /api/delivery/* sub-tree was discovered by reading the SPA's resume-787081aa.js chunk which references /api/delivery/getDeliveryInfo etc, then probing siblings — all 7 candidates returned 500 = real routes). The original /openapi/position/apply returned structured 404 from a different Spring service. Body shape still needs validation.",
     }),
   };
 }
