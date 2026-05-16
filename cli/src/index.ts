@@ -884,6 +884,9 @@ async function runCompany(
           );
         }
         const result = await familyExecutor(staged, session, { kind: "upstream" });
+        if (result.ok) {
+          memoryEvent("applied", `${company} ${postId} — ${staged.job_title}`);
+        }
         return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: true, result }, compact);
       }
       if (!isGenericMultipart) {
@@ -945,6 +948,9 @@ async function runCompany(
         }
       }
       const result = await submitApplication(staged, { kind: "upstream" }, { session });
+      if (result.ok) {
+        memoryEvent("applied", `${company} ${postId} — ${staged.job_title}`);
+      }
       return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: !!session, result }, compact);
     }
 

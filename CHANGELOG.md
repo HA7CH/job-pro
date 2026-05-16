@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.35 — auto-log successful \`--really-submit\` to memory
+
+When \`apply --really-submit\` succeeds (\`result.ok === true\`), the
+CLI now automatically writes \`memory event applied "<company>
+<post_id> — <job_title>"\` to \`~/.jobpro/memory.json\`. Previously
+users had to remember to invoke \`<company> memory event applied …\`
+by hand after each submission.
+
+Fires for both code paths: family executors (Feishu / Moka / Beisen
+/ CDP) and the generic multipart submitter. \`--debug-submit-to\` and
+the staging dry-run path are intentionally untouched — only real
+submissions get logged.
+
+Inspect with \`job-pro <co> memory list\` or surfaces in
+\`job-pro status\`.
+
 ## 1.0.34 — \`endpoint_verified\` flag for honest \`--really-submit\` UX
 
 Recon probe of the 22 multipart-session bespoke endpoints found that
