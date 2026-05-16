@@ -4,6 +4,27 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.23 — submit wire-format smoke (3rd test layer)
+
+`pnpm test:debug-submit` exercises the multipart-anon executor end-to-
+end against `https://httpbin.org/post` for the 3 Greenhouse/Lever
+boards (xpeng / weride / hoyoverse):
+
+1. Search the adapter for a real post_id.
+2. Pull schema; auto-fill every required question (first allowed value
+   for *_select, "N/A (smoke test)" for text/textarea).
+3. Stage with a synthetic profile (tmp /tmp/jobpro-debug-smoke-…/resume.pdf,
+   `%PDF\n` magic only — httpbin doesn't validate).
+4. Fire `submitApplication(staged, {kind: "debug", url: httpbin})`.
+5. Assert `ok: true` + HTTP 200.
+
+Catches regressions schema smoke can't — wrong multipart field names,
+broken applyFormFile merge, resume-file read failures, etc. **3 pass /
+0 broken / 3 / 6.4s** on first run.
+
+Local-only (alongside `pnpm test` and `pnpm test:apply`); CI skips it
+since httpbin.org rate-limits anonymous hits from cloud IPs.
+
 ## 1.0.22 — closeout / both smoke tests green
 
 Cumulative end-of-loop verification:
