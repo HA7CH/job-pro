@@ -4,6 +4,19 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.8 — \`profile init --interactive\`
+
+Cold-start UX: `job-pro profile init --interactive` walks the 5
+essential fields (first_name / last_name / email / phone / resume_path)
+via readline prompts, validating each (regex on email/phone, file-
+exists on resume_path) and re-prompting on bad input. No more "edit
+this JSON file by hand" for first-time users.
+
+The interactive path refuses fast if stdin is not a TTY (piped /
+heredoc'd) with a clear message — readline EOF semantics make piped
+input unreliable, and silent partial writes would be worse than the
+explicit refusal.
+
 ## 1.0.7 — apply --batch &lt;file|-&gt;
 
 \`job-pro <co> apply --batch /path/to/post-ids.txt\` reads a newline-

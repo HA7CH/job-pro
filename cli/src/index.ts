@@ -167,7 +167,9 @@ USAGE
   job-pro <company> <verb> [options]
   job-pro list [--compact]            list all 50 companies + source family
   job-pro status [--compact]          survey profile / sessions / memory / chrome
-  job-pro profile init [--force]      write ~/.jobpro/profile.json template
+  job-pro profile init [--interactive] [--force]
+                                      write ~/.jobpro/profile.json
+                                      --interactive fills it via prompts.
   job-pro profile show                print the loaded profile
   job-pro --version
   job-pro help
@@ -1068,6 +1070,72 @@ function printStatus(compact: boolean): void {
   }
 }
 
+async function runProfileInitInteractive(template: ResumeProfile): Promise<ResumeProfile> {
+  if (!process.stdin.isTTY) {
+    die(
+      "profile init --interactive needs a TTY (got a piped stdin). " +
+        "Either run from a real terminal, or drop --interactive and edit " +
+        "the JSON file directly."
+    );
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (prompt: string): Promise<string> =>
+    new Promise<string>((resolve, reject) => {
+      let answered = false;
+      const onClose = () => {
+        if (!answered) reject(new Error("stdin closed before answer"));
+      };
+      rl.once("close", onClose);
+      rl.question(prompt, (a) => {
+        answered = true;
+        rl.off("close", onClose);
+        resolve(a);
+      });
+    });
+  const filled: ResumeProfile = { ...template };
+  console.log(`\nProfile setup — fill in 5 fields (Ctrl-C to abort).\n`);
+  try {
+    filled.first_name = await prompt("First name: ", ask, (v) => v.trim().length > 0 || "(required)");
+    filled.last_name = await prompt("Last name: ", ask, (v) => v.trim().length > 0 || "(required)");
+    filled.email = await prompt(
+      "Email: ",
+      ask,
+      (v) => (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) ? true : "(must look like name@domain.tld)")
+    );
+    filled.phone = await prompt(
+      "Phone (with country code, e.g. +86 13800138000): ",
+      ask,
+      (v) => (/^[+]?[\d\s\-()]{7,}$/.test(v.trim()) ? true : "(digits + optional spaces/dashes; min 7)")
+    );
+    filled.resume_path = await prompt(
+      "Resume file path (absolute, PDF/DOCX): ",
+      ask,
+      (v) => {
+        const p = v.trim();
+        if (!p) return "(required — pass an absolute path to your résumé)";
+        if (!existsSync(p)) return `(file not found: ${p})`;
+        return true;
+      }
+    );
+  } finally {
+    rl.close();
+  }
+  return filled;
+}
+
+async function prompt(
+  q: string,
+  ask: (prompt: string) => Promise<string>,
+  validate: (v: string) => true | string
+): Promise<string> {
+  while (true) {
+    const v = (await ask(q)).trim();
+    const res = validate(v);
+    if (res === true) return v;
+    console.log(`  ${res}`);
+  }
+}
+
 function printCompanyList(compact: boolean): void {
   // Validate the directory still matches the ADAPTERS map. If a company
   // appears in only one place, treat it as a bug.
@@ -1149,8 +1217,14 @@ async function main() {
         process.exit(1);
       }
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify(template, null, 2) + "\n", "utf8");
-      console.log(`Wrote ${path}. Fill in first_name / last_name / email / phone / resume_path before running \`job-pro <co> apply\`.`);
+      const interactive = args.includes("--interactive");
+      const filled = interactive ? await runProfileInitInteractive(template) : template;
+      writeFileSync(path, JSON.stringify(filled, null, 2) + "\n", "utf8");
+      if (interactive) {
+        console.log(`\nWrote ${path}. Run \`job-pro status\` to confirm, then \`job-pro <co> apply <id>\` to start.`);
+      } else {
+        console.log(`Wrote ${path}. Fill in first_name / last_name / email / phone / resume_path before running \`job-pro <co> apply\`. (Tip: pass --interactive to fill it in the terminal now.)`);
+      }
       return;
     }
     if (sub === "show") {
@@ -1162,7 +1236,7 @@ async function main() {
       console.log(JSON.stringify(r.profile, null, 2));
       return;
     }
-    die(`usage: job-pro profile <init [--force] | show>`);
+    die(`usage: job-pro profile <init [--interactive] [--force] | show>`);
   }
 
   const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[cmd];
