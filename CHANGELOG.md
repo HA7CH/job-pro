@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.79 — \`ENDPOINT_VERIFIED\` set locked in CI via unit-smoke
+
+Extracted the static \`ENDPOINT_VERIFIED\` set from \`index.ts\` to a
+dedicated \`cli/src/coverage.ts\` module so unit tests can import it.
+Added 3 assertions to \`pnpm test:unit\` (32 → **35 / 35 pass**):
+
+1. \`ENDPOINT_VERIFIED.size === 45\` — exact count.
+2. Every adapter from the expected list is present.
+3. None of the 5 external adapters is in the set.
+
+These run in **CI** (no network), so any future PR that drops an
+entry or adds a non-external adapter without setting the flag fails
+before merge.
+
+Test matrix at 1.0.79:
+
+| Layer | Cmd | Count |
+|-------|-----|------:|
+| Unit | \`pnpm test:unit\` | **35** (CI) |
+| Read | \`pnpm test\` | 50 (local) |
+| Schema | \`pnpm test:apply\` | 50 (local, with endpoint_verified assertion) |
+| Submit wire | \`pnpm test:debug-submit\` | 27 (local) |
+
+Total: 162 assertions / 0 red. Of which **35 + tsc** run in CI on
+every push.
+
 ## 1.0.78 — apply-smoke asserts \`endpoint_verified: true\` on non-external
 
 \`pnpm test:apply\` now FAILs if a non-external adapter has

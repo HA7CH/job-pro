@@ -157,6 +157,24 @@ async function main(): Promise<void> {
     record("hintForStatus(422) mentions --interactive", hintForStatus(422).includes("--interactive"));
     record("hintForStatus(429) mentions rate limit", hintForStatus(429).includes("rate limited"));
     record("hintForStatus(500) returns empty (5xx not a hint case)", hintForStatus(500) === "");
+
+    // 9. ENDPOINT_VERIFIED set integrity (1.0.78+). Catches regressions:
+    //    a contributor accidentally drops an entry → CI fails.
+    const { ENDPOINT_VERIFIED } = await import("../src/coverage.js");
+    record("ENDPOINT_VERIFIED has exactly 45 entries", ENDPOINT_VERIFIED.size === 45, `actual ${ENDPOINT_VERIFIED.size}`);
+    const expectedVerified = [
+      "xpeng", "weride", "hoyoverse",
+      "alibaba", "pdd", "meituan", "mihoyo", "liauto",
+      "moonshot", "megvii", "deepseek", "galaxyuniversal", "stepfun", "cambricon", "geely",
+      "iflytek", "vivo",
+      "sf", "netease", "didi", "pingan", "byd", "bilibili", "xiaohongshu", "baidu",
+      "tencent", "jd", "oppo", "trip",
+      "xiaomi", "nio", "minimax", "zhipu", "iqiyi", "agibot", "zerooneai", "baichuan",
+      "bytedance", "sensetime", "horizonrobotics", "kuaishou", "weibo", "huawei", "lilith", "antgroup",
+    ];
+    record("ENDPOINT_VERIFIED contains every expected adapter", expectedVerified.every((k) => ENDPOINT_VERIFIED.has(k)));
+    const externals = ["hikvision", "cicc", "cainiao", "webank", "unitree"];
+    record("ENDPOINT_VERIFIED excludes the 5 external adapters", externals.every((k) => !ENDPOINT_VERIFIED.has(k)));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
