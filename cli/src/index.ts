@@ -64,9 +64,12 @@ import {
   executeCdpRealBrowser,
   buildFormTemplate,
   applyFormFile,
+  promptUnansweredFields,
   formatStaged,
   type ApplyFormSchema,
+  type ResumeProfile,
 } from "./apply.js";
+import { createInterface } from "node:readline";
 import {
   memoryList,
   memoryGet,
@@ -77,7 +80,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "1.0.1";
+const VERSION = "1.0.2";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -198,6 +201,7 @@ VERBS (same surface for every company)
   apply <post_id>                   stage an application (Phase 2 dry-run)
                                     --print-form               emit a fillable JSON template
                                     --form-file <path>         merge per-job answers
+                                    --interactive              prompt for unanswered fields
                                     --debug-submit-to <url>    verify wire format
                                     --really-submit            actually fire (env-gated)
   memory list | get <k> | set k=v | event <kind> [payload] | clear
@@ -471,6 +475,7 @@ async function runCompany(
     if (!postId) die(`usage: job-pro ${company} apply <post_id> [--print-form | --form-file <path>] [--dry-run | --debug-submit-to <url> | --really-submit]`);
     const reallySubmit = args.includes("--really-submit");
     const printForm = args.includes("--print-form");
+    const interactive = args.includes("--interactive");
     const { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
     const { args: _aForm, value: formFilePath } = popFlagValue(aDebug, "--form-file");
     void _aForm;
@@ -522,7 +527,7 @@ async function runCompany(
     }
 
     // --form-file merges per-job overrides into profile.custom.
-    let effectiveProfile = prof.profile;
+    let effectiveProfile: ResumeProfile = prof.profile;
     if (formFilePath) {
       const merged = applyFormFile(effectiveProfile, formFilePath);
       if (!merged.ok) {
@@ -537,6 +542,30 @@ async function runCompany(
         );
       }
       effectiveProfile = merged.profile;
+    }
+
+    // --interactive: prompt stdin for each unanswered required field.
+    // Skipped in --compact mode (we'd be polluting JSON output with prompts).
+    if (interactive && !compact) {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const io = {
+        write: (s: string) => process.stdout.write(s),
+        read: () =>
+          new Promise<string | null>((resolve) => {
+            rl.once("close", () => resolve(null));
+            rl.question("", (a) => resolve(a));
+          }),
+      };
+      console.log(`\nInteractive mode — fill the required fields for "${sr.schema.job_title || postId}".`);
+      console.log(`Type \`q\` or Ctrl-D to abort. Hit Enter to skip an optional field.`);
+      const overrides = await promptUnansweredFields(sr.schema, effectiveProfile, io);
+      rl.close();
+      // Merge into effectiveProfile.custom for the rest of the flow.
+      effectiveProfile = {
+        ...effectiveProfile,
+        custom: { ...(effectiveProfile.custom ?? {}), ...overrides },
+      };
+      console.log(`\nCollected ${Object.keys(overrides).length} answer(s). Staging now…\n`);
     }
 
     const staged = stageApplication(sr.schema, effectiveProfile);

@@ -413,6 +413,88 @@ export function buildFormTemplate(schema: ApplyFormSchema, profile: ResumeProfil
   };
 }
 
+/**
+ * Walk an ApplyFormSchema and prompt for each unanswered required field
+ * on stdin (via readline). Returns the new overrides as a flat
+ * `{ name: value }` map ready to merge into profile.custom.
+ *
+ * Behaviour:
+ *   - Fields already resolved from profile (name/email/phone/resume/etc.)
+ *     are skipped silently.
+ *   - For `*_select` field types, options are presented as a numbered
+ *     list — user can type the index or the literal value.
+ *   - User can hit Enter to skip a non-required field.
+ *   - User can type `q` / Ctrl-D to abort; we return what we've got so far.
+ *
+ * This function intentionally lives in apply.ts (not index.ts) so it
+ * stays unit-testable and so a future TUI can swap it out.
+ */
+export async function promptUnansweredFields(
+  schema: ApplyFormSchema,
+  profile: ResumeProfile,
+  io: { write: (s: string) => void; read: () => Promise<string | null> }
+): Promise<Record<string, string>> {
+  const overrides: Record<string, string> = {};
+  for (const q of schema.questions) {
+    // Only prompt for the primary field of each question. Secondary
+    // alternates (e.g. `resume_text` alongside `resume`) get the same
+    // resolution as the primary and don't need a separate prompt.
+    const f = q.fields[0];
+    if (!f) continue;
+    const resolved = resolveAnswer(f, profile);
+    if (resolved.value) continue; // already filled
+    if (!q.required) continue;    // skip optional fields entirely
+
+    while (true) {
+      // Build the prompt.
+      const lines: string[] = [];
+      lines.push(`\n${q.label} (required) [${f.name}]`);
+      if (q.description) lines.push(`  ${q.description}`);
+      if (f.values && f.values.length > 0) {
+        lines.push("  Options:");
+        f.values.forEach((opt, i) => {
+          const label = opt.label && opt.label !== opt.value ? `${opt.value} — ${opt.label}` : opt.value;
+          lines.push(`    [${i + 1}] ${label}`);
+        });
+        lines.push("  Enter number or value:");
+      } else if (f.type === "input_file") {
+        lines.push("  Enter absolute file path:");
+      } else if (f.type === "textarea") {
+        lines.push("  Enter text (single line; \\n for newlines):");
+      } else {
+        lines.push("  Enter value:");
+      }
+      lines.push("> ");
+      io.write(lines.join("\n"));
+      const answer = await io.read();
+      if (answer === null) {
+        // Ctrl-D / EOF — bail with what we have.
+        return overrides;
+      }
+      const trimmed = answer.trim();
+      if (trimmed === "q") return overrides;
+      if (!trimmed) {
+        // Empty input for a required field — re-prompt unless user wants to skip.
+        io.write("  (required — type a value, `q` to abort, or `skip` to leave blank)\n");
+        continue;
+      }
+      if (trimmed === "skip") break;
+      let resolvedAnswer: string = trimmed;
+      if (f.values && f.values.length > 0) {
+        const asIdx = Number.parseInt(trimmed, 10);
+        if (Number.isFinite(asIdx) && asIdx >= 1 && asIdx <= f.values.length) {
+          // Coerce — Greenhouse sometimes ships numeric values that JSON.parse
+          // hands back as numbers, breaking .replace below.
+          resolvedAnswer = String(f.values[asIdx - 1].value ?? "");
+        }
+      }
+      overrides[f.name] = resolvedAnswer.replace(/\\n/g, "\n");
+      break;
+    }
+  }
+  return overrides;
+}
+
 /** Merge a `{ field_name: value }` map into the profile's custom overrides. */
 export function applyFormFile(profile: ResumeProfile, formFilePath: string): { ok: true; profile: ResumeProfile } | { ok: false; message: string } {
   if (!existsSync(formFilePath)) {
