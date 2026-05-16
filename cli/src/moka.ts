@@ -576,8 +576,10 @@ export function createAdapter(cfg: MokaAdapterConfig) {
           "POST /applicant-limit-check (rate-limit) → POST /getValidateConfig + " +
           "/sendApplyValidateSmsCode (if SMS required) → POST /website/apply with " +
           "AES-128-CBC envelope {data, necromancer} (same encryption as the read-side " +
-          "list endpoint). Requires candidate session — capture via extension/, drop " +
-          "session.json under ~/.jobpro/. Multi-step submitter wires in next iteration.",
+          "list endpoint). Endpoint URL anon-probed (returns the AES envelope rather " +
+          "than HTML fallthrough — confirms it's the real route, not a guess). " +
+          "Requires candidate session — capture via extension/, drop session.json " +
+          "under ~/.jobpro/.",
         questions,
       },
     };

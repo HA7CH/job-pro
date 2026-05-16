@@ -4,6 +4,31 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.38 — submit_notes annotated with probe results
+
+Updated 4 adapter \`submit_notes\` to record what anonymous endpoint
+probes actually returned (1.0.34 + this iteration):
+
+* **alibaba** — \`POST /campus/applyPosition.json\` returns HTTP 403
+  (Alipay auth gate, not 404). Route confirmed real.
+* **pdd** — \`POST /api/recruit/v1/position/apply\` returns
+  \`{error_code:40003}\` (legit business error, not HTML fallthrough).
+  Route confirmed real.
+* **moka** (×7 adapters) — \`POST /api/outer/ats-apply/website/apply\`
+  returns the AES \`{data, necromancer}\` envelope on empty body.
+  Confirms it's the real route, not a guess.
+* **sf** — \`POST /api/web/position/apply\` returns 404. Wrong path;
+  the detail endpoint \`findById\` works (see 1.0.19 fix) but the apply
+  route is elsewhere. Needs real-browser recon to locate.
+
+This is documentation, not behavior change: \`endpoint_verified\`
+stays \`false\` for these adapters (definition: end-to-end smoked),
+and the 4th safety gate still blocks \`--really-submit\` unless
+\`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\`. But the probe-derived
+notes give users (and future contributors) a clearer signal:
+"this endpoint exists, body shape needs validation" vs "this URL
+is 404, recon needed".
+
 ## 1.0.37 — docs/auto-apply tally + verify→ship playbook
 
 \`docs/auto-apply.md\`'s "Tally" was stale (counted 3 + 38 + 9 = 50 with

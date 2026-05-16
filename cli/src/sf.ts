@@ -379,7 +379,7 @@ export async function fetchApplicationSchema(postId: string): Promise<
       submitEndpoint: "https://campus.sf-express.com/api/web/position/apply",
       submitKind: "multipart-session",
       submitNotes:
-        "SF Express — POST /api/web/position/apply with cr-service header + GeeTest captcha + session cookie. Endpoint inferred; needs validation.",
+        "SF Express — POST /api/web/position/apply with cr-service header + GeeTest captcha + session cookie. Endpoint anon-probed → 404; the apply route lives somewhere else (likely behind login). The detail endpoint at /api/web/position/findById/<id> is real (see fetchPositionDetail), but the apply path needs real-browser recon.",
     }),
   };
 }

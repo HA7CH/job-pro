@@ -732,7 +732,7 @@ export async function fetchApplicationSchema(postId: string): Promise<
       submitEndpoint: "https://careers.pinduoduo.com/api/recruit/v1/position/apply",
       submitKind: "multipart-session",
       submitNotes:
-        "PDD — POST /api/recruit/v1/position/apply with session cookie. Endpoint inferred; needs validation.",
+        "PDD — POST /api/recruit/v1/position/apply with session cookie. Endpoint anon-probed → returns {error_code: 40003} (real business error, not 404) — route confirmed; body shape still needs validation.",
     }),
   };
 }
