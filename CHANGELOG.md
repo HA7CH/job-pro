@@ -4,6 +4,31 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.91 — CDP executor fills every staged field, not just name/email/phone
+
+The CDP DOM walker had a Feishu-shaped fill loop:
+
+\`\`\`ts
+for (const f of staged.staged) {
+  if (f.name === "name" || f.name === "email" || f.name === "phone")
+    applicant[f.name] = f.value;
+}
+// then fill applicant.name / email / phone
+\`\`\`
+
+Worked for Feishu (schema uses those exact names) but missed:
+* Greenhouse \`first_name\` / \`last_name\` (the form splits "name").
+* Greenhouse / Lever \`question_<XXX>\` custom answers.
+* Any adapter that names fields differently.
+
+Rewritten: iterate \`staged.staged\` and fill EVERY non-file field by
+\`input[name="<f.name>"]\` / \`textarea[name="<f.name>"]\` / id /
+placeholder / aria-label. Steps log now reads \`filled N, missed M\`
+so the user can see how many fields the selector found.
+
+CDP path is now usable across all 45 verified adapters, not just
+the Feishu-shape ones.
+
 ## 1.0.90 — \`--via-cdp\` also honored in \`--debug-submit-to\` path
 
 1.0.88's \`--via-cdp\` flag only routed the puppeteer DOM path in

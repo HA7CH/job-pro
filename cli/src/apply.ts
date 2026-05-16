@@ -1618,10 +1618,6 @@ export async function executeCdpRealBrowser(
   if (!existsSync(resumeField.value)) {
     return { ok: false, posted_to: targetUrl, message: `resume file not found: ${resumeField.value}`, steps };
   }
-  const applicant: Record<string, string> = {};
-  for (const f of staged.staged) {
-    if (f.name === "name" || f.name === "email" || f.name === "phone") applicant[f.name] = f.value;
-  }
 
   const r = await withPage(async (page) => {
     await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 30000 });
@@ -1676,16 +1672,27 @@ export async function executeCdpRealBrowser(
     }
     steps.push({ step: "wait-form", url: page.url(), status: 200, ok: true, message: "modal rendered" });
 
-    // Fill name/email/phone if matching inputs exist.
-    for (const [key, value] of Object.entries(applicant)) {
-      if (!value) continue;
+    // Fill every staged non-file field. The schema layer normalises field
+    // names to whatever the upstream API expects (first_name, last_name,
+    // email, phone, question_XXX for Greenhouse custom questions, name/
+    // email/phone for Feishu, etc.) — so input[name="<f.name>"] usually
+    // matches. Falls back to placeholder / aria-label / id contains-match.
+    let filled = 0, missed = 0;
+    for (const f of staged.staged) {
+      if (f.type === "input_file") continue;
+      if (!f.value) continue;
       try {
-        const sel = `input[name="${key}"], input[placeholder*="${key}"], input[aria-label*="${key}"]`;
-        await page.type(sel, value, { delay: 30 });
+        const sel =
+          `input[name="${f.name}"], textarea[name="${f.name}"], ` +
+          `input[id="${f.name}"], textarea[id="${f.name}"], ` +
+          `input[placeholder*="${f.name}"], input[aria-label*="${f.name}"]`;
+        await page.type(sel, f.value, { delay: 20 });
+        filled++;
       } catch {
-        steps.push({ step: `fill-${key}`, url: page.url(), status: 0, ok: false, message: "selector not found" });
+        missed++;
       }
     }
+    steps.push({ step: "fill-fields", url: page.url(), status: 200, ok: filled > 0, message: `filled ${filled}, missed ${missed}` });
 
     // Upload resume.
     try {
