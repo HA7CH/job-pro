@@ -4,6 +4,21 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.73 — npm package metadata sync (description + keywords)
+
+\`description\` was at the 0.7.x era ("46 via each company's own API"
+with no mention of auto-apply). Updated to call out Phase 2:
+
+> Query Chinese big-tech campus recruiting + auto-apply from your
+> terminal. 50 companies, all 50 live (46 via official APIs, 4 via
+> Liepin third-party fallback). 45/50 with end-to-end verified apply
+> endpoints; 5 structurally-external (Liepin IM × 4 + Unitree WeChat).
+> No signup, no token, no server.
+
+Keywords expanded with: \`auto-apply\`, \`投递\`, \`ats\`, \`greenhouse\`,
+\`lever\`, \`feishu\`, \`moka\`, \`beisen\`, \`liepin\`. Improves npm
+search discoverability.
+
 ## 1.0.72 — \`recon\` ⚠ icon when schema-verified but probe disagrees
 
 When an adapter has \`endpoint_verified: true\` in its schema but the
