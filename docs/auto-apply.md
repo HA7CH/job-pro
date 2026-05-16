@@ -1,10 +1,26 @@
 # Phase 2: auto-apply
 
-Phase 1 (read jobs) is now done: 50 / 50 companies live. This doc is the
-forward plan for Phase 2 — actually submitting applications. We deliberately
-do NOT implement it yet because every careers site uses its own login UX
-and CSRF flow, and writing a bug there has worse consequences than a
-read-side bug.
+Phase 1 (read jobs) is done: 50 / 50 companies live. Phase 2 is **partially**
+shipped as of `0.9.0`:
+
+* **Staging path** is live for every adapter. `job-pro <co> apply <postId>`
+  walks the application form, fills standard fields from
+  `~/.jobpro/profile.json`, and prints a dry-run preview.
+* **Application schema** is exposed by 3 adapters today: `xpeng`,
+  `hoyoverse` (Greenhouse boards), and `weride` (Lever). Run `apply`
+  against any of them to see the staged POST.
+* **Actual submission** (`--really-submit`) is intentionally disabled
+  pending per-ATS validation. The infrastructure is wired up; we just
+  refuse to fire submissions until each adapter family has been
+  end-to-end verified against a live board.
+
+To get started:
+
+```bash
+job-pro profile init           # write ~/.jobpro/profile.json template
+$EDITOR ~/.jobpro/profile.json # fill first_name / last_name / email / phone / resume_path
+job-pro xpeng apply 8548990002 # dry-run preview
+```
 
 ## What we'd need
 
@@ -39,17 +55,18 @@ The matrix below scopes Phase 2 to a *representative subset* across the
 ATS families we already cover. Once the pattern works for one tenant on
 each family, expanding to the rest is mechanical.
 
-| Phase-2 pilot | ATS family             | Login method                              | Submit endpoint                          | Status |
-|---------------|------------------------|-------------------------------------------|------------------------------------------|--------|
-| Tencent       | bespoke (join.qq.com)  | session cookie via login form             | `POST /api/v1/position/applyResume`       | ⏳     |
-| ByteDance     | bespoke (jobs.bytedance.com) | session cookie + CAPTCHA              | `POST /api/v1/user_apply`                 | ⏳     |
-| NIO           | Feishu Recruiting      | Feishu tenant session                     | `POST /api/v1/application/create`         | ⏳     |
-| Megvii        | Moka                   | Moka org login + AES envelope              | `POST /api/outer/ats-apply/website/apply` | ⏳     |
-| vivo          | Beisen iTalent (zhiye) | iTalent candidate session                  | TBD                                       | ⏳     |
-| SenseTime     | Beisen Wecruit         | Beisen Wecruit candidate session           | TBD                                       | ⏳     |
-| XPeng         | Greenhouse             | n/a (apply via Greenhouse-hosted form)     | `POST /v1/applications`                   | ⏳     |
-| WeRide        | Lever                  | n/a (apply via Lever-hosted form)          | `POST /v0/applications`                   | ⏳     |
-| Hikvision     | Liepin (third-party)   | Liepin login + IM-recruiter chat          | n/a (IM-mediated, no API submission)      | ⛔     |
+| Phase-2 pilot | ATS family             | Login method                              | Submit endpoint                                       | Status |
+|---------------|------------------------|-------------------------------------------|-------------------------------------------------------|--------|
+| XPeng         | Greenhouse             | n/a (apply via Greenhouse-hosted form)     | `POST /v1/boards/xpengmotors/jobs/<id>`               | ✅ dry-run |
+| HoYoverse     | Greenhouse             | n/a (apply via Greenhouse-hosted form)     | `POST /v1/boards/hoyoverse/jobs/<id>`                 | ✅ dry-run |
+| WeRide        | Lever                  | n/a (apply via Lever-hosted form)          | `POST jobs.lever.co/weride/<id>/apply` (multipart)    | ✅ dry-run |
+| Tencent       | bespoke (join.qq.com)  | session cookie via login form             | `POST /api/v1/position/applyResume`                   | ⏳     |
+| ByteDance     | bespoke (jobs.bytedance.com) | session cookie + CAPTCHA              | `POST /api/v1/user_apply`                             | ⏳     |
+| NIO           | Feishu Recruiting      | Feishu tenant session                     | `POST /api/v1/application/create`                     | ⏳     |
+| Megvii        | Moka                   | Moka org login + AES envelope              | `POST /api/outer/ats-apply/website/apply`             | ⏳     |
+| vivo          | Beisen iTalent (zhiye) | iTalent candidate session                  | TBD                                                   | ⏳     |
+| SenseTime     | Beisen Wecruit         | Beisen Wecruit candidate session           | TBD                                                   | ⏳     |
+| Hikvision     | Liepin (third-party)   | Liepin login + IM-recruiter chat          | n/a (IM-mediated, no API submission)                  | ⛔     |
 
 The bottom row is intentional: for the four Liepin-backed adapters
 (`hikvision` / `cicc` / `cainiao` / `webank`) Phase 2 doesn't apply

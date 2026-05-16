@@ -35,6 +35,7 @@
 //   * `content=true` on the detail endpoint returns description as escaped HTML.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 export { checkResume };
 
 // ---------- adapter config ----------
@@ -486,6 +487,92 @@ export function createAdapter(cfg: GreenhouseAdapterConfig) {
     };
   }
 
+  // ---------- fetchApplicationSchema (Phase 2) ----------
+  //
+  // Greenhouse boards expose the full question schema at
+  //   GET /v1/boards/<slug>/jobs/<id>?questions=true
+  // The submission endpoint (per Greenhouse Job Board API docs) is
+  //   POST /v1/boards/<slug>/jobs/<id>
+  // with multipart/form-data body whose keys match the `name` fields
+  // returned in the schema. We surface both here; actual submission is
+  // gated behind the `--really-submit` guard in the dispatcher.
+  //
+  // Type adapter: Greenhouse's wire format is identical to our internal
+  // ApplyFormSchema except some `values` arrays come back as `{ value, label }`
+  // objects already, so it's a clean mapping.
+
+  interface GreenhouseRawQuestion {
+    description?: string | null;
+    label?: string;
+    required?: boolean;
+    fields?: Array<{
+      name?: string;
+      type?: string;
+      values?: Array<{ value?: string; label?: string }>;
+    }>;
+  }
+
+  interface GreenhouseJobDetail extends RawJob {
+    questions?: GreenhouseRawQuestion[];
+  }
+
+  async function fetchApplicationSchema(postId: string): Promise<
+    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
+  > {
+    const id = (postId ?? "").trim();
+    if (!id) return { ok: false, source: SOURCE, message: "post_id is required" };
+    const url = `${API_ROOT}/jobs/${encodeURIComponent(id)}?questions=true`;
+    let response: Response;
+    try {
+      response = await fetch(url, { headers: HEADERS });
+    } catch (err) {
+      return {
+        ok: false,
+        source: SOURCE,
+        message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        source: SOURCE,
+        message: `HTTP ${response.status}: ${response.statusText}`,
+      };
+    }
+    let job: GreenhouseJobDetail;
+    try {
+      job = (await response.json()) as GreenhouseJobDetail;
+    } catch (err) {
+      return {
+        ok: false,
+        source: SOURCE,
+        message: `bad JSON: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    const questions: ApplyQuestion[] = (job.questions ?? []).map((q) => ({
+      label: q.label ?? "",
+      description: q.description ?? null,
+      required: q.required ?? false,
+      fields: (q.fields ?? []).map((f) => ({
+        name: f.name ?? "",
+        type: f.type ?? "input_text",
+        values: (f.values ?? []).map((v) => ({ value: v.value ?? "", label: v.label ?? "" })),
+      })),
+    }));
+    return {
+      ok: true,
+      schema: {
+        source: SOURCE,
+        post_id: id,
+        job_title: job.title ?? "",
+        apply_url: job.absolute_url ?? `${BOARD_URL}/jobs/${id}`,
+        submit_endpoint: `${API_ROOT}/jobs/${encodeURIComponent(id)}`,
+        submit_method: "POST",
+        questions,
+      },
+    };
+  }
+
   return {
     searchPositions,
     fetchAllPositions,
@@ -496,5 +583,6 @@ export function createAdapter(cfg: GreenhouseAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
+    fetchApplicationSchema,
   };
 }

@@ -59,4 +59,10 @@ export interface CompanyAdapter {
   findNoticesByQuestion(question: string, opts?: AdapterFlowOptions): Promise<unknown>;
   matchResume(text: string, opts?: AdapterMatchOptions): Promise<unknown>;
   checkResume(text: string): unknown;
+  /**
+   * Phase 2 — return the application-form schema (questions, submit endpoint).
+   * Optional: only Greenhouse + Lever boards implement it today; the rest
+   * surface "Phase 2 not yet wired" via the default dispatcher path.
+   */
+  fetchApplicationSchema?(postId: string): Promise<unknown>;
 }

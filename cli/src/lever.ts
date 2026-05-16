@@ -27,6 +27,7 @@
 //   * `categories.allLocations` is an array; we join with " / " when len > 1.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 export { checkResume };
 
 // ---------- adapter config ----------
@@ -461,6 +462,112 @@ export function createAdapter(cfg: LeverAdapterConfig) {
     };
   }
 
+  // ---------- fetchApplicationSchema (Phase 2) ----------
+  //
+  // Lever's application form is rendered server-side at
+  //   GET https://jobs.lever.co/<slug>/<id>/apply
+  // For programmatic access, the detail endpoint `/v0/postings/<slug>/<id>?mode=json`
+  // includes `customQuestions` (array of { fields, text, description }) and
+  // `applyForm` metadata. The actual submission endpoint Lever exposes
+  // publicly is the same apply page — they accept multipart/form-data on
+  // POST to https://jobs.lever.co/<slug>/<id>/apply (the form action).
+  //
+  // We surface the customQuestions normalised into our ApplyFormSchema
+  // shape. Every Lever board also requires the standard contact-info
+  // fields (name / email / phone / resume), which we hard-code as a
+  // synthesised prelude — Lever's `applyForm` describes them implicitly.
+
+  interface LeverDetailExtra extends RawJob {
+    customQuestions?: Array<{
+      text?: string;
+      description?: string;
+      fields?: Array<{
+        text?: string;
+        type?: string;
+        required?: boolean;
+        options?: Array<{ text?: string }>;
+      }>;
+    }>;
+    applyForm?: unknown;
+  }
+
+  async function fetchApplicationSchema(postId: string): Promise<
+    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
+  > {
+    const id = (postId ?? "").trim();
+    if (!id) return { ok: false, source: SOURCE, message: "post_id is required" };
+    let response: Response;
+    try {
+      response = await fetch(API_DETAIL(id), { headers: HEADERS });
+    } catch (err) {
+      return {
+        ok: false,
+        source: SOURCE,
+        message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        source: SOURCE,
+        message: `HTTP ${response.status}: ${response.statusText}`,
+      };
+    }
+    let job: LeverDetailExtra;
+    try {
+      job = (await response.json()) as LeverDetailExtra;
+    } catch (err) {
+      return {
+        ok: false,
+        source: SOURCE,
+        message: `bad JSON: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    // Lever's standard contact-info block.
+    const standard: ApplyQuestion[] = [
+      { label: "First Name", required: true, fields: [{ name: "first_name", type: "input_text" }] },
+      { label: "Last Name",  required: true, fields: [{ name: "last_name",  type: "input_text" }] },
+      { label: "Email",      required: true, fields: [{ name: "email",      type: "input_text" }] },
+      { label: "Phone",      required: true, fields: [{ name: "phone",      type: "input_text" }] },
+      { label: "Resume",     required: true, fields: [{ name: "resume",     type: "input_file" }] },
+    ];
+    // Custom-question fields keyed by their human label so the staging
+    // step can match them via profile.custom["…"].
+    const custom: ApplyQuestion[] = (job.customQuestions ?? []).flatMap((cq) =>
+      (cq.fields ?? []).map((f) => ({
+        label: f.text ?? cq.text ?? "",
+        description: cq.description ?? null,
+        required: f.required ?? false,
+        fields: [
+          {
+            name: (f.text ?? cq.text ?? "").slice(0, 60).replace(/\s+/g, "_").toLowerCase(),
+            type:
+              f.type === "multiple-choice"
+                ? "single_select"
+                : f.type === "multi-choice"
+                  ? "multi_select"
+                  : f.type === "textarea"
+                    ? "textarea"
+                    : "input_text",
+            values: (f.options ?? []).map((o) => ({ value: o.text ?? "", label: o.text ?? "" })),
+          },
+        ],
+      }))
+    );
+    return {
+      ok: true,
+      schema: {
+        source: SOURCE,
+        post_id: id,
+        job_title: job.text ?? "",
+        apply_url: job.applyUrl ?? job.hostedUrl ?? `${BOARD_URL}/${id}/apply`,
+        submit_endpoint: `${BOARD_URL}/${id}/apply`,
+        submit_method: "POST",
+        questions: [...standard, ...custom],
+      },
+    };
+  }
+
   return {
     searchPositions,
     fetchAllPositions,
@@ -471,5 +578,6 @@ export function createAdapter(cfg: LeverAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
+    fetchApplicationSchema,
   };
 }

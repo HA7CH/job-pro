@@ -52,14 +52,23 @@ import * as horizonrobotics from "./horizonrobotics.js";
 import * as cambricon from "./cambricon.js";
 import type { CompanyAdapter } from "./adapter.js";
 import {
+  loadProfile,
+  profileTemplate,
+  stageApplication,
+  formatStaged,
+  type ApplyFormSchema,
+} from "./apply.js";
+import {
   memoryList,
   memoryGet,
   memorySet,
   memoryEvent,
   memoryClear,
 } from "./memory.js";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
 
-const VERSION = "0.8.2";
+const VERSION = "0.9.0";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -140,12 +149,20 @@ job-pro — query Chinese big-tech campus recruiting from your terminal
 USAGE
   job-pro <company> <verb> [options]
   job-pro list [--compact]            list all 50 companies + source family
+  job-pro profile init [--force]      write ~/.jobpro/profile.json template
+  job-pro profile show                print the loaded profile
   job-pro --version
   job-pro help
 
 50 companies, all live. Run \`job-pro list\` for the full table grouped
 by ATS family (Bespoke / Feishu / Beisen Wecruit / Beisen iTalent / Moka
 / Greenhouse-Lever / Liepin). Coverage summary at job.ha7ch.com.
+
+PHASE 2 (auto-apply) is in early access. \`job-pro <co> apply <postId>\`
+prints the staged POST in dry-run mode. Today only Greenhouse +
+Lever boards (xpeng / hoyoverse / weride) expose the application
+schema; the rest return a "not yet wired" note. See docs/auto-apply.md
+for the rollout plan.
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -158,6 +175,9 @@ VERBS (same surface for every company)
   match <resume-text-or-->          rank jobs by overlap with resume text
                                     pass "-" to read resume from stdin
   resume-check <resume-text-or-->   structural sanity check on a resume
+  apply <post_id>                   stage an application (Phase 2 dry-run)
+                                    --really-submit is intentionally disabled
+                                    until per-ATS flows are validated.
   memory list | get <k> | set k=v | event <kind> [payload] | clear
 
 OUTPUT
@@ -424,6 +444,77 @@ async function runCompany(
     return emit(adapter.checkResume(text), compact);
   }
 
+  if (verb === "apply") {
+    const postId = args[0];
+    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--dry-run | --really-submit]`);
+    const reallySubmit = args.includes("--really-submit");
+    const fetchSchema = adapter.fetchApplicationSchema;
+    if (typeof fetchSchema !== "function") {
+      return emit(
+        {
+          ok: false,
+          source: company,
+          post_id: postId,
+          message:
+            `apply: Phase 2 not yet wired for "${company}". Only Greenhouse + Lever ` +
+            `boards (xpeng / weride / hoyoverse) expose an application schema today. ` +
+            `See docs/auto-apply.md for the rollout plan.`,
+        },
+        compact
+      );
+    }
+    if (reallySubmit) {
+      return emit(
+        {
+          ok: false,
+          source: company,
+          post_id: postId,
+          message:
+            `--really-submit is intentionally not implemented yet. Phase 2 ships the ` +
+            `staging path first so you can see exactly what would be POSTed before any ` +
+            `submission actually fires. Re-run without --really-submit for the dry-run.`,
+        },
+        compact
+      );
+    }
+    const schemaResult = await fetchSchema.call(adapter, postId);
+    const sr = schemaResult as { ok?: boolean; schema?: ApplyFormSchema; message?: string };
+    if (!sr.ok || !sr.schema) {
+      return emit({ ok: false, source: company, post_id: postId, message: sr.message ?? "unknown error" }, compact);
+    }
+    const prof = loadProfile();
+    if (!prof.ok) {
+      return emit(
+        {
+          ok: false,
+          source: company,
+          post_id: postId,
+          schema: sr.schema,
+          message: prof.message,
+          hint: `run \`job-pro profile init\` to create a template.`,
+        },
+        compact
+      );
+    }
+    const staged = stageApplication(sr.schema, prof.profile);
+    if (compact) {
+      return emit({ ok: true, staged }, compact);
+    }
+    console.log(formatStaged(staged));
+    if (!staged.ready) {
+      console.log(
+        `\nFill the unanswered required fields in ${profileTemplate().path} ` +
+          `(profile.custom.<name> for unknown fields), then re-run.`
+      );
+    } else {
+      console.log(
+        `\nDry-run complete. --really-submit will be enabled in a future release ` +
+          `once per-ATS submission flows have been validated against live boards.`
+      );
+    }
+    return;
+  }
+
   if (verb === "memory") {
     const [sub, ...subArgs] = args;
     if (!sub) die(`usage: job-pro ${company} memory <list|get|set|event|clear>`);
@@ -513,6 +604,30 @@ async function main() {
     const compact = args.includes("--compact");
     printCompanyList(compact);
     return;
+  }
+  if (cmd === "profile") {
+    const sub = args[1];
+    if (sub === "init") {
+      const { path, template } = profileTemplate();
+      if (existsSync(path) && !args.includes("--force")) {
+        console.error(`profile already exists at ${path}; pass --force to overwrite.`);
+        process.exit(1);
+      }
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify(template, null, 2) + "\n", "utf8");
+      console.log(`Wrote ${path}. Fill in first_name / last_name / email / phone / resume_path before running \`job-pro <co> apply\`.`);
+      return;
+    }
+    if (sub === "show") {
+      const r = loadProfile();
+      if (!r.ok) {
+        console.error(r.message);
+        process.exit(1);
+      }
+      console.log(JSON.stringify(r.profile, null, 2));
+      return;
+    }
+    die(`usage: job-pro profile <init [--force] | show>`);
   }
 
   const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[cmd];
