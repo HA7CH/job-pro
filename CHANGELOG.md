@@ -4,6 +4,27 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.56 — submit-smoke covers all 8 newly-verified multipart-session
+
+Adds the 8 multipart-session adapters promoted in 1.0.50-1.0.55
+(sf, netease, didi, pingan, byd, bilibili, xiaohongshu, baidu) to
+\`pnpm test:debug-submit\`. Submit wire format coverage:
+
+\`\`\`
+12 → 20 pass, 13.5s
+\`\`\`
+
+Test matrix at 1.0.56:
+
+| Layer | Cmd | Result |
+|-------|-----|--------|
+| Unit | \`pnpm test:unit\` | 32/32 |
+| Read | \`pnpm test\` | 50/50 healthy |
+| Schema | \`pnpm test:apply\` | 50/50 ok |
+| Submit wire | \`pnpm test:debug-submit\` | **20/20 pass** |
+
+Total: 152 assertions / 0 red.
+
 ## 1.0.55 — baidu re-routed to /applyJob.json (host root) → verified
 
 Same pattern as 1.0.54 (xiaohongshu): drop the over-specific path

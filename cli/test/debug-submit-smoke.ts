@@ -30,6 +30,14 @@ import * as pdd from "../src/pdd.js";
 import * as meituan from "../src/meituan.js";
 import * as mihoyo from "../src/mihoyo.js";
 import * as liauto from "../src/liauto.js";
+import * as sf from "../src/sf.js";
+import * as netease from "../src/netease.js";
+import * as didi from "../src/didi.js";
+import * as pingan from "../src/pingan.js";
+import * as byd from "../src/byd.js";
+import * as bilibili from "../src/bilibili.js";
+import * as xiaohongshu from "../src/xiaohongshu.js";
+import * as baidu from "../src/baidu.js";
 import {
   stageApplication,
   submitApplication,
@@ -63,11 +71,20 @@ const ADAPTERS: Array<{ name: string; adapter: Adapter; family: Family }> = [
   { name: "hoyoverse", adapter: hoyoverse as unknown as Adapter, family: "generic" },
   // multipart-session probe-verified (1.0.39 / 1.0.40). Generic submit also
   // works in debug mode with null session — UA-only headers via fallback.
-  { name: "alibaba",   adapter: alibaba   as unknown as Adapter, family: "generic" },
-  { name: "pdd",       adapter: pdd       as unknown as Adapter, family: "generic" },
-  { name: "meituan",   adapter: meituan   as unknown as Adapter, family: "generic" },
-  { name: "mihoyo",    adapter: mihoyo    as unknown as Adapter, family: "generic" },
-  { name: "liauto",    adapter: liauto    as unknown as Adapter, family: "generic" },
+  { name: "alibaba",     adapter: alibaba     as unknown as Adapter, family: "generic" },
+  { name: "pdd",         adapter: pdd         as unknown as Adapter, family: "generic" },
+  { name: "meituan",     adapter: meituan     as unknown as Adapter, family: "generic" },
+  { name: "mihoyo",      adapter: mihoyo      as unknown as Adapter, family: "generic" },
+  { name: "liauto",      adapter: liauto      as unknown as Adapter, family: "generic" },
+  // multipart-session probe-verified via re-routing (1.0.50–1.0.55).
+  { name: "sf",          adapter: sf          as unknown as Adapter, family: "generic" },
+  { name: "netease",     adapter: netease     as unknown as Adapter, family: "generic" },
+  { name: "didi",        adapter: didi        as unknown as Adapter, family: "generic" },
+  { name: "pingan",      adapter: pingan      as unknown as Adapter, family: "generic" },
+  { name: "byd",         adapter: byd         as unknown as Adapter, family: "generic" },
+  { name: "bilibili",    adapter: bilibili    as unknown as Adapter, family: "generic" },
+  { name: "xiaohongshu", adapter: xiaohongshu as unknown as Adapter, family: "generic" },
+  { name: "baidu",       adapter: baidu       as unknown as Adapter, family: "generic" },
   // one rep per family-executor — null session OK in debug mode (executor
   // returns UA-only headers).
   { name: "nio",       adapter: nio       as unknown as Adapter, family: "feishu-3-step" },
