@@ -174,7 +174,7 @@ USAGE
   job-pro profile show                print the loaded profile
   job-pro find <keyword>              search ALL 50 companies in parallel
                                       [--limit N] [--companies a,b,c]
-                                      [--timeout ms] [--compact]
+                                      [--timeout ms] [--compact | --text]
   job-pro --version
   job-pro help
 
@@ -1238,9 +1238,10 @@ async function main() {
   }
   if (cmd === "find") {
     const compact = args.includes("--compact");
+    const textMode = args.includes("--text");
     const keyword = args[1];
     if (!keyword || keyword.startsWith("--")) {
-      die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--compact]`);
+      die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--compact | --text]`);
     }
     const { args: aLimit, value: limitStr } = popFlagValue(args, "--limit");
     const { args: aCompanies, value: companiesStr } = popFlagValue(aLimit, "--companies");
@@ -1291,6 +1292,25 @@ async function main() {
     const totalMs = Date.now() - startedAt;
     const withHits = settled.filter((r) => r.count > 0);
     const total = withHits.reduce((s, r) => s + r.count, 0);
+    const failed = settled.filter((r) => !r.ok).map((r) => ({ company: r.company, message: r.message }));
+    if (textMode) {
+      console.log(`\nfind "${keyword}" — ${total} hit(s) across ${withHits.length}/${scope.length} companies (${totalMs}ms)\n`);
+      for (const r of withHits) {
+        console.log(`▌ ${r.company} (${r.count})`);
+        for (const p of r.positions as Array<{ post_id?: string; title?: string; work_cities?: string; apply_url?: string }>) {
+          const title = (p.title ?? "").trim().replace(/\s+/g, " ");
+          const loc = (p.work_cities ?? "").trim();
+          console.log(`  ${p.post_id ?? "?"}  ${title}${loc ? ` — ${loc}` : ""}`);
+          if (p.apply_url) console.log(`    ${p.apply_url}`);
+        }
+        console.log("");
+      }
+      if (failed.length > 0) {
+        console.log(`Failed (${failed.length}):`);
+        for (const f of failed) console.log(`  ${f.company}: ${f.message}`);
+      }
+      return;
+    }
     emit(
       {
         ok: true,
@@ -1300,7 +1320,7 @@ async function main() {
         scanned_companies: scope.length,
         elapsed_ms: totalMs,
         results: withHits,
-        failed: settled.filter((r) => !r.ok).map((r) => ({ company: r.company, message: r.message })),
+        failed,
       },
       compact
     );

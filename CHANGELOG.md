@@ -4,6 +4,23 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.13 — \`find --text\` human-readable output
+
+Adds a `--text` mode to 1.0.12's `find`. JSON stays the default
+(scripts/jq) but `--text` prints a compact table:
+
+```
+find "intern" — 5 hit(s) across 3/3 companies (1938ms)
+
+▌ xpeng (2)
+  8548990002  AI Agent Data Pipeline Intern — Santa Clara, CA
+    https://job-boards.greenhouse.io/xpengmotors/jobs/8548990002
+  …
+```
+
+Verified upstream health on the same iteration: \`pnpm test\` reports
+50 healthy / 0 broken / 50 total in 4.0s.
+
 ## 1.0.12 — \`job-pro find <keyword>\` cross-company parallel search
 
 New top-level verb: \`job-pro find "intern"\` fires
