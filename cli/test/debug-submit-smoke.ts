@@ -25,6 +25,11 @@ import * as nio from "../src/nio.js";
 import * as megvii from "../src/megvii.js";
 import * as sensetime from "../src/sensetime.js";
 import * as iflytek from "../src/iflytek.js";
+import * as alibaba from "../src/alibaba.js";
+import * as pdd from "../src/pdd.js";
+import * as meituan from "../src/meituan.js";
+import * as mihoyo from "../src/mihoyo.js";
+import * as liauto from "../src/liauto.js";
 import {
   stageApplication,
   submitApplication,
@@ -56,6 +61,13 @@ const ADAPTERS: Array<{ name: string; adapter: Adapter; family: Family }> = [
   { name: "xpeng",     adapter: xpeng     as unknown as Adapter, family: "generic" },
   { name: "weride",    adapter: weride    as unknown as Adapter, family: "generic" },
   { name: "hoyoverse", adapter: hoyoverse as unknown as Adapter, family: "generic" },
+  // multipart-session probe-verified (1.0.39 / 1.0.40). Generic submit also
+  // works in debug mode with null session — UA-only headers via fallback.
+  { name: "alibaba",   adapter: alibaba   as unknown as Adapter, family: "generic" },
+  { name: "pdd",       adapter: pdd       as unknown as Adapter, family: "generic" },
+  { name: "meituan",   adapter: meituan   as unknown as Adapter, family: "generic" },
+  { name: "mihoyo",    adapter: mihoyo    as unknown as Adapter, family: "generic" },
+  { name: "liauto",    adapter: liauto    as unknown as Adapter, family: "generic" },
   // one rep per family-executor — null session OK in debug mode (executor
   // returns UA-only headers).
   { name: "nio",       adapter: nio       as unknown as Adapter, family: "feishu-3-step" },

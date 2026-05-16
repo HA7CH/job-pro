@@ -4,6 +4,35 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.44 — submit-smoke covers all 5 multipart-session probe-verified
+
+Adds the 5 multipart-session adapters newly promoted to
+\`endpoint_verified: true\` (1.0.39 alibaba + pdd, 1.0.40 meituan +
+mihoyo + liauto) to \`pnpm test:debug-submit\`. Generic submit path
+works with null session in debug mode (UA-only headers via fallback).
+
+**Submit wire format: 12 pass / 0 broken / 12 (5.7s)** (was 7/7).
+
+Coverage now spans every executor family + every verified-real
+multipart-session adapter:
+
+* multipart-anon (3): xpeng / weride / hoyoverse
+* multipart-session (5): alibaba / pdd / meituan / mihoyo / liauto
+* feishu-3-step (1): nio
+* moka-aes (1): megvii
+* beisen-wecruit (1): sensetime
+* beisen-italent (1): iflytek
+
+Test matrix:
+\`\`\`
+unit            32/32  (no network, CI)
+read              50/50 healthy   3.7s
+schema            50/50 ok        3.4s
+submit wire       12/12 pass      5.7s
+———————————————————
+                 144 / 0
+\`\`\`
+
 ## 1.0.43 — \`recon\` per-step timeouts + lilith skip + explicit exit
 
 1.0.42's \`recon\` against all 50 adapters hung indefinitely because:
