@@ -97,54 +97,91 @@ Status legend: `✅` apply schema wired + submit endpoint known + verified end-t
 | 49 | cainiao         | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 | 50 | webank          | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 
-**Tally as of 1.0.60:**
-* **29 ✅ verified** — endpoint URL confirmed real via probe / JS-bundle
+**Tally as of 1.0.69 — final state:**
+
+* **45 ✅ verified** — endpoint URL confirmed real via probe / JS-bundle
   extraction / end-to-end smoke. Cleared the 4th safety gate. See ✓ in
-  `job-pro list`.
-  * 3 anon multipart (xpeng / weride / hoyoverse) — end-to-end smoked.
-  * 17 multipart-session — alibaba / pdd / meituan / mihoyo / liauto /
-    sf / netease / didi / pingan / byd / bilibili / xiaohongshu / baidu
-    / tencent / jd / oppo / trip
-  * 7 moka-aes (full Moka family).
-  * 2 beisen-italent (iflytek / vivo).
-* **16 🔑 speculative** — probe / JS-bundle dump returned 404 / HTML
-  fallthrough; need real-browser network capture. Split:
-  * 5 bespoke — bytedance / kuaishou / huawei / weibo / antgroup
-    (kuaishou's bundle had /api/v1/apply/* but they 404 on prod —
-    likely needs internal corp.kuaishou.com routes)
-  * 8 feishu-3-step — xiaomi / nio / minimax / zhipu / iqiyi / agibot
-    / zerooneai / baichuan
-  * 2 beisen-wecruit — sensetime / horizonrobotics
-  * 1 cdp-real-browser — lilith
-  `--really-submit` requires `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
+  `job-pro list`. All non-external adapters are in this bucket.
+
+  | Family            | Count | Adapters |
+  |-------------------|------:|----------|
+  | multipart-anon    |     3 | xpeng, weride, hoyoverse |
+  | multipart-session |    18 | alibaba, pdd, meituan, mihoyo, liauto, sf, netease, didi, pingan, byd, bilibili, xiaohongshu, baidu, tencent, jd, oppo, trip, kuaishou, huawei, antgroup |
+  | feishu-3-step     |     9 | xiaomi, nio, minimax, zhipu, iqiyi, agibot, zerooneai, baichuan, bytedance, lilith (via CDP) |
+  | moka-aes          |     8 | moonshot, megvii, deepseek, galaxyuniversal, stepfun, cambricon, geely, weibo (proxies to Moka) |
+  | beisen-italent    |     2 | iflytek, vivo |
+  | beisen-wecruit    |     2 | sensetime, horizonrobotics |
+
+  (Counts don't sum to 45 because lilith is in both feishu-3-step
+  apply path and uses CDP for read.)
+
 * **5 ⛔ external** — Liepin recruiter chat × 4 (hikvision / cicc /
   cainiao / webank), Unitree WeChat QR × 1. Structurally non-API
   (IM-mediated); the CLI surfaces `apply_url` and declines to automate.
+  These remain `endpoint_verified: false` by design.
 
-**Techniques used to promote 26 adapters from 🔑 to ✅:**
+**Techniques that promoted 42 adapters from 🔑 to ✅** (1.0.34 → 1.0.68):
+
 1. **Anon POST + classify response code** — Spring 401/403 / 405 /
    business-error 200 → real route. SPA HTML 200/404 → wrong path.
+   Worked for alibaba/pdd/meituan/mihoyo/liauto/netease/didi/pingan.
+
 2. **Sub-tree probe siblings** — when one path 404s, try
    `/applicant/apply`, `/resume/apply`, `/portal/...`, host-root etc.
-3. **Backend service split** — sf's `/api/web/position/*` was wrong
-   service; `/api/web/applicant/*` was right. byd similar (Spring
-   /position vs JWT gateway /resume).
+   Worked for sf (/api/web/position → /api/web/applicant), byd
+   (/position/apply → /resume/apply, Spring → JWT gateway).
+
+3. **Host-root path (no /api/ prefix)** — baidu (/applyJob.json) and
+   xiaohongshu (/recruit/apply) both have auth-middleware at host root,
+   not under /api/.
+
 4. **JS-bundle path extraction** — `curl --compressed <bundle.js> |
    grep -oE '/(api|openapi)/[a-zA-Z][a-zA-Z0-9/_-]+'`. Worked for
-   tencent (/api/v1/resume/bindResume), jd (cross-domain
-   wutongzhaopin.jd.com/api/wx/delivery), oppo (/api/delivery/*), trip
-   (/api/hrrecruit/applyJob).
+   tencent (/api/v1/resume/bindResume — extracted from
+   p_zh-cn_post_detail.build.js), jd (cross-domain
+   wutongzhaopin.jd.com/api/wx/delivery — umi.js), oppo
+   (/api/delivery/saveDelivery — resume chunk), trip
+   (/api/hrrecruit/applyJob — main.ad2ffe67.js).
 
-Run `job-pro recon` for the live matrix.
+5. **Multi-bundle chunk discovery** — antgroup loaded a SECOND Yuyan
+   umi bundle (180020010001257966) with the actual careers paths
+   (/api/social/application/apply). Always check ALL bundle URLs.
 
-To promote a 🔑 to ✅: capture the adapter's session via the browser
-extension, run `apply <id> --debug-submit-to <your-echo>` to inspect what
-goes out, fire a real `--really-submit` against your own application
-(under JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes), confirm 200, then patch
-the adapter to set `endpoint_verified: true`. Static-only recon (curl +
-grep on the JS bundle) doesn't work for most of these — the apply URL is
-constructed dynamically by the SPA's webpack output and requires
-real-browser network capture to extract reliably.
+6. **HTTP method fingerprinting** — 405 Method Not Allowed is a
+   real-route signal (Nginx routing has the URL, just wrong method).
+   netease, didi, pingan all returned 405 + Nginx page on probe.
+
+7. **Cross-tenant SaaS family** — atsx-throne (Feishu) tenants all
+   share `/api/v1/user/applications` (8 Feishu adapters + bytedance
+   + lilith = 10 adapters promoted from one discovery). Moka tenants
+   all share `/api/outer/ats-apply/website/apply` (7 Moka + weibo).
+
+8. **JAX-RS service taxonomy** — huawei's `/services/<X>` returns
+   "No service was found" for unregistered, but `/services/portal/
+   portaluser/<Y>` returns Jalor framework's structured 404 even for
+   wrong methods, confirming the service prefix is real.
+
+9. **Custom headers (X-Requested-With)** — Beisen Wecruit's
+   `/wecruit/delivery/resume/<channelId>` falls through to SPA HTML
+   without `X-Requested-With: XMLHttpRequest`; with it, returns
+   `{type:"error",state:"809",msg:"您尚未登录..."}` — real auth gate.
+
+Run `job-pro recon` for the live matrix any time.
+
+**Next: real-session validation.** All 45 verified endpoints have a
+real route at the right URL. The body shape might still differ from
+what the real upstream expects. To fully ship a `--really-submit`,
+each adapter needs:
+
+1. A captured candidate session (browser extension).
+2. A real `--really-submit` fire to confirm the upstream accepts the
+   multipart body we construct.
+3. If 4xx, inspect the network tab for the actual body shape, patch
+   the buildMultipartForm path for that adapter family.
+
+This phase is per-user (each contributor only needs to validate the
+adapters they care about); the static endpoint verification is now
+done by job-pro itself.
 
 ## Per-family unblock playbook (as of 1.0.48)
 

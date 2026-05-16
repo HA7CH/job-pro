@@ -4,6 +4,27 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.70 — docs/auto-apply: final-state tally + 9-technique playbook
+
+Synced docs/auto-apply.md to the final 45 ✅ / 5 ⛔ state. Rewrote
+the techniques section: from the 4 techniques recorded in 1.0.61
+(when 26 were verified) to **9 techniques** that ultimately took 42
+adapters from 🔑 to ✅ across 1.0.34 → 1.0.68:
+
+1. Anon POST + classify response code
+2. Sub-tree probe siblings
+3. Host-root path (no /api/ prefix)
+4. JS-bundle path extraction (curl --compressed | grep)
+5. Multi-bundle chunk discovery (antgroup loaded a second umi bundle)
+6. HTTP method fingerprinting (405 = real route)
+7. Cross-tenant SaaS family (Feishu × 10, Moka × 8 from one discovery each)
+8. JAX-RS service taxonomy (huawei's Jalor 404 vs "No service")
+9. Custom headers (Beisen Wecruit's X-Requested-With trick)
+
+Documents the workflow for whoever picks up the body-shape validation
+phase: each contributor only needs to validate the adapters they care
+about; the static endpoint-URL discovery is done.
+
 ## 1.0.69 — submit-smoke covers all 22 verified multipart-session
 
 Added the 7 newly-verified multipart-session adapters (1.0.57–1.0.68)
