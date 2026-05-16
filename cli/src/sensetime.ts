@@ -51,3 +51,4 @@ export const getNotice = adapter.getNotice;
 export const findNoticesByQuestion = adapter.findNoticesByQuestion;
 export const matchResume = adapter.matchResume;
 export const checkResume = adapter.checkResume;
+export const fetchApplicationSchema = adapter.fetchApplicationSchema;

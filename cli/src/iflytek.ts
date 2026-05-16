@@ -436,3 +436,48 @@ export { extractResumeSignals, scoreOverlap };
 // Silence unused warning for the GET helper — kept for future taxonomy/city
 // endpoints that return BeisenEnvelope JSON via GET.
 void get;
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema, ApplyQuestion } from './apply.js';
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? '').trim();
+  if (!id) return { ok: false, source: SOURCE, message: 'post_id is required' };
+  let title = '';
+  try {
+    const detail = await fetchPositionDetail(id) as { ok?: boolean; title?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: SOURCE, message: detail.message ?? 'post not found' };
+    }
+    title = detail?.title ?? '';
+  } catch {}
+  const questions: ApplyQuestion[] = [
+    { label: 'Name',   required: true, fields: [{ name: 'name',   type: 'input_text' }] },
+    { label: 'Email',  required: true, fields: [{ name: 'email',  type: 'input_text' }] },
+    { label: 'Phone',  required: true, fields: [{ name: 'phone',  type: 'input_text' }] },
+    { label: 'Resume', required: true, fields: [{ name: 'resume', type: 'input_file' }] },
+  ];
+  return {
+    ok: true,
+    schema: {
+      source: SOURCE,
+      post_id: id,
+      job_title: title,
+      apply_url: 'https://iflytek.zhiye.com/jobs',
+      submit_endpoint: 'https://iflytek.zhiye.com/api/Apply/SubmitResume',
+      submit_method: 'POST',
+      submit_kind: 'beisen-italent',
+      submit_notes:
+        'Beisen iTalent apply: POST /api/Resume/UploadResume (multipart) + ' +
+        'POST /api/Apply/SubmitResume with { JobAdId, ResumeId, … }. ' +
+        'Requires candidate session — Beisen iTalent uses email+phone+OTP login at ' +
+        '/login.html. Capture via extension/, drop session.json under ~/.jobpro/. ' +
+        'Multi-step submitter lands in a future iteration.',
+      questions,
+    },
+  };
+}

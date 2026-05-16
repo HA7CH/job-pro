@@ -70,7 +70,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.3";
+const VERSION = "0.9.4";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -161,10 +161,12 @@ by ATS family (Bespoke / Feishu / Beisen Wecruit / Beisen iTalent / Moka
 / Greenhouse-Lever / Liepin). Coverage summary at job.ha7ch.com.
 
 PHASE 2 (auto-apply) is in early access. \`job-pro <co> apply <postId>\`
-prints the staged POST in dry-run mode. Today only Greenhouse +
-Lever boards (xpeng / hoyoverse / weride) expose the application
-schema; the rest return a "not yet wired" note. See docs/auto-apply.md
-for the rollout plan.
+prints the staged POST in dry-run mode. 23 / 50 adapters expose the
+application schema today: 3 ✅ Greenhouse/Lever (auto-submit ready),
+9 🟡 Feishu, 7 🟡 Moka, 2 🟡 Beisen Wecruit, 2 🟡 Beisen iTalent (all
+🟡 need a captured session.json + the family-specific multi-step
+submitter). The remaining 27 fall back to a "Phase 2 not yet wired"
+note. See docs/auto-apply.md.
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)

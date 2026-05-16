@@ -22,6 +22,7 @@
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import { createDecipheriv } from "node:crypto";
+import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 export { checkResume };
 
 // ---------- adapter config ----------
@@ -522,6 +523,66 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     };
   }
 
+  // ---------- Phase 2: fetchApplicationSchema ----------
+  //
+  // Moka apply endpoints discovered in
+  // static-ats.mokahr.com/recruitment-web-client/javascripts/recruitmentWeb-*.js
+  // (probed 2026-05-16, 4.2 MB bundle):
+  //
+  //   GET  /api/get_job_apply_form/?jobId=<uuid>&orgId=<slug>
+  //        → returns the per-job questions array (subject to org config)
+  //   POST /api/outer/ats-apply/website/applicant-limit-check
+  //        → rate-limit / dedupe pre-flight
+  //   POST /api/outer/ats-apply/website/getValidateConfig
+  //        → returns whether SMS validation is required
+  //   POST /api/outer/ats-apply/website/sendApplyValidateSmsCode
+  //        → send the candidate's phone an SMS code
+  //   POST /api/outer/ats-apply/website/apply
+  //        → final submission. Body is AES-128-CBC encrypted with the
+  //          per-response `necromancer` key + page-level aesIv (same
+  //          envelope as our existing read-side cli/src/moka.ts decrypt).
+  //
+  // The whole flow requires the candidate to be logged in via Moka's
+  // candidate-portal (email + SMS verification). Cookies for that
+  // session are captured by the browser extension and dropped under
+  // ~/.jobpro/<adapter>.session.json — see docs/auto-apply.md.
+  async function fetchApplicationSchema(postId: string): Promise<
+    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
+  > {
+    const id = (postId ?? "").trim();
+    if (!id) return { ok: false, source: SOURCE, message: "post_id is required" };
+    // Find the job title via our existing search infrastructure.
+    const r = await fetchPositionDetail(id);
+    const detailAny = r as { ok?: boolean; title?: string; message?: string };
+    // Standard contact-info questions Moka tenants always require.
+    const questions: ApplyQuestion[] = [
+      { label: "Name",   required: true, fields: [{ name: "name",   type: "input_text" }] },
+      { label: "Email",  required: true, fields: [{ name: "email",  type: "input_text" }] },
+      { label: "Phone",  required: true, fields: [{ name: "phone",  type: "input_text" }] },
+      { label: "Resume", required: true, fields: [{ name: "resume", type: "input_file" }] },
+    ];
+    return {
+      ok: true,
+      schema: {
+        source: SOURCE,
+        post_id: id,
+        job_title: detailAny.title ?? "",
+        apply_url: `${portalUrl(pickChannel())}#/jobs/${encodeURIComponent(id)}`,
+        submit_endpoint: "https://app.mokahr.com/api/outer/ats-apply/website/apply",
+        submit_method: "POST",
+        submit_kind: "moka-aes",
+        submit_notes:
+          "Moka apply flow: GET /api/get_job_apply_form (questions) → " +
+          "POST /applicant-limit-check (rate-limit) → POST /getValidateConfig + " +
+          "/sendApplyValidateSmsCode (if SMS required) → POST /website/apply with " +
+          "AES-128-CBC envelope {data, necromancer} (same encryption as the read-side " +
+          "list endpoint). Requires candidate session — capture via extension/, drop " +
+          "session.json under ~/.jobpro/. Multi-step submitter wires in next iteration.",
+        questions,
+      },
+    };
+  }
+
   return {
     searchPositions,
     fetchAllPositions,
@@ -532,6 +593,7 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
+    fetchApplicationSchema,
   };
 }
 
