@@ -1494,7 +1494,10 @@ async function main() {
         // the process never exits. Skip it explicitly; users who want to
         // recon lilith can scope --companies=lilith and accept the hang.
         if (company === "lilith") {
-          return { company, classification: "probe-error", detail: "skipped — CDP adapter (puppeteer); pass --companies=lilith explicitly to probe" };
+          // lilith is in ENDPOINT_VERIFIED but we skip the probe (would
+          // hang puppeteer). Surface the already_verified status so the
+          // icon shows ⚠ ("schema verified, probe skipped") not "?".
+          return { company, classification: "probe-error", detail: "skipped — CDP adapter (puppeteer); pass --companies=lilith explicitly to probe", already_verified: true };
         }
         const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[company];
         if (!adapter) return { company, classification: "probe-error", detail: "unknown adapter" };
@@ -1547,7 +1550,7 @@ async function main() {
             already_verified: schema.endpoint_verified === true,
           };
         } catch (err) {
-          return { company, submit_kind: schema.submit_kind, submit_endpoint: url, classification: "probe-error", detail: err instanceof Error ? err.message : String(err) };
+          return { company, submit_kind: schema.submit_kind, submit_endpoint: url, classification: "probe-error", detail: err instanceof Error ? err.message : String(err), already_verified: schema.endpoint_verified === true };
         }
       })
     );

@@ -4,6 +4,27 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.77 — \`recon\` probe-error paths carry already_verified
+
+Two probe-error code paths in \`recon\` were missing \`already_verified\`:
+
+* JD's \`wutongzhaopin.jd.com\` ECONNRESETs from US (geo-fenced) →
+  fetch failed → probe-error. Schema verified, but icon was \`?\`.
+* lilith CDP skip → probe-error. Schema verified, but icon was \`?\`.
+
+Both now propagate \`already_verified: schema.endpoint_verified ===
+true\`, so the icon logic (\`⚠\` when verified-but-probe-disagrees)
+applies correctly. \`recon\` output for these now shows \`⚠ ... 🟢\`
+instead of \`? ...\`.
+
+\`\`\`
+- ? jd      —    probe-error       fetch failed
++ ⚠ jd      —    probe-error    🟢 fetch failed
+\`\`\`
+
+Real recon-from-China would resolve jd's probe-error to verified-real
+(wutongzhaopin.jd.com responds when on-network).
+
 ## 1.0.76 — \`recon --summary\` skips per-adapter lines
 
 For dashboards / drift monitoring, the per-adapter dump is noise:
