@@ -4,6 +4,34 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.85 — \`job-pro help\` Phase 2 section rewritten
+
+The Phase 2 block in HELP was at the 0.7.x era:
+
+* "🟡 22 bespoke session ..." — but 18 of those bespokes are now
+  verified.
+* moonshot listed in BOTH Feishu and Moka rows (it's only in Moka).
+* bytedance under bespoke, but it's feishu-3-step since 1.0.63.
+* weibo missing from Moka row (added 1.0.65).
+* "auto-submit currently fires only for ✅" — outdated; 45 of 50 fire
+  today with the 4-layer safety gate.
+
+Rewrote to organize by \`submit_kind\` (not family) and surface counts
+that match \`job-pro list\` and \`recon\`:
+
+\`\`\`
+✅ multipart-anon (3)     — xpeng / weride / hoyoverse. Anon, no session.
+✅ multipart-session (20) — tencent / alibaba / pdd / ... antgroup.
+✅ feishu-3-step (9)      — xiaomi / nio / ... bytedance.
+✅ moka-aes (8)           — moonshot / megvii / ... weibo.
+✅ beisen-italent (2)     — iflytek / vivo.
+✅ beisen-wecruit (2)     — sensetime / horizonrobotics.
+✅ cdp-real-browser (1)   — lilith.
+⛔ external (5)           — hikvision / cicc / cainiao / webank, unitree.
+\`\`\`
+
+\`3 + 20 + 9 + 8 + 2 + 2 + 1 = 45 + 5 external = 50\`.
+
 ## 1.0.84 — tsconfig: noUnusedLocals + noUnusedParameters enforced
 
 Ran \`npx tsc --noUnusedLocals --noUnusedParameters\` across the

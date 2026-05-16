@@ -242,22 +242,25 @@ USAGE
 by ATS family (Bespoke / Feishu / Beisen Wecruit / Beisen iTalent / Moka
 / Greenhouse-Lever / Liepin). Coverage summary at job.ha7ch.com.
 
-PHASE 2 (auto-apply) — schema coverage is now 50/50:
-  ✅ 3   Greenhouse / Lever  (xpeng / hoyoverse / weride — auto-submit
-                              ready, no session needed)
-  🟡 22  bespoke session     (tencent, bytedance, alibaba, …)
-  🟡 9   Feishu               (xiaomi, nio, minimax, moonshot, zhipu,
-                              iqiyi, agibot, lilith, zerooneai, baichuan)
-  🟡 7   Moka                 (megvii, deepseek, galaxyuniversal,
-                              stepfun, cambricon, geely, moonshot)
-  🟡 2   Beisen Wecruit       (sensetime, horizonrobotics)
-  🟡 2   Beisen iTalent       (vivo, iflytek)
-  ⛔ 5   external             (unitree WeChat, hikvision/cicc/cainiao/
-                              webank — Liepin IM-mediated)
-\`apply <postId>\` dry-runs the staged POST for any of them. The 🟡
-families need a session.json (extension/) + a family-specific
-multi-step submitter; --really-submit currently fires only for ✅.
-See docs/auto-apply.md.
+PHASE 2 (auto-apply) — 50/50 schema-ok, **45/50 endpoint-verified**:
+  ✅ multipart-anon (3)    — xpeng / weride / hoyoverse. Anon submit, no session.
+  ✅ multipart-session (20) — tencent / alibaba / pdd / meituan / mihoyo /
+                              liauto / jd / oppo / trip / baidu / xiaohongshu /
+                              netease / didi / pingan / sf / byd / bilibili /
+                              kuaishou / huawei / antgroup. Needs session.
+  ✅ feishu-3-step (9)     — xiaomi / nio / minimax / zhipu / iqiyi / agibot /
+                              zerooneai / baichuan / bytedance. atsx-throne tenant.
+  ✅ moka-aes (8)          — moonshot / megvii / deepseek / galaxyuniversal /
+                              stepfun / cambricon / geely / weibo (proxies to Moka).
+  ✅ beisen-italent (2)    — iflytek / vivo.
+  ✅ beisen-wecruit (2)    — sensetime / horizonrobotics.
+  ✅ cdp-real-browser (1)  — lilith (puppeteer for ByteDance _signature bypass).
+  ⛔ external (5)          — hikvision / cicc / cainiao / webank (Liepin chat),
+                              unitree (WeChat QR). Structurally non-API.
+\`apply <postId>\` dry-runs the staged POST. \`--really-submit\` runs the
+4-layer safety gate (env attest + staged.ready + endpoint_verified +
+session<30d). Run \`job-pro list\` for the ✓ column or \`job-pro recon\`
+for the live probe matrix. See docs/auto-apply.md.
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
