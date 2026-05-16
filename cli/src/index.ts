@@ -81,6 +81,7 @@ import {
 } from "./memory.js";
 import { writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createRequire as require_createRequire } from "node:module";
 function require_module(): { createRequire: typeof require_createRequire } {
@@ -179,6 +180,8 @@ USAGE
                                       [--limit N] [--companies a,b,c]
                                       [--timeout ms] [--apply-ready]
                                       [--compact | --text]
+  job-pro extension                   print extension/ path + install steps
+  job-pro extension path              just the absolute path (scriptable)
   job-pro --version
   job-pro help
 
@@ -1245,6 +1248,47 @@ async function main() {
   if (cmd === "status") {
     const compact = args.includes("--compact");
     printStatus(compact);
+    return;
+  }
+  if (cmd === "extension") {
+    // Locate the extension/ directory. The package ships it as a sibling of
+    // dist/, so __dirname is cli/dist and the extension lives at ../extension.
+    // For a `npx job-pro` run, that lands in the npm cache; for a global
+    // install, in the prefix. For local dev, the repo's top-level extension/.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      join(here, "..", "extension"),
+      join(here, "..", "..", "extension"),
+    ];
+    const extPath = candidates.find((p) => existsSync(join(p, "manifest.json"))) ?? null;
+    const sub = args[1];
+    if (sub === "path") {
+      if (!extPath) die("extension/ not found — please reinstall job-pro@latest");
+      console.log(extPath);
+      return;
+    }
+    // Default: print install walkthrough.
+    if (!extPath) die("extension/ not found — please reinstall job-pro@latest");
+    console.log(`
+job-pro session-capture extension
+=================================
+
+Path:  ${extPath}
+
+Install (Chrome / Edge / Brave):
+  1. Open chrome://extensions
+  2. Enable "Developer mode" (top-right toggle)
+  3. Click "Load unpacked"
+  4. Pick the path above
+  5. Browse a careers site (e.g. jobs.bytedance.com), log in, then click
+     the extension's popup → "Export session" to drop
+     ~/Downloads/jobpro/<adapter>.session.json
+  6. Move it under ~/.jobpro/<adapter>.session.json — \`job-pro <co> apply\`
+     will pick it up automatically.
+
+Or copy the path to clipboard (macOS):
+  echo "${extPath}" | pbcopy
+`);
     return;
   }
   if (cmd === "find") {

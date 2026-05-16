@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.17 — \`job-pro extension\` + bundle extension in npm package
+
+Before this, \`extension/\` only existed in the GitHub repo — users
+who installed via \`npm i -g job-pro\` had no way to get the
+session-capture extension without cloning the repo. Now:
+
+* \`files\` includes \`extension\`, and \`prepublishOnly\` copies
+  \`../extension\` into \`cli/extension\` so the npm tarball ships it.
+* New \`job-pro extension\` prints the unpacked path + a 6-step install
+  walkthrough (Chrome chrome://extensions → Load unpacked → …).
+* \`job-pro extension path\` prints only the absolute path for
+  scripting (\`chrome-cli open chrome://extensions\` etc.).
+
+Resolves the previously-undocumented "where is extension/" friction
+in the Phase 2 onboarding flow.
+
 ## 1.0.16 — \`profile lint\` format validation
 
 \`job-pro profile lint\` checks every profile field for actual validity,
