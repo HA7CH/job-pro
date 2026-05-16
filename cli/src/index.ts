@@ -305,6 +305,10 @@ EXAMPLES
   job-pro tencent memory set "stack=Go,Python" "target_city=深圳"
   job-pro bytedance memory event applied "ByteDance 前端 7638940721068099893"
 
+COMPANION
+  Pairs with cv.ha7ch.com — draft the resume you pipe into \`match\` /
+  \`resume-check\` and paste into \`apply --interactive\`.
+
 DOCS
   https://job.ha7ch.com
   https://github.com/HA7CH/job-pro

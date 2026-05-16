@@ -427,6 +427,14 @@ export default function Home() {
         <pre className="prompt-body">{PROMPT}</pre>
       </section>
 
+      <p className="companion">
+        Pairs with{" "}
+        <a href="https://cv.ha7ch.com" target="_blank" rel="noopener noreferrer">
+          cv.ha7ch.com
+        </a>
+        {" "}— draft the resume you paste above.
+      </p>
+
       <section className="company-table" aria-labelledby="table-title">
         <h2 id="table-title" className="sr-only">Roadmap</h2>
         <div className="company-row company-row--header" aria-hidden>
