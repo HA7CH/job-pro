@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.64 — kuaishou: real API base discovered → verified (41 / 50)
+
+Earlier kuaishou recon found \`/api/v1/apply/*\` paths in the JS bundle
+but they 404'd on prod. Today's deeper grep found the real mount
+point: \`/recruit/campus/e/api/v1/\`. All 8 candidate paths under that
+prefix return:
+
+\`\`\`
+HTTP 401
+{"code":40008,"message":"user.not.login","result":null}
+\`\`\`
+
+Real REST routes, auth-gated by SSO (CAS login at
+\`/recruit/campus/e/login/cas\`). Updated schema:
+
+\`\`\`
+- /rest/campus-recruit/post/deliver                     // 404 wrong prefix
++ /recruit/campus/e/api/v1/apply/internship/apply       // 401 user.not.login
++ endpointVerified: true
+\`\`\`
+
+**Endpoint verified count: 40 → 41 / 50.**
+
 ## 1.0.63 — bytedance + Beisen Wecruit ✕ 2 verified (40 / 50)
 
 Three more promotions:

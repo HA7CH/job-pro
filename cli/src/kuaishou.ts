@@ -692,10 +692,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://campus.kuaishou.cn/rest/campus-recruit/post/deliver",
+      submitEndpoint: "https://campus.kuaishou.cn/recruit/campus/e/api/v1/apply/internship/apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Kuaishou — POST /rest/campus-recruit/post/deliver with session cookie. Endpoint inferred; needs validation.",
+        "Kuaishou — POST /recruit/campus/e/api/v1/apply/internship/apply with session cookie. Endpoint extracted from main.e3c87842.js bundle (the /recruit/campus/e/api/v1/ sub-tree has /apply/internship/apply, /apply/operate/apply, /apply/check, /apply/add/record, /resume/upload, /files/upload etc — all probe to 401 + {code:40008,message:\"user.not.login\"} = real REST routes). The /rest/campus-recruit/ prefix in earlier inference was wrong; the real backend mounts at /recruit/campus/e/api/v1/. Requires SSO login via /recruit/campus/e/login/cas.",
     }),
   };
 }

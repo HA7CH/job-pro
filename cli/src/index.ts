@@ -223,6 +223,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "bytedance",
   // Beisen Wecruit family: anon probe with X-Requested-With (1.0.63)
   "sensetime", "horizonrobotics",
+  // kuaishou: /recruit/campus/e/api/v1/ sub-tree discovered (1.0.64)
+  "kuaishou",
 ]);
 
 const HELP = `
