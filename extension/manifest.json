@@ -1,0 +1,65 @@
+{
+  "manifest_version": 3,
+  "name": "job-pro session bridge",
+  "short_name": "job-pro",
+  "version": "0.1.0",
+  "description": "Capture careers-site session cookies + CSRF headers for use by the job-pro CLI auto-apply.",
+  "permissions": [
+    "cookies",
+    "storage",
+    "activeTab",
+    "scripting",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://join.qq.com/*",
+    "https://jobs.bytedance.com/*",
+    "https://campus-talent.alibaba.com/*",
+    "https://zhaopin.meituan.com/*",
+    "https://job.xiaohongshu.com/*",
+    "https://campus.jd.com/*",
+    "https://campus.kuaishou.cn/*",
+    "https://xiaomi.jobs.f.mioffice.cn/*",
+    "https://talent.baidu.com/*",
+    "https://hr.163.com/*",
+    "https://talent.didiglobal.com/*",
+    "https://jobs.bilibili.com/*",
+    "https://careers.pinduoduo.com/*",
+    "https://career.huawei.com/*",
+    "https://campus.pingan.com/*",
+    "https://careers.ctrip.com/*",
+    "https://www.unitree.com/*",
+    "https://job.byd.com/*",
+    "https://talent.antgroup.com/*",
+    "https://hrcareersweb.antgroup.com/*",
+    "https://*.jobs.feishu.cn/*",
+    "https://*.zhiye.com/*",
+    "https://hr.sensetime.com/*",
+    "https://wecruit.hotjob.cn/*",
+    "https://app.mokahr.com/*",
+    "https://careers.oppo.com/*",
+    "https://hr.vivo.com/*",
+    "https://campus.sf-express.com/*",
+    "https://www.lixiang.com/*",
+    "https://lilithgames.jobs.feishu.cn/*",
+    "https://www.liepin.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "job-pro session bridge",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

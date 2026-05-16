@@ -14,9 +14,9 @@
 // passed through to whatever per-company custom question matches their
 // `name` (e.g. `linkedin_url`, `nationality`).
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const PROFILE_PATH = process.env.JOB_PRO_PROFILE_PATH ?? join(homedir(), ".jobpro", "profile.json");
 
@@ -260,4 +260,146 @@ export function formatStaged(s: StagedApplication): string {
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// ---------- submission ----------
+//
+// Greenhouse and Lever both accept `multipart/form-data` POSTs whose
+// field names match the `name` keys returned by the application-schema
+// endpoints we already surface. The wire format is identical enough
+// that the same builder works for both. CDP-driven adapters (lilith,
+// hikvision) and the bespoke ones (tencent, bytedance, …) are NOT
+// covered yet — each needs its own session-capture flow.
+//
+// Safety gate: actually firing a submission requires (a) every staged
+// field is `ready`, (b) the caller opts in via `submitTo:"upstream"`,
+// AND (c) the `apply` verb in the dispatcher gates `--really-submit`
+// behind a launch-list of validated companies. By default we either
+// dry-run (no network) or send to a debug endpoint (httpbin etc.) so
+// the caller can verify the multipart shape WITHOUT spamming the
+// real ATS.
+
+export type SubmitTarget =
+  | { kind: "dry-run" }
+  | { kind: "debug"; url: string }
+  | { kind: "upstream" };
+
+export interface SubmitResult {
+  ok: boolean;
+  status?: number;
+  /** The URL we actually hit (so debug mode is unambiguous). */
+  posted_to: string;
+  /** Response body (truncated to 4 KB for the CLI output). */
+  response_preview?: string;
+  message: string;
+}
+
+export async function submitApplication(
+  staged: StagedApplication,
+  target: SubmitTarget
+): Promise<SubmitResult> {
+  if (!staged.submit_endpoint) {
+    return {
+      ok: false,
+      posted_to: "",
+      message: "no submit_endpoint on staged application — this adapter family doesn't expose a public submission API",
+    };
+  }
+  if (!staged.ready) {
+    return {
+      ok: false,
+      posted_to: "",
+      message: `${staged.unanswered_required.length} required field(s) still unanswered; fill them before submitting`,
+    };
+  }
+  if (target.kind === "dry-run") {
+    return {
+      ok: false,
+      posted_to: "dry-run (no network)",
+      message: "dry-run requested — no HTTP call fired",
+    };
+  }
+
+  const url = target.kind === "debug" ? target.url : staged.submit_endpoint;
+  const fd = await buildMultipartForm(staged);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: staged.submit_method ?? "POST",
+      headers: {
+        // Don't set Content-Type — fetch/undici picks the correct
+        // multipart/form-data boundary for the FormData instance.
+        Accept: "application/json, text/plain, */*",
+        "User-Agent":
+          "job-pro/0.9 (https://github.com/HA7CH/job-pro)",
+      },
+      body: fd,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      posted_to: url,
+      message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  let preview = "";
+  try {
+    preview = (await response.text()).slice(0, 4000);
+  } catch {
+    /* binary response is fine */
+  }
+  return {
+    ok: response.ok,
+    status: response.status,
+    posted_to: url,
+    response_preview: preview,
+    message: response.ok
+      ? `submission accepted (HTTP ${response.status})`
+      : `upstream rejected: HTTP ${response.status} ${response.statusText}`,
+  };
+}
+
+async function buildMultipartForm(staged: StagedApplication): Promise<FormData> {
+  const fd = new FormData();
+  for (const field of staged.staged) {
+    if (!field.value) continue;
+    if (field.type === "input_file") {
+      // Read the file synchronously — these are resumes, KB-range PDFs.
+      // For debug endpoints we still attach the actual file so the
+      // multipart wire format matches production exactly.
+      let stat: ReturnType<typeof statSync>;
+      try {
+        stat = statSync(field.value);
+      } catch (err) {
+        throw new Error(`could not stat resume file ${field.value}: ${err instanceof Error ? err.message : err}`);
+      }
+      if (!stat.isFile()) {
+        throw new Error(`resume path is not a file: ${field.value}`);
+      }
+      const bytes = readFileSync(field.value);
+      const filename = basename(field.value);
+      // Best-effort content type from extension; ATS-side typically
+      // re-detects from magic bytes anyway.
+      const ext = filename.toLowerCase().split(".").pop() ?? "";
+      const mime =
+        ext === "pdf"
+          ? "application/pdf"
+          : ext === "docx"
+            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            : ext === "doc"
+              ? "application/msword"
+              : "application/octet-stream";
+      // Node 20+ has a global File constructor; for older runtimes, fall
+      // back to a Blob. We bumped engines.node >=18 — Blob is universal.
+      const FileCtor = (globalThis as { File?: typeof File }).File;
+      const part =
+        typeof FileCtor === "function"
+          ? new FileCtor([new Uint8Array(bytes)], filename, { type: mime })
+          : new Blob([new Uint8Array(bytes)], { type: mime });
+      fd.append(field.name, part as Blob, filename);
+    } else {
+      fd.append(field.name, field.value);
+    }
+  }
+  return fd;
 }

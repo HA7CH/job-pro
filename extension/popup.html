@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>job-pro session bridge</title>
+<style>
+  body { font: 13px/1.4 -apple-system, system-ui, sans-serif; margin: 12px; min-width: 320px; }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  p.lede { color: #555; margin: 0 0 12px; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
+  li:last-child { border-bottom: 0; }
+  .key { font-weight: 600; }
+  .meta { color: #888; font-size: 11px; }
+  button { font: inherit; padding: 4px 8px; border: 1px solid #ccc; background: #f5f5f5; border-radius: 3px; cursor: pointer; }
+  button.danger { color: #c00; }
+  #status { margin-top: 12px; padding: 8px; background: #f5f9f0; border-left: 3px solid #5a5; font-size: 11px; white-space: pre-wrap; }
+  #status.error { background: #f9eef0; border-color: #c55; }
+  #empty { color: #888; padding: 16px 0; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>job-pro session bridge</h1>
+  <p class="lede">
+    Captured careers-site sessions. Click <strong>Export</strong> on a row
+    to download <code>&lt;adapter&gt;.session.json</code>, then move it
+    into <code>~/.jobpro/</code> for the CLI's <code>apply</code> verb.
+  </p>
+  <ul id="sessions"></ul>
+  <div id="empty" hidden>No sessions captured yet. Browse a supported careers site (see <code>manifest.json</code>) while logged in, then re-open this popup.</div>
+  <div id="status" hidden></div>
+  <p style="margin-top:14px;text-align:right">
+    <button id="clear" class="danger">Clear all</button>
+  </p>
+  <script src="popup.js"></script>
+</body>
+</html>

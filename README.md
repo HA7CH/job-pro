@@ -125,6 +125,10 @@ endpoints. See [docs/auto-apply.md](./docs/auto-apply.md) for the plan.
 - `python-reference/` — the original Python port for `join.qq.com`.
 - `docs/` — endpoint inventories per company, plus `stub-unblock.md` with
   the full recon history.
+- `extension/` — manifest v3 Chrome extension that captures careers-site
+  session cookies + CSRF headers for Phase 2 auto-apply. Load it via
+  `chrome://extensions/ → Developer mode → Load unpacked`. See
+  `extension/README.md`.
 
 ## Why "local-direct" instead of a hosted backend
 

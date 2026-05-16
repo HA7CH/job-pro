@@ -55,6 +55,7 @@ import {
   loadProfile,
   profileTemplate,
   stageApplication,
+  submitApplication,
   formatStaged,
   type ApplyFormSchema,
 } from "./apply.js";
@@ -68,7 +69,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.0";
+const VERSION = "0.9.1";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -446,8 +447,10 @@ async function runCompany(
 
   if (verb === "apply") {
     const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--dry-run | --really-submit]`);
+    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--dry-run | --debug-submit-to <url> | --really-submit]`);
     const reallySubmit = args.includes("--really-submit");
+    const { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
+
     const fetchSchema = adapter.fetchApplicationSchema;
     if (typeof fetchSchema !== "function") {
       return emit(
@@ -457,7 +460,7 @@ async function runCompany(
           post_id: postId,
           message:
             `apply: Phase 2 not yet wired for "${company}". Only Greenhouse + Lever ` +
-            `boards (xpeng / weride / hoyoverse) expose an application schema today. ` +
+            `boards (xpeng / hoyoverse / weride) expose an application schema today. ` +
             `See docs/auto-apply.md for the rollout plan.`,
         },
         compact
@@ -470,9 +473,10 @@ async function runCompany(
           source: company,
           post_id: postId,
           message:
-            `--really-submit is intentionally not implemented yet. Phase 2 ships the ` +
-            `staging path first so you can see exactly what would be POSTed before any ` +
-            `submission actually fires. Re-run without --really-submit for the dry-run.`,
+            `--really-submit is intentionally disabled until per-ATS submission flows ` +
+            `are validated end-to-end against live boards. Use --debug-submit-to <url> ` +
+            `to verify the multipart wire format against your own echo server (e.g. ` +
+            `https://httpbin.org/post) without spamming the real ATS.`,
         },
         compact
       );
@@ -497,8 +501,16 @@ async function runCompany(
       );
     }
     const staged = stageApplication(sr.schema, prof.profile);
+
+    // Mode selection: --debug-submit-to <url> overrides dry-run.
+    if (debugUrl) {
+      const result = await submitApplication(staged, { kind: "debug", url: debugUrl });
+      return emit({ mode: "debug-submit", staged, result }, compact);
+    }
+
+    // Default: dry-run print, no network.
     if (compact) {
-      return emit({ ok: true, staged }, compact);
+      return emit({ mode: "dry-run", staged }, compact);
     }
     console.log(formatStaged(staged));
     if (!staged.ready) {
@@ -508,10 +520,12 @@ async function runCompany(
       );
     } else {
       console.log(
-        `\nDry-run complete. --really-submit will be enabled in a future release ` +
-          `once per-ATS submission flows have been validated against live boards.`
+        `\nDry-run complete. Use --debug-submit-to https://httpbin.org/post to ` +
+          `verify the multipart wire format. --really-submit will be enabled per-ATS ` +
+          `once each family's submission flow has been validated end-to-end.`
       );
     }
+    void aDebug; // silence "unused" — `args` flow goes through popFlagValue
     return;
   }
 
