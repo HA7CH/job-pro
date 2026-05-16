@@ -4,6 +4,26 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.49 — docs/auto-apply per-family unblock playbook + 17-verified
+
+\`docs/auto-apply.md\` synced for the second time this loop:
+* Tally at 1.0.48 (17 ✅ / 28 🔑 / 5 ⛔) — was at 15 in 1.0.41 (pre-
+  iflytek/vivo Beisen-iTalent promotion in 1.0.46).
+* Per-family unblock playbook rewritten with the **actual** recon-
+  derived workflow:
+  * Capture session via \`job-pro extension\`
+  * \`apply --debug-submit-to <echo>\` to inspect outgoing multipart
+  * Fire \`--really-submit\` under \`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\`
+  * Watch network tab on a 4xx to find the real path
+  * Patch the adapter + add to ENDPOINT_VERIFIED set
+* Numbers now consistent with \`pnpm test:apply\` tally.
+
+Specifically:
+* Feishu: 8 adapters (was "9"); cracking one (e.g. nio) likely cracks
+  all 8 since the SPA bundle is shared.
+* Bespoke: 17 adapters (was "22"; 5 promoted, unitree external).
+* Lilith CDP unblocks once Feishu does.
+
 ## 1.0.48 — \`list\` surfaces endpoint_verified ✓
 
 \`job-pro list\` now shows ✓ next to every adapter with

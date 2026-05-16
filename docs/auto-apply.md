@@ -97,25 +97,34 @@ Status legend: `✅` apply schema wired + submit endpoint known + verified end-t
 | 49 | cainiao         | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 | 50 | webank          | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 
-**Tally as of 1.0.40:**
-* **15 ✅ verified** — endpoint URL confirmed real via probe or
-  end-to-end smoke. Cleared the 4th safety gate.
+**Tally as of 1.0.48:**
+* **17 ✅ verified** — endpoint URL confirmed real via probe or
+  end-to-end smoke. Cleared the 4th safety gate. See ✓ in `job-pro list`.
   * 3 anon multipart (xpeng / weride / hoyoverse) — end-to-end smoked
     against httpbin echo.
   * 5 multipart-session (alibaba / pdd / meituan / mihoyo / liauto) —
     probe returned auth gate or business error.
-  * 7 moka-aes (all Moka adapters: megvii / deepseek / galaxyuniversal
-    / stepfun / cambricon / geely / moonshot) — probe returned AES
-    `{data, necromancer}` envelope.
-* **30 🔑 executor-wired, endpoint speculative** — schema + executor
-  exist but probe returned 404 / HTML fallthrough. Most are bespoke
-  multipart-session (15) plus Feishu × 8 + Beisen × 4 + Lilith CDP × 1
-  + antgroup, sf. Need real-browser network capture to find the right
-  apply path. `--really-submit` requires
-  `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
-* **5 ⛔ external** — Liepin recruiter chat × 4, Unitree WeChat QR × 1.
-  Structurally non-API (IM-mediated); the CLI surfaces `apply_url` and
-  declines to automate.
+  * 7 moka-aes (all Moka adapters: moonshot / megvii / deepseek /
+    galaxyuniversal / stepfun / cambricon / geely) — probe returned
+    AES `{data, necromancer}` envelope.
+  * 2 beisen-italent (iflytek / vivo) — probe returned HTTP 500 + IIS
+    server-error template (route exists, handler threw on missing input).
+* **28 🔑 executor-wired, endpoint speculative** — schema + executor
+  exist but probe returned 404 / HTML fallthrough. Split:
+  * 17 bespoke multipart-session — tencent / bytedance / xiaohongshu /
+    jd / kuaishou / baidu / netease / didi / bilibili / huawei / weibo
+    / pingan / trip / byd / antgroup / sf / oppo
+  * 8 feishu-3-step — xiaomi / nio / minimax / zhipu / iqiyi / agibot
+    / zerooneai / baichuan
+  * 2 beisen-wecruit — sensetime / horizonrobotics
+  * 1 cdp-real-browser — lilith
+  Need real-browser network capture to find the right apply path.
+  `--really-submit` requires `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
+* **5 ⛔ external** — Liepin recruiter chat × 4 (hikvision / cicc /
+  cainiao / webank), Unitree WeChat QR × 1. Structurally non-API
+  (IM-mediated); the CLI surfaces `apply_url` and declines to automate.
+
+Run `job-pro recon` for the live matrix.
 
 To promote a 🔑 to ✅: capture the adapter's session via the browser
 extension, run `apply <id> --debug-submit-to <your-echo>` to inspect what
@@ -126,30 +135,52 @@ grep on the JS bundle) doesn't work for most of these — the apply URL is
 constructed dynamically by the SPA's webpack output and requires
 real-browser network capture to extract reliably.
 
-## Per-family unblock playbook
+## Per-family unblock playbook (as of 1.0.48)
 
-The 38 🔑 entries fall into 6 families. Cracking each family unblocks
-its whole row group:
+28 🔑 speculative-endpoint entries remain. Cracking each family
+typically unblocks its whole row group:
 
-1. **Feishu (9 adapters)** — single `cli/src/feishu.ts` factory addition.
-   The `POST /api/v1/application/create` endpoint is documented; need to
-   confirm the body shape per tenant (likely
-   `{ job_post_id, applicant_info, resume_file_token }`). Resume upload
-   is a separate `POST /api/v1/file/upload` step that returns a token.
+1. **Feishu (8 adapters)** — `cli/src/feishu.ts` factory's
+   `/api/v1/resume/apply` returns 404 on anon probe; the
+   `/api/v1/attachment/upload/tokens` and
+   `/api/v1/attachment/exchange/tokens` steps return 405 (route exists).
+   Apply path is the one missing piece — needs real-browser capture in a
+   logged-in Feishu careers session. Probably constant across tenants
+   (the SPA bundle is shared), so cracking one (e.g. nio) unblocks all 8.
 
-2. **Moka (7 adapters)** — single `cli/src/moka.ts` factory addition.
-   AES-128-CBC envelope same as our existing list-job decrypt path; we
-   already have the `necromancer` key + `aesIv` extraction working.
+2. **Beisen Wecruit (2 adapters)** — `/wecruit/delivery/resume/<channelId>`
+   returns the SPA landing on anon probe. Apply path is likely a
+   different sub-route. Capture sensetime's session and inspect XHR.
 
-3. **Beisen Wecruit (2 adapters)** — same generic playbook as our
-   `cli/src/wecruit.ts` factory; submit endpoint is on the same host.
+3. **Bespoke (17 adapters)** — these unblock one at a time. No shared
+   factory, so each needs ~30 LOC. The 17:
+   * Mainline tier (high-traffic, well-documented backends): tencent,
+     bytedance, jd, baidu, didi, huawei
+   * Mid-tier: xiaohongshu, kuaishou, netease, bilibili, weibo, trip,
+     pingan, byd, antgroup, sf, oppo
+   Static curl + grep on JS bundles doesn't work — apply URLs are
+   webpack-output dynamic. Real-browser capture is the only path.
 
-4. **Beisen iTalent (2 adapters)** — same playbook as `cli/src/vivo.ts`
-   factory; submit endpoint is on `<tenant>.zhiye.com`.
+4. **Lilith CDP (1 adapter)** — uses puppeteer to bypass ByteDance
+   _signature; apply path inherited from Feishu (#1). Cracking Feishu
+   unblocks lilith too.
 
-5. **Bespoke (22 adapters)** — these unblock one at a time. The 22 share
-   no common factory, so each needs ~30 LOC. Total estimated work:
-   2-3 iterations of careful recon + wire-up.
+For each 🔑 unblock, the workflow:
+
+```
+1. job-pro extension              # install MV3 extension in Chrome
+2. log into <co> careers site, click Export
+3. mv ~/Downloads/jobpro/<co>.session.json ~/.jobpro/
+4. job-pro <co> apply <id> --debug-submit-to <your-echo>
+   # inspect the multipart body shape going out
+5. JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
+   JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes \
+   job-pro <co> apply <id> --really-submit
+   # 200 OK = success; 4xx = the specific path is wrong, network-tab
+   # XHR shows real path → patch adapter
+6. Set endpoint_verified: true in the adapter + add to ENDPOINT_VERIFIED
+   in cli/src/index.ts. Add to test/debug-submit-smoke.ts.
+```
 
 6. **Liepin third-party (4 adapters)** — permanent ⛔. Liepin submission
    is recruiter-IM-mediated; `apply_url` opens the chat in browser
