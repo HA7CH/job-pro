@@ -222,6 +222,15 @@ export interface ApplyFormSchema {
   submit_kind?: SubmitKind;
   /** Human-readable note about how submission actually fires (e.g. Feishu's 3-step). */
   submit_notes?: string;
+  /**
+   * True iff the submit_endpoint has been end-to-end verified (anon multipart
+   * adapters via `pnpm test:debug-submit` against httpbin echo). Bespoke
+   * "needs validation" endpoints stay false until somebody confirms with a
+   * real session that the URL accepts a submit payload. Surfaced by
+   * `apply --schema` and the dry-run formatter; `--really-submit` warns
+   * (but doesn't block) when false.
+   */
+  endpoint_verified?: boolean;
   questions: ApplyQuestion[];
 }
 
@@ -245,6 +254,8 @@ export interface StagedApplication {
   submit_method?: "POST";
   submit_kind?: SubmitKind;
   submit_notes?: string;
+  /** Mirrors ApplyFormSchema.endpoint_verified (whether endpoint is known-good). */
+  endpoint_verified?: boolean;
   staged: StagedField[];
   unanswered_required: StagedField[];
   /** Set to true when every required field is filled. */
@@ -283,6 +294,7 @@ export function stageApplication(schema: ApplyFormSchema, profile: ResumeProfile
     submit_method: schema.submit_method,
     submit_kind: schema.submit_kind,
     submit_notes: schema.submit_notes,
+    endpoint_verified: schema.endpoint_verified,
     staged,
     unanswered_required,
     ready: unanswered_required.length === 0,
@@ -345,7 +357,12 @@ export function formatStaged(s: StagedApplication): string {
   lines.push(`job:       ${s.post_id} — ${s.job_title}`);
   lines.push(`apply_url: ${s.apply_url}`);
   if (s.submit_endpoint) {
-    lines.push(`submit:    ${s.submit_method ?? "POST"} ${s.submit_endpoint}`);
+    const verifiedTag = s.endpoint_verified === true
+      ? " (verified)"
+      : s.submit_kind === "external"
+        ? ""
+        : " (⚠ speculative — endpoint inferred, not end-to-end verified)";
+    lines.push(`submit:    ${s.submit_method ?? "POST"} ${s.submit_endpoint}${verifiedTag}`);
   }
   lines.push("");
   lines.push(`ready: ${s.ready ? "✓ all required fields filled" : `✗ ${s.unanswered_required.length} required field(s) unfilled`}`);

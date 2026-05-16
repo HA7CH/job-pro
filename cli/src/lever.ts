@@ -564,6 +564,7 @@ export function createAdapter(cfg: LeverAdapterConfig) {
         submit_endpoint: `${BOARD_URL}/${id}/apply`,
         submit_method: "POST",
         submit_kind: "multipart-anon",
+        endpoint_verified: true,
         submit_notes:
           "Lever apply-page accepts anonymous multipart/form-data POST whose field " +
           "names match Lever's hosted apply form (standard contact-info + each " +

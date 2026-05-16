@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.34 — \`endpoint_verified\` flag for honest \`--really-submit\` UX
+
+Recon probe of the 22 multipart-session bespoke endpoints found that
+**only 3 of 22 returned an auth gate (401/403); 19 returned 404 or
+HTML fallthrough.** Most of the "Endpoint inferred; needs validation"
+URLs are wrong guesses — firing \`--really-submit\` against them would
+4xx without diagnostic.
+
+Adds an \`endpoint_verified: boolean\` flag on \`ApplyFormSchema\` and
+\`StagedApplication\`:
+
+* True for Greenhouse + Lever boards (xpeng / weride / hoyoverse) —
+  end-to-end verified by \`pnpm test:debug-submit\` via httpbin echo.
+* Unset / false for everything else — endpoint inferred from JS
+  bundle recon, never validated against a real submission.
+
+Surfaced inline in the dry-run header:
+
+\`\`\`
+submit:    POST https://boards-api.greenhouse.io/…  (verified)
+submit:    POST https://join.qq.com/api/v1/…        (⚠ speculative — endpoint inferred, not end-to-end verified)
+\`\`\`
+
+External adapters (Liepin × 4 + Unitree WeChat) skip the tag entirely
+— they have no submit_endpoint by design.
+
 ## 1.0.33 — apply-smoke checks submit_endpoint URL well-formedness
 
 Adds a per-adapter check to \`pnpm test:apply\`: every non-external
