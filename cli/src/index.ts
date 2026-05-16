@@ -212,6 +212,7 @@ VERBS (same surface for every company)
                                     pass "-" to read resume from stdin
   resume-check <resume-text-or-->   structural sanity check on a resume
   apply <post_id>                   stage an application (Phase 2 dry-run)
+                                    --schema                   dump raw schema (no profile needed)
                                     --print-form               emit a fillable JSON template
                                     --form-file <path>         merge per-job answers
                                     --interactive              prompt for unanswered fields
@@ -488,6 +489,7 @@ async function runCompany(
   if (verb === "apply") {
     const reallySubmit = args.includes("--really-submit");
     const printForm = args.includes("--print-form");
+    const schemaOnly = args.includes("--schema");
     const interactive = args.includes("--interactive");
     const remember = args.includes("--remember");
     const { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
@@ -577,7 +579,7 @@ async function runCompany(
     void aBatch;
 
     const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--print-form | --form-file <path> | --interactive [--remember] | --batch <file>] [--debug-submit-to <url> | --really-submit]`);
+    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--schema | --print-form | --form-file <path> | --interactive [--remember] | --batch <file>] [--debug-submit-to <url> | --really-submit]`);
 
     const fetchSchema = adapter.fetchApplicationSchema;
     if (typeof fetchSchema !== "function") {
@@ -602,6 +604,11 @@ async function runCompany(
     const sr = schemaResult as { ok?: boolean; schema?: ApplyFormSchema; message?: string };
     if (!sr.ok || !sr.schema) {
       return emit({ ok: false, source: company, post_id: postId, message: sr.message ?? "unknown error" }, compact);
+    }
+    // --schema short-circuits everything (and crucially doesn't need a
+    // profile). Useful for recon: "what fields does this job ask?".
+    if (schemaOnly) {
+      return emit({ ok: true, source: company, post_id: postId, schema: sr.schema }, compact);
     }
     const prof = loadProfile();
     if (!prof.ok) {

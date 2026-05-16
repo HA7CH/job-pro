@@ -68,6 +68,11 @@ job-pro tencent memory list
 # list / browse adapters
 job-pro list                 # human-readable, grouped by ATS family
 job-pro list --compact       # JSON for piping
+
+# cross-company parallel search
+job-pro find "intern" --text                       # scan all 50 in parallel
+job-pro find "AI" --apply-ready --text             # only show buckets you can fire today
+job-pro find "前端" --companies tencent,bytedance,alibaba --limit 5
 ```
 
 Add `--compact` to any command for a single-line JSON output (pipe-friendly).

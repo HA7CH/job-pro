@@ -4,6 +4,15 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.15 — \`apply --schema\` + README sync
+
+* New \`apply --schema\` short-circuit: dumps the raw
+  fetchApplicationSchema response and exits. Crucially, doesn't
+  require a profile — useful for recon ("what fields does this job
+  ask?") and for handing the schema to an LLM for help filling.
+* README quick-start now documents \`find\` (the 1.0.12+ cross-company
+  parallel verb) — was missing entirely before this.
+
 ## 1.0.14 — \`find\` apply-readiness annotations
 
 Each company bucket in \`find\` output now carries \`apply_status\`:
