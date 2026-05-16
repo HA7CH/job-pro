@@ -4,6 +4,24 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.24 — submit smoke expands to all 5 executor families
+
+\`test:debug-submit\` now covers one representative per executor type:
+
+* multipart-anon (generic submitApplication) — xpeng / weride / hoyoverse
+* feishu-3-step (executeFeishu3Step) — nio
+* moka-aes (executeMokaApply) — megvii
+* beisen-wecruit (executeBeisenWecruit) — sensetime
+* beisen-italent (executeBeisenITalent) — iflytek
+
+Each is fired with \`null\` session against \`https://httpbin.org/post\`;
+family executors gracefully degrade to UA-only headers in debug mode
+(real upstream submission still requires a captured session — this
+just verifies the wire-format dispatch is correct).
+
+**7 pass / 0 broken / 7 / 3.3s.** Catches regressions schema smoke
+can't see across every executor family, not just multipart-anon.
+
 ## 1.0.23 — submit wire-format smoke (3rd test layer)
 
 `pnpm test:debug-submit` exercises the multipart-anon executor end-to-

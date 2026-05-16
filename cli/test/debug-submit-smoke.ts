@@ -21,10 +21,18 @@ import { join } from "node:path";
 import * as xpeng from "../src/xpeng.js";
 import * as weride from "../src/weride.js";
 import * as hoyoverse from "../src/hoyoverse.js";
+import * as nio from "../src/nio.js";
+import * as megvii from "../src/megvii.js";
+import * as sensetime from "../src/sensetime.js";
+import * as iflytek from "../src/iflytek.js";
 import {
   stageApplication,
   submitApplication,
   applyFormFile,
+  executeFeishu3Step,
+  executeMokaApply,
+  executeBeisenWecruit,
+  executeBeisenITalent,
   type ApplyFormSchema,
   type ResumeProfile,
 } from "../src/apply.js";
@@ -36,11 +44,25 @@ interface Adapter {
   fetchApplicationSchema?(postId: string): Promise<unknown>;
 }
 
-const ADAPTERS: Record<string, Adapter> = {
-  xpeng: xpeng as unknown as Adapter,
-  weride: weride as unknown as Adapter,
-  hoyoverse: hoyoverse as unknown as Adapter,
-};
+// `family` is the executor under test:
+//   "generic"        → multipart-anon / multipart-session via submitApplication
+//   "feishu-3-step"  → executeFeishu3Step
+//   "moka-aes"       → executeMokaApply
+//   "beisen-wecruit" → executeBeisenWecruit
+//   "beisen-italent" → executeBeisenITalent
+type Family = "generic" | "feishu-3-step" | "moka-aes" | "beisen-wecruit" | "beisen-italent";
+const ADAPTERS: Array<{ name: string; adapter: Adapter; family: Family }> = [
+  // multipart-anon (Greenhouse / Lever, real wire-format check)
+  { name: "xpeng",     adapter: xpeng     as unknown as Adapter, family: "generic" },
+  { name: "weride",    adapter: weride    as unknown as Adapter, family: "generic" },
+  { name: "hoyoverse", adapter: hoyoverse as unknown as Adapter, family: "generic" },
+  // one rep per family-executor — null session OK in debug mode (executor
+  // returns UA-only headers).
+  { name: "nio",       adapter: nio       as unknown as Adapter, family: "feishu-3-step" },
+  { name: "megvii",    adapter: megvii    as unknown as Adapter, family: "moka-aes" },
+  { name: "sensetime", adapter: sensetime as unknown as Adapter, family: "beisen-wecruit" },
+  { name: "iflytek",   adapter: iflytek   as unknown as Adapter, family: "beisen-italent" },
+];
 
 // Synthetic résumé: a 4-byte file with PDF-looking magic. httpbin echoes the
 // multipart parts back, including the file's bytes, so we don't need a real
@@ -89,7 +111,12 @@ interface Result {
   http_status?: number;
 }
 
-async function probe(name: string, adapter: Adapter, profile: ResumeProfile): Promise<Result> {
+async function probe(
+  name: string,
+  adapter: Adapter,
+  family: Family,
+  profile: ResumeProfile
+): Promise<Result> {
   if (typeof adapter.fetchApplicationSchema !== "function") {
     return { name, tag: "FAIL", reason: "no fetchApplicationSchema export" };
   }
@@ -131,28 +158,47 @@ async function probe(name: string, adapter: Adapter, profile: ResumeProfile): Pr
     };
   }
 
-  // 4. Fire to echo server.
-  let result: { ok?: boolean; status?: number; message?: string };
+  // 4. Fire to echo server via the family's executor.
+  type StepResult = { ok?: boolean; status?: number; message?: string; steps?: Array<{ status?: number }> };
+  let result: StepResult;
   try {
-    result = (await submitApplication(staged, { kind: "debug", url: ECHO_URL })) as typeof result;
+    if (family === "generic") {
+      result = (await submitApplication(staged, { kind: "debug", url: ECHO_URL })) as StepResult;
+    } else if (family === "feishu-3-step") {
+      result = (await executeFeishu3Step(staged, null, { kind: "debug", url: ECHO_URL })) as StepResult;
+    } else if (family === "moka-aes") {
+      result = (await executeMokaApply(staged, null, { kind: "debug", url: ECHO_URL })) as StepResult;
+    } else if (family === "beisen-wecruit") {
+      result = (await executeBeisenWecruit(staged, null, { kind: "debug", url: ECHO_URL })) as StepResult;
+    } else {
+      result = (await executeBeisenITalent(staged, null, { kind: "debug", url: ECHO_URL })) as StepResult;
+    }
   } catch (err) {
     return { name, tag: "FAIL", reason: `submit threw: ${err instanceof Error ? err.message : String(err)}` };
   }
   if (result.ok !== true) {
     return { name, tag: "FAIL", reason: `submit ok:false — ${result.message ?? "?"}`, http_status: result.status };
   }
-  if (result.status !== 200) {
-    return { name, tag: "WARN", reason: `echo returned HTTP ${result.status}`, http_status: result.status };
+  // Generic/multipart: single response.status. Family executors: each step
+  // is logged in result.steps[*]; require every step to be HTTP 200.
+  if (family === "generic") {
+    if (result.status !== 200) return { name, tag: "WARN", reason: `echo returned HTTP ${result.status}`, http_status: result.status };
+    return { name, tag: "PASS", reason: `echo 200 OK; ${Object.keys(overrides).length} required answers filled`, http_status: 200 };
   }
-  return { name, tag: "PASS", reason: `echo 200 OK; ${Object.keys(overrides).length} required answers filled`, http_status: 200 };
+  const steps = result.steps ?? [];
+  if (steps.length === 0) return { name, tag: "FAIL", reason: `${family}: ok:true but no steps logged` };
+  const badSteps = steps.filter((s) => s.status !== 200);
+  if (badSteps.length > 0) return { name, tag: "WARN", reason: `${family}: ${badSteps.length}/${steps.length} step(s) non-200` };
+  return { name, tag: "PASS", reason: `${family}: all ${steps.length} step(s) echoed 200`, http_status: 200 };
 }
 
 async function main(): Promise<void> {
   const start = Date.now();
   const { profile, cleanup } = syntheticProfileAndResume();
   try {
-    const entries = Object.entries(ADAPTERS);
-    const results = await Promise.all(entries.map(([name, a]) => probe(name, a, profile)));
+    const results = await Promise.all(
+      ADAPTERS.map(({ name, adapter, family }) => probe(name, adapter, family, profile))
+    );
     const width = Math.max(...results.map((r) => r.name.length));
     for (const r of results) {
       const httpTag = r.http_status ? ` http=${r.http_status}` : "";
