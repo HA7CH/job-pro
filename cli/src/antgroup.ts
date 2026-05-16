@@ -308,8 +308,12 @@ export async function fetchPositionDetail(postId: string) {
   if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required" };
 
   for (const rt of ["campus", "social"] as const) {
-    const pageSize = 50;
-    const maxPages = 20;
+    // pageSize >= 50 triggers a silent upstream rejection (returns
+    // {totalCount: 0, content: []}). 20 is the SPA's own default and the
+    // largest size that reliably returns data. Compensate by widening
+    // maxPages from 20 → 50 to preserve ~the same scan depth.
+    const pageSize = 20;
+    const maxPages = 50;
     for (let page = 1; page <= maxPages; page++) {
       const body: Record<string, unknown> = {
         key: "",

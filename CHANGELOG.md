@@ -4,6 +4,30 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.20 — antgroup pageSize fix → **apply-smoke 50/50 schema-ok**
+
+\`antgroup\`'s \`fetchPositionDetail\` brute-scans \`/api/<rt>/position/search\`
+(no direct detail endpoint exists). The scan was using \`pageSize: 50\`
+— but that triggers a silent upstream rejection (\`totalCount: 0\`).
+20 is the SPA's own default and the largest size that reliably
+returns data. Compensated by widening maxPages 20 → 50 to keep
+~the same scan depth.
+
+apply-smoke now reports **50 schema-ok / 0 ok:false / 0 broken / 50
+(3.7s)** — first time Phase 2 schema is fully green across all 50
+adapters. Cumulative submit_kind tally:
+
+```
+beisen-italent     2
+beisen-wecruit     2
+cdp-real-browser   1
+external           5  ← structural (Liepin IM × 4 + Unitree WeChat × 1)
+feishu-3-step      8
+moka-aes           7
+multipart-anon     3  ← anon-submittable
+multipart-session 22
+```
+
 ## 1.0.19 — detail-endpoint bugfixes: mihoyo / oppo / sf
 
 Three latent bugs in \`fetchPositionDetail\` surfaced by reading the
