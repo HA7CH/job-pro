@@ -4,6 +4,24 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.74 — \`executeBeisenWecruit\` always sends X-Requested-With
+
+1.0.63 discovered that Beisen Wecruit's Nginx routing falls through
+to SPA HTML unless the request carries \`X-Requested-With:
+XMLHttpRequest\`. The schema was marked verified, but the executor
+relied on the captured \`session.json\` containing that header.
+
+If a user's session capture missed the header (e.g., page navigated
+without firing an XHR first), the executor would silently 404.
+Hardened: inject \`X-Requested-With: XMLHttpRequest\` unconditionally
+on every Beisen Wecruit step, layered on top of \`sessionHeaderBag\`.
+
+Affects sensetime / horizonrobotics. Same pattern audited for other
+families: Feishu/Moka/Beisen iTalent don't need a custom header
+(their probes returned 405/200-envelope without one).
+
+Submit-smoke: 27/27 still pass.
+
 ## 1.0.73 — npm package metadata sync (description + keywords)
 
 \`description\` was at the 0.7.x era ("46 via each company's own API"

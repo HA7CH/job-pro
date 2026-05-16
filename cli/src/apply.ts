@@ -1355,7 +1355,14 @@ export async function executeBeisenWecruit(
   const host = url.host;
   const apiBase = `${url.protocol}//${host}/wecruit`;
   const debug = target.kind === "debug";
-  const sessionHeaders = sessionHeaderBag(session, host);
+  // X-Requested-With is required for Beisen Wecruit Nginx routing —
+  // without it the request falls through to the SPA HTML (verified
+  // via probe in 1.0.63). Inject unconditionally even if the captured
+  // session.json didn't include it.
+  const sessionHeaders = {
+    ...sessionHeaderBag(session, host),
+    "X-Requested-With": "XMLHttpRequest",
+  };
   const FileCtor = (globalThis as { File?: typeof File }).File;
 
   const steps: FeishuStepLog[] = [];
