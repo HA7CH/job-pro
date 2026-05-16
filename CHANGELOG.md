@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.69 — submit-smoke covers all 22 verified multipart-session
+
+Added the 7 newly-verified multipart-session adapters (1.0.57–1.0.68)
+to \`pnpm test:debug-submit\`: tencent / jd / oppo / trip / kuaishou /
+huawei / antgroup. Combined with the earlier 8 (1.0.56) + 5 anon-
+probed + 3 Greenhouse anon = **22 multipart adapters smoke-tested**.
+
+\`\`\`
+Submit wire format: 27 pass / 0 broken / 17.5s
+\`\`\`
+
+Family executor smoke (1 rep each: nio / megvii / sensetime / iflytek)
+stays as is — the 4 family executors share code paths so additional
+reps add no coverage.
+
+Test matrix at 1.0.69:
+
+| Layer | Cmd | Result |
+|-------|-----|--------|
+| Unit | \`pnpm test:unit\` | 32/32 (CI) |
+| Read | \`pnpm test\` | 50/50 healthy / 3.7s |
+| Schema | \`pnpm test:apply\` | 50/50 ok / 8.3s |
+| Submit wire | \`pnpm test:debug-submit\` | **27/27 pass / 17.5s** |
+
+Total: 159 assertions / 0 red.
+
 ## 1.0.68 — antgroup → verified (45 / 50, all non-external done)
 
 Found a SECOND umi bundle for talent.antgroup.com:

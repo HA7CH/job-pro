@@ -38,6 +38,13 @@ import * as byd from "../src/byd.js";
 import * as bilibili from "../src/bilibili.js";
 import * as xiaohongshu from "../src/xiaohongshu.js";
 import * as baidu from "../src/baidu.js";
+import * as tencent from "../src/tencent.js";
+import * as jd from "../src/jd.js";
+import * as oppo from "../src/oppo.js";
+import * as trip from "../src/trip.js";
+import * as kuaishou from "../src/kuaishou.js";
+import * as huawei from "../src/huawei.js";
+import * as antgroup from "../src/antgroup.js";
 import {
   stageApplication,
   submitApplication,
@@ -85,6 +92,14 @@ const ADAPTERS: Array<{ name: string; adapter: Adapter; family: Family }> = [
   { name: "bilibili",    adapter: bilibili    as unknown as Adapter, family: "generic" },
   { name: "xiaohongshu", adapter: xiaohongshu as unknown as Adapter, family: "generic" },
   { name: "baidu",       adapter: baidu       as unknown as Adapter, family: "generic" },
+  // multipart-session probe-verified via JS-bundle extraction (1.0.57–1.0.68).
+  { name: "tencent",     adapter: tencent     as unknown as Adapter, family: "generic" },
+  { name: "jd",          adapter: jd          as unknown as Adapter, family: "generic" },
+  { name: "oppo",        adapter: oppo        as unknown as Adapter, family: "generic" },
+  { name: "trip",        adapter: trip        as unknown as Adapter, family: "generic" },
+  { name: "kuaishou",    adapter: kuaishou    as unknown as Adapter, family: "generic" },
+  { name: "huawei",      adapter: huawei      as unknown as Adapter, family: "generic" },
+  { name: "antgroup",    adapter: antgroup    as unknown as Adapter, family: "generic" },
   // one rep per family-executor — null session OK in debug mode (executor
   // returns UA-only headers).
   { name: "nio",       adapter: nio       as unknown as Adapter, family: "feishu-3-step" },
