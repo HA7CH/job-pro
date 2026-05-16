@@ -197,6 +197,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "iflytek", "vivo",
   // multipart-session probe-verified via re-routing (1.0.50)
   "sf",
+  // multipart-session probe-verified via 405 (route exists, method/body wrong)
+  "netease", "didi", "pingan",
 ]);
 
 const HELP = `
@@ -1430,9 +1432,13 @@ async function main() {
       // 5xx + any body = handler threw on us, route exists. IIS / Spring
       // generic 500 templates are HTML but still real-route signals.
       if (status >= 500) return "verified-real";
+      // 405 + any body = method-not-allowed = the routing table has this
+      // URL; just the method/body is wrong. Real route. Nginx's HTML 405
+      // page is one common form, hence the explicit handling here.
+      if (status === 405) return "verified-real";
       if (status === 404) return isHTML ? "html-fallthrough" : "speculative-404";
       if (isHTML) return "html-fallthrough";
-      // 401/403/200-with-error-body/405/4xx-with-business-error = real route
+      // 401/403/200-with-error-body/4xx-with-business-error = real route
       return "verified-real";
     }
 

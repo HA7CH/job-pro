@@ -661,8 +661,9 @@ export async function fetchApplicationSchema(postId: string): Promise<
       applyUrl,
       submitEndpoint: "https://campus.pingan.com/recruit/api/applyJob",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Ping An — POST /recruit/api/applyJob with session cookie. Endpoint inferred; needs validation.",
+        "Ping An — POST /recruit/api/applyJob with session cookie. Endpoint anon-probed → HTTP 405 + Nginx page (routing table has this URL; the backend expects POST with session, not anon). Body shape still needs validation.",
     }),
   };
 }

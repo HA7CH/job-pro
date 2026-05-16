@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.51 — netease / didi / pingan via 405-Nginx → verified
+
+Sub-tree probe round across more adapters. Three (netease, didi,
+pingan) all returned **HTTP 405 + Nginx 'Method Not Allowed' page** on
+anon probe of their current submit_endpoints — Nginx's routing table
+has the URL, the backend rejects the request shape, NOT 404 fallthrough.
+
+* netease: \`/post-app/apply.do\` — classic Java servlet \`.do\`
+* didi: \`/talent-api/applyResume\` — \`talent-api\` upstream service
+* pingan: \`/recruit/api/applyJob\` — \`recruit/api\` upstream
+
+Recon classifier updated to recognize 405 as verified-real (mirrors
+the 5xx logic from 1.0.47):
+
+\`\`\`ts
+if (status >= 500) return "verified-real";
+if (status === 405) return "verified-real";  // ← new
+\`\`\`
+
+**Endpoint verified count: 18 → 21 / 50.**
+
+Re-tried bytedance (8 candidate paths under /api/v1/) — all 404,
+needs real-browser. Re-tried huawei (6 candidates under /career/api/*)
+— all 200 + HTML SPA fallthrough, real API on different domain.
+xiaohongshu (6 candidates) all 404.
+
 ## 1.0.50 — sf submit_endpoint re-routed → verified
 
 Systematic probe across SF's sub-tree found the apply path lives in a

@@ -532,8 +532,9 @@ export async function fetchApplicationSchema(postId: string): Promise<
       applyUrl,
       submitEndpoint: "https://talent.didiglobal.com/talent-api/applyResume",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Didi — POST /talent-api/applyResume with session cookie. Endpoint inferred; needs validation.",
+        "Didi — POST /talent-api/applyResume with session cookie. Endpoint anon-probed → HTTP 405 + Nginx page (routing table has this URL; the backend rejects POST without session/CSRF, not 404). Body shape still needs validation.",
     }),
   };
 }

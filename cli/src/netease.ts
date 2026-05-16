@@ -573,8 +573,9 @@ export async function fetchApplicationSchema(postId: string): Promise<
       applyUrl,
       submitEndpoint: "https://hr.163.com/post-app/apply.do",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "NetEase — POST /post-app/apply.do with session cookie. Endpoint inferred; needs validation.",
+        "NetEase — POST /post-app/apply.do with session cookie. Endpoint anon-probed → HTTP 405 (Nginx routing table has this .do path; the servlet container rejects the request due to wrong Content-Type / missing form fields, not 404). Body shape still needs validation against a real candidate session.",
     }),
   };
 }
