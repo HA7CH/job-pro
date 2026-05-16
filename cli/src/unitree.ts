@@ -51,7 +51,6 @@ export { checkResume };
 
 const SOURCE = "unitree.com";
 const POSITION_PAGE = "https://www.unitree.com/position/";
-const POSITION_PAGE_CN = "https://www.unitree.com/cn/position/";
 const DETAIL_URL = (jobCode: string) =>
   `https://www.unitree.com/position/${encodeURIComponent(jobCode)}`;
 

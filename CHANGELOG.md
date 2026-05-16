@@ -4,6 +4,19 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.84 — tsconfig: noUnusedLocals + noUnusedParameters enforced
+
+Ran \`npx tsc --noUnusedLocals --noUnusedParameters\` across the
+26.5k-LOC codebase: found exactly **1 unused symbol** —
+\`POSITION_PAGE_CN\` in \`unitree.ts\`, from an earlier draft when
+mainland-China and international URLs were considered separately.
+Removed.
+
+With the codebase clean, flipped both flags to \`true\` in
+\`cli/tsconfig.json\` so they're enforced on every \`npm run build\`
+(which is what CI runs). Future contributors get immediate feedback
+when their dead code accumulates.
+
 ## 1.0.83 — comments & error messages caught up with executor reality
 
 Two stale code paths from the multi-step-executor scaffolding era
