@@ -59,7 +59,79 @@ import {
   memoryClear,
 } from "./memory.js";
 
-const VERSION = "0.8.1";
+const VERSION = "0.8.2";
+
+// COMPANY_DIRECTORY drives both `job-pro list` output and the company table
+// that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
+// `key` matches an ADAPTERS map slot. Update this when wiring a new adapter.
+type CompanyFamily =
+  | "Bespoke"
+  | "Feishu"
+  | "Beisen Wecruit"
+  | "Beisen iTalent"
+  | "Moka"
+  | "Greenhouse / Lever (intl arm)"
+  | "Liepin (third-party)";
+
+interface CompanyDirEntry {
+  key: string;
+  family: CompanyFamily;
+  source: string;
+  label: string;
+}
+
+const COMPANIES: CompanyDirEntry[] = [
+  { key: "tencent",         family: "Bespoke",                       source: "join.qq.com",                 label: "Tencent / 腾讯" },
+  { key: "bytedance",       family: "Bespoke",                       source: "jobs.bytedance.com",          label: "ByteDance / 字节跳动" },
+  { key: "alibaba",         family: "Bespoke",                       source: "campus-talent.alibaba.com",   label: "Alibaba / 阿里巴巴" },
+  { key: "meituan",         family: "Bespoke",                       source: "zhaopin.meituan.com",         label: "Meituan / 美团" },
+  { key: "xiaohongshu",     family: "Bespoke",                       source: "job.xiaohongshu.com",         label: "Xiaohongshu / 小红书" },
+  { key: "jd",              family: "Bespoke",                       source: "campus.jd.com",               label: "JD / 京东" },
+  { key: "kuaishou",        family: "Bespoke",                       source: "campus.kuaishou.cn",          label: "Kuaishou / 快手" },
+  { key: "baidu",           family: "Bespoke",                       source: "talent.baidu.com",            label: "Baidu / 百度" },
+  { key: "netease",         family: "Bespoke",                       source: "hr.163.com",                  label: "NetEase / 网易" },
+  { key: "didi",            family: "Bespoke",                       source: "talent.didiglobal.com",       label: "Didi / 滴滴" },
+  { key: "bilibili",        family: "Bespoke",                       source: "jobs.bilibili.com",           label: "Bilibili / 哔哩哔哩" },
+  { key: "pdd",             family: "Bespoke",                       source: "careers.pinduoduo.com",       label: "PDD / 拼多多" },
+  { key: "huawei",          family: "Bespoke",                       source: "career.huawei.com",           label: "Huawei / 华为" },
+  { key: "weibo",           family: "Bespoke",                       source: "career.sina.com.cn",          label: "Weibo / 微博" },
+  { key: "mihoyo",          family: "Bespoke",                       source: "ats.openout.mihoyo.com",      label: "miHoYo / 米哈游" },
+  { key: "pingan",          family: "Bespoke",                       source: "campus.pingan.com",           label: "Ping An / 平安" },
+  { key: "trip",            family: "Bespoke",                       source: "careers.ctrip.com",           label: "Trip.com / 携程" },
+  { key: "unitree",         family: "Bespoke",                       source: "www.unitree.com",             label: "Unitree / 宇树科技" },
+  { key: "byd",             family: "Bespoke",                       source: "job.byd.com",                 label: "BYD / 比亚迪" },
+  { key: "antgroup",        family: "Bespoke",                       source: "hrcareersweb.antgroup.com",   label: "Ant Group / 蚂蚁集团" },
+  { key: "liauto",          family: "Bespoke",                       source: "www.lixiang.com",             label: "Li Auto / 理想汽车" },
+  { key: "sf",              family: "Bespoke",                       source: "campus.sf-express.com",       label: "SF Express / 顺丰" },
+  { key: "oppo",            family: "Bespoke",                       source: "careers.oppo.com",            label: "OPPO" },
+  { key: "xiaomi",          family: "Feishu",                        source: "xiaomi.jobs.f.mioffice.cn",   label: "Xiaomi / 小米" },
+  { key: "nio",             family: "Feishu",                        source: "nio.jobs.feishu.cn",          label: "NIO / 蔚来" },
+  { key: "minimax",         family: "Feishu",                        source: "vrfi1sk8a0.jobs.feishu.cn",   label: "MiniMax" },
+  { key: "moonshot",        family: "Moka",                          source: "app.mokahr.com/moonshot",     label: "Moonshot / 月之暗面" },
+  { key: "zhipu",           family: "Feishu",                        source: "zhipu-ai.jobs.feishu.cn",     label: "Zhipu / 智谱AI" },
+  { key: "iqiyi",           family: "Feishu",                        source: "careers.iqiyi.com",           label: "iQIYI / 爱奇艺" },
+  { key: "agibot",          family: "Feishu",                        source: "agirobot.jobs.feishu.cn",     label: "Agibot / 智元机器人" },
+  { key: "lilith",          family: "Feishu",                        source: "lilithgames.jobs.feishu.cn",  label: "Lilith Games / 莉莉丝 — needs local Chrome" },
+  { key: "zerooneai",       family: "Feishu",                        source: "01ai.jobs.feishu.cn",         label: "01.AI / 零一万物" },
+  { key: "baichuan",        family: "Feishu",                        source: "cq6qe6bvfr6.jobs.feishu.cn",  label: "Baichuan / 百川智能" },
+  { key: "sensetime",       family: "Beisen Wecruit",                source: "hr.sensetime.com",            label: "SenseTime / 商汤" },
+  { key: "horizonrobotics", family: "Beisen Wecruit",                source: "wecruit.hotjob.cn",           label: "Horizon Robotics / 地平线" },
+  { key: "vivo",            family: "Beisen iTalent",                source: "vivo.zhiye.com",              label: "vivo" },
+  { key: "iflytek",         family: "Beisen iTalent",                source: "iflytek.zhiye.com",           label: "iFlytek / 科大讯飞" },
+  { key: "megvii",          family: "Moka",                          source: "app.mokahr.com/megviihr",     label: "Megvii / 旷视" },
+  { key: "deepseek",        family: "Moka",                          source: "app.mokahr.com/high-flyer",   label: "DeepSeek / 深度求索" },
+  { key: "galaxyuniversal", family: "Moka",                          source: "app.mokahr.com/yinhetongyong", label: "Galaxy Universal / 银河通用" },
+  { key: "stepfun",         family: "Moka",                          source: "app.mokahr.com/step",         label: "StepFun / 阶跃星辰" },
+  { key: "cambricon",       family: "Moka",                          source: "app.mokahr.com/cambricon",    label: "Cambricon / 寒武纪" },
+  { key: "geely",           family: "Moka",                          source: "app.mokahr.com/geely",        label: "Geely / 吉利" },
+  { key: "xpeng",           family: "Greenhouse / Lever (intl arm)", source: "boards.greenhouse.io/xpengmotors", label: "XPeng / 小鹏汽车 — US AI" },
+  { key: "weride",          family: "Greenhouse / Lever (intl arm)", source: "jobs.lever.co/weride",        label: "WeRide / 文远知行 — US / 广州" },
+  { key: "hoyoverse",       family: "Greenhouse / Lever (intl arm)", source: "boards.greenhouse.io/hoyoverse", label: "HoYoverse / 米哈游国际" },
+  { key: "hikvision",       family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "Hikvision / 海康威视" },
+  { key: "cicc",            family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "CICC / 中金" },
+  { key: "cainiao",         family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "Cainiao / 菜鸟" },
+  { key: "webank",          family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "WeBank / 微众银行" },
+];
 
 const HELP = `
 job-pro — query Chinese big-tech campus recruiting from your terminal
@@ -67,74 +139,13 @@ job-pro — query Chinese big-tech campus recruiting from your terminal
 
 USAGE
   job-pro <company> <verb> [options]
+  job-pro list [--compact]            list all 50 companies + source family
   job-pro --version
   job-pro help
 
-COMPANIES (50 — all live; see job.ha7ch.com for the full matrix)
-
-  Bespoke per-company API
-    tencent          join.qq.com                 (Tencent / 腾讯)
-    bytedance        jobs.bytedance.com          (ByteDance / 字节跳动)
-    alibaba          campus-talent.alibaba.com   (Alibaba / 阿里巴巴)
-    meituan          zhaopin.meituan.com         (Meituan / 美团)
-    xiaohongshu      job.xiaohongshu.com         (Xiaohongshu / 小红书)
-    jd               campus.jd.com               (JD / 京东)
-    kuaishou         campus.kuaishou.cn          (Kuaishou / 快手)
-    baidu            talent.baidu.com            (Baidu / 百度)
-    netease          hr.163.com                  (NetEase / 网易)
-    didi             talent.didiglobal.com       (Didi / 滴滴)
-    bilibili         jobs.bilibili.com           (Bilibili / 哔哩哔哩)
-    pdd              careers.pinduoduo.com       (PDD / 拼多多)
-    huawei           career.huawei.com           (Huawei / 华为)
-    weibo            career.sina.com.cn          (Weibo / 微博)
-    mihoyo           ats.openout.mihoyo.com      (miHoYo / 米哈游)
-    pingan           campus.pingan.com           (Ping An / 平安)
-    trip             careers.ctrip.com           (Trip.com / 携程)
-    unitree          www.unitree.com             (Unitree / 宇树科技)
-    byd              job.byd.com                 (BYD / 比亚迪)
-    antgroup         hrcareersweb.antgroup.com   (Ant Group / 蚂蚁集团)
-    liauto           www.lixiang.com             (Li Auto / 理想汽车)
-    zerooneai        01ai.jobs.feishu.cn         (01.AI / 零一万物)
-    baichuan         cq6qe6bvfr6.jobs.feishu.cn  (Baichuan / 百川智能)
-    sf               campus.sf-express.com       (SF Express / 顺丰)
-    oppo             careers.oppo.com            (OPPO)
-
-  Feishu Recruiting (ATSX)
-    xiaomi           xiaomi.jobs.f.mioffice.cn   (Xiaomi / 小米)
-    nio              nio.jobs.feishu.cn          (NIO / 蔚来)
-    minimax          vrfi1sk8a0.jobs.feishu.cn   (MiniMax)
-    moonshot         moonshot.jobs.feishu.cn     (Moonshot / 月之暗面)
-    zhipu            zhipu-ai.jobs.feishu.cn     (Zhipu / 智谱AI)
-    iqiyi            careers.iqiyi.com           (iQIYI / 爱奇艺)
-    agibot           agirobot.jobs.feishu.cn     (Agibot / 智元机器人)
-    lilith           lilithgames.jobs.feishu.cn  (Lilith Games / 莉莉丝 — needs local Chrome)
-
-  Beisen Wecruit
-    sensetime        hr.sensetime.com            (SenseTime / 商汤)
-    horizonrobotics  wecruit.hotjob.cn           (Horizon Robotics / 地平线)
-
-  Beisen iTalent (zhiye)
-    vivo             vivo.zhiye.com              (vivo)
-    iflytek          iflytek.zhiye.com           (iFlytek / 科大讯飞)
-
-  Moka (app.mokahr.com)
-    megvii           app.mokahr.com/megviihr     (Megvii / 旷视)
-    deepseek         app.mokahr.com/high-flyer   (DeepSeek / 深度求索)
-    galaxyuniversal  app.mokahr.com/yinhetongyong (Galaxy Universal / 银河通用)
-    stepfun          app.mokahr.com/step         (StepFun / 阶跃星辰)
-    cambricon        app.mokahr.com/cambricon    (Cambricon / 寒武纪)
-    geely            app.mokahr.com/geely        (Geely / 吉利)
-
-  Greenhouse / Lever (international arm only)
-    xpeng            boards.greenhouse.io/xpengmotors  (XPeng / 小鹏汽车 — US AI)
-    weride           jobs.lever.co/weride        (WeRide / 文远知行 — US / 广州)
-    hoyoverse        boards.greenhouse.io/hoyoverse    (HoYoverse / 米哈游国际)
-
-  Third-party (Liepin aggregator — no canonical public feed exists)
-    hikvision        api-c.liepin.com            (Hikvision / 海康威视)
-    cicc             api-c.liepin.com            (CICC / 中金)
-    cainiao          api-c.liepin.com            (Cainiao / 菜鸟)
-    webank           api-c.liepin.com            (WeBank / 微众银行)
+50 companies, all live. Run \`job-pro list\` for the full table grouped
+by ATS family (Bespoke / Feishu / Beisen Wecruit / Beisen iTalent / Moka
+/ Greenhouse-Lever / Liepin). Coverage summary at job.ha7ch.com.
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -436,6 +447,56 @@ async function runCompany(
   die(`unknown verb: ${verb}. Try \`job-pro help\`.`);
 }
 
+function printCompanyList(compact: boolean): void {
+  // Validate the directory still matches the ADAPTERS map. If a company
+  // appears in only one place, treat it as a bug.
+  const adapterKeys = new Set(Object.keys(ADAPTERS));
+  const dirKeys = new Set(COMPANIES.map((c) => c.key));
+  const missingInDir = [...adapterKeys].filter((k) => !dirKeys.has(k));
+  const missingInAdapters = [...dirKeys].filter((k) => !adapterKeys.has(k));
+  if (missingInDir.length || missingInAdapters.length) {
+    console.error(
+      "INTERNAL: COMPANIES directory diverged from ADAPTERS map.\n" +
+        (missingInDir.length ? `  missing from directory: ${missingInDir.join(", ")}\n` : "") +
+        (missingInAdapters.length ? `  missing from adapters: ${missingInAdapters.join(", ")}\n` : "")
+    );
+  }
+
+  if (compact) {
+    // Machine-readable: emit a JSON array of { key, family, source, label }.
+    console.log(JSON.stringify(COMPANIES));
+    return;
+  }
+
+  // Human-readable: group by family, fixed-width left column.
+  const byFamily = new Map<CompanyFamily, CompanyDirEntry[]>();
+  for (const c of COMPANIES) {
+    if (!byFamily.has(c.family)) byFamily.set(c.family, []);
+    byFamily.get(c.family)!.push(c);
+  }
+  const order: CompanyFamily[] = [
+    "Bespoke",
+    "Feishu",
+    "Beisen Wecruit",
+    "Beisen iTalent",
+    "Moka",
+    "Greenhouse / Lever (intl arm)",
+    "Liepin (third-party)",
+  ];
+  const keyWidth = Math.max(...COMPANIES.map((c) => c.key.length));
+  const srcWidth = Math.max(...COMPANIES.map((c) => c.source.length));
+  console.log(`job-pro — 50 companies, all live. ATS-family breakdown:`);
+  for (const family of order) {
+    const entries = byFamily.get(family);
+    if (!entries) continue;
+    console.log(`\n${family} (${entries.length})`);
+    for (const c of entries) {
+      console.log(`  ${c.key.padEnd(keyWidth)}  ${c.source.padEnd(srcWidth)}  ${c.label}`);
+    }
+  }
+  console.log(`\nTotal: ${COMPANIES.length}. Run \`job-pro <key> search "…"\` against any of them.`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const cmd = args[0];
@@ -448,6 +509,11 @@ async function main() {
     console.log(VERSION);
     return;
   }
+  if (cmd === "list" || cmd === "companies") {
+    const compact = args.includes("--compact");
+    printCompanyList(compact);
+    return;
+  }
 
   const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[cmd];
   if (adapter) {
@@ -456,9 +522,8 @@ async function main() {
   }
 
   die(
-    `unknown company: ${cmd}. Supported: ${Object.keys(ADAPTERS).join(
-      ", "
-    )}. Try \`job-pro help\`.`
+    `unknown company: ${cmd}. Try \`job-pro list\` for the full list, ` +
+      `or \`job-pro help\` for usage.`
   );
 }
 
