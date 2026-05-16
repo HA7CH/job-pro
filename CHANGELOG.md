@@ -4,6 +4,21 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.32 — \`find --apply-ready\` lists hidden buckets
+
+Previously \`--apply-ready\` ended with \`(N company-bucket(s) hidden)\`
+— a count with no names, no actionable next step. Now lists the
+hidden buckets explicitly:
+
+\`\`\`
+Hidden by --apply-ready:
+  🟡 missing-session (run \`job-pro extension\`): bytedance(3) alibaba(2)
+  ⛔ external (IM-mediated):                     hikvision(1)
+\`\`\`
+
+Plus the count, the user can immediately see which adapters they'd
+unlock with one more session capture.
+
 ## 1.0.31 — \`apply --batch\` progress indicator
 
 Long batch runs were silent until the final JSON dump. \`apply --batch\`

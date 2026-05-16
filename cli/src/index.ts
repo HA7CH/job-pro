@@ -1582,9 +1582,22 @@ Or copy the path to clipboard (macOS):
         }
         console.log("");
       }
-      const hiddenCount = allHits.length - withHits.length;
-      if (applyReadyOnly && hiddenCount > 0) {
-        console.log(`(${hiddenCount} company-bucket(s) hidden — missing-session / external)\n`);
+      if (applyReadyOnly) {
+        const hiddenBuckets = allHits.filter(
+          (r) => r.apply_status === "missing-session" || r.apply_status === "external"
+        );
+        if (hiddenBuckets.length > 0) {
+          const missing = hiddenBuckets
+            .filter((r) => r.apply_status === "missing-session")
+            .map((r) => `${r.company}(${r.count})`);
+          const external = hiddenBuckets
+            .filter((r) => r.apply_status === "external")
+            .map((r) => `${r.company}(${r.count})`);
+          console.log(`Hidden by --apply-ready:`);
+          if (missing.length) console.log(`  🟡 missing-session (run \`job-pro extension\`): ${missing.join(" ")}`);
+          if (external.length) console.log(`  ⛔ external (IM-mediated):              ${external.join(" ")}`);
+          console.log("");
+        }
       }
       if (failed.length > 0) {
         console.log(`Failed (${failed.length}):`);
