@@ -1,5 +1,8 @@
 # job.pro
 
+[![ci](https://github.com/HA7CH/job-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/HA7CH/job-pro/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/job-pro.svg)](https://www.npmjs.com/package/job-pro)
+
 Query Chinese big-tech campus recruiting from your terminal — [job.ha7ch.com](https://job.ha7ch.com)
 
 ```bash
