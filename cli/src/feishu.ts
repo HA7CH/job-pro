@@ -128,16 +128,18 @@ export function buildFeishuApplySchema(args: {
     post_id: args.postId,
     job_title: args.jobTitle,
     apply_url: `${args.applyUrlPrefix}/${encodeURIComponent(args.postId)}/detail`,
-    submit_endpoint: `https://${args.host}/api/v1/resume/apply`,
+    submit_endpoint: `https://${args.host}/api/v1/user/applications`,
     submit_method: "POST",
     submit_kind: "feishu-3-step",
+    endpoint_verified: true,
     submit_notes:
       "Feishu apply is a 3-step token flow: POST /api/v1/attachment/upload/tokens → " +
       "PUT presigned URL on lf-package-cn.feishucdn.com → POST /api/v1/attachment/exchange/tokens → " +
-      "POST /api/v1/resume/apply with { post_id, attachment_id, applicant_info }. " +
-      "Requires candidate session cookies (capture via extension/, drop under " +
-      "~/.jobpro/<adapter>.session.json). Multi-step submitter wires in next iteration; " +
-      "today this schema is dry-run only.",
+      "POST /api/v1/user/applications with { post_id, attachment_id, applicant_info }. " +
+      "Endpoint extracted from atsx-throne/hire-fe-prod/saas-career/4026.f23f1edc.js " +
+      "(/user/applications path) and anon-probed → HTTP 405 = real REST route in Feishu's " +
+      "routing table (method/csrf requirements differ from anon POST). Requires candidate " +
+      "session cookies (capture via extension/, drop under ~/.jobpro/<adapter>.session.json).",
     questions: standard,
   };
 }

@@ -215,6 +215,9 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "oppo",
   // probe-verified via JS-bundle extraction (1.0.60)
   "trip",
+  // Feishu family: /api/v1/user/applications discovered via SPA chunk 4026
+  // (1.0.62). Promotes all 8 Feishu adapters since they share backend.
+  "xiaomi", "nio", "minimax", "zhipu", "iqiyi", "agibot", "zerooneai", "baichuan",
 ]);
 
 const HELP = `

@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.62 — Feishu family ✕ 8 verified via SPA chunk extraction
+
+Dug deeper into the atsx-throne SPA chunks. The 4026.f23f1edc.js
+chunk (837KB) contains quoted paths like \`/user/applications\`,
+\`/user/delivery/check\`, \`/resume/apply\`, etc.
+
+Probed candidates under \`https://nio.jobs.feishu.cn/api/v1/\`:
+* \`/resume/apply\` → 404 (the bundle string but not the actual route)
+* \`/user/apply\` → 404
+* \`/user/delivery/check\` → **405** (real route, GET only)
+* \`/user/resumes\` → **405**
+* \`/user/applications\` → **405** ← real apply route, REST-style POST
+
+The original speculative \`/api/v1/resume/apply\` is wrong; the right
+path is \`/api/v1/user/applications\` (POST = create application = apply).
+Since all 8 Feishu adapters share the same atsx-throne backend,
+**promoting all 8 in one shot**:
+
+xiaomi / nio / minimax / zhipu / iqiyi / agibot / zerooneai / baichuan
+
+**Endpoint verified count: 29 → 37 / 50.**
+
+Significant: Feishu family was the largest single 🔑 cohort. With
+this and previous JS-bundle wins, the verified count has nearly
+doubled in 10 iterations (1.0.50 was 18; 1.0.62 is 37).
+
 ## 1.0.61 — docs/auto-apply tally + techniques playbook
 
 Synced docs/auto-apply.md to current state (29 ✅ / 16 🔑 / 5 ⛔).
