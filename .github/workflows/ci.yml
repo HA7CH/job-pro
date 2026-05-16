@@ -33,7 +33,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
+      # No root package-lock.json (npm arborist hits a known dedupe crash on
+      # this dep tree locally). Use `npm install` so CI works without one.
+      - run: npm install
       - run: npm run build
