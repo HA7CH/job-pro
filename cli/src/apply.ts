@@ -871,9 +871,10 @@ export async function executeFeishu3Step(
 
   // STEP 1 — upload tokens
   const step1Url = debug ? target.url : `${apiRoot}/attachment/upload/tokens`;
-  let step1Resp: Response;
-  try {
-    step1Resp = await fetch(step1Url, {
+  const s1 = await doStep(
+    "upload-tokens",
+    step1Url,
+    {
       method: "POST",
       headers: {
         ...sessionHeaders,
@@ -881,22 +882,14 @@ export async function executeFeishu3Step(
         Accept: "application/json, text/plain, */*",
       },
       body: JSON.stringify({ filename, file_size: fileSize }),
-    });
-  } catch (err) {
-    steps.push({ step: "upload-tokens", url: step1Url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: step1Url, message: "step 1 network error", steps };
+    },
+    steps
+  );
+  if (!s1.ok) {
+    return { ok: false, posted_to: step1Url, status: s1.status, message: `step 1 failed: ${s1.message}`, steps };
   }
-  const step1Body = await step1Resp.text();
-  steps.push({
-    step: "upload-tokens",
-    url: step1Url,
-    status: step1Resp.status,
-    ok: step1Resp.ok,
-    message: step1Body.slice(0, 200),
-  });
-  if (!step1Resp.ok) {
-    return { ok: false, posted_to: step1Url, status: step1Resp.status, message: "step 1 failed (upload tokens)", steps, response_preview: step1Body.slice(0, 4000) };
-  }
+  const step1Resp = s1.response;
+  const step1Body = s1.text;
 
   // In debug mode, we don't actually have a presigned URL — short-circuit.
   if (debug) {
@@ -936,22 +929,14 @@ export async function executeFeishu3Step(
       ? new FileCtor([new Uint8Array(resumeBytes)], filename, { type: "application/pdf" })
       : new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" });
   uploadFd.append("file", filePart as Blob, filename);
-  let step2Resp: Response;
-  try {
-    step2Resp = await fetch(upload_url, { method: "POST", body: uploadFd });
-  } catch (err) {
-    steps.push({ step: "upload-file", url: upload_url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: upload_url, message: "step 2 network error", steps };
+  const s2 = await doStep("upload-file", upload_url, { method: "POST", body: uploadFd }, steps);
+  if (!s2.ok) {
+    return { ok: false, posted_to: upload_url, status: s2.status, message: `step 2 failed: ${s2.message}`, steps };
   }
-  steps.push({
-    step: "upload-file",
-    url: upload_url,
-    status: step2Resp.status,
-    ok: step2Resp.ok,
-    message: `HTTP ${step2Resp.status}`,
-  });
-  if (!step2Resp.ok) {
-    return { ok: false, posted_to: upload_url, status: step2Resp.status, message: "step 2 failed (upload to CDN)", steps };
+  // s2 already pushed to steps via doStep; if upstream returned non-2xx
+  // (after retries on 5xx), surface that.
+  if (!s2.response.ok) {
+    return { ok: false, posted_to: upload_url, status: s2.response.status, message: "step 2 failed (upload to CDN)", steps };
   }
 
   // STEP 3 — resume/apply
@@ -967,9 +952,10 @@ export async function executeFeishu3Step(
     applicant_info: applicantInfo,
   };
   const step3Url = `${apiRoot}/resume/apply`;
-  let step3Resp: Response;
-  try {
-    step3Resp = await fetch(step3Url, {
+  const s3 = await doStep(
+    "resume-apply",
+    step3Url,
+    {
       method: "POST",
       headers: {
         ...sessionHeaders,
@@ -977,25 +963,18 @@ export async function executeFeishu3Step(
         Accept: "application/json, text/plain, */*",
       },
       body: JSON.stringify(step3Body),
-    });
-  } catch (err) {
-    steps.push({ step: "resume-apply", url: step3Url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: step3Url, message: "step 3 network error", steps };
+    },
+    steps
+  );
+  if (!s3.ok) {
+    return { ok: false, posted_to: step3Url, status: s3.status, message: `step 3 failed: ${s3.message}`, steps };
   }
-  const step3Text = await step3Resp.text();
-  steps.push({
-    step: "resume-apply",
-    url: step3Url,
-    status: step3Resp.status,
-    ok: step3Resp.ok,
-    message: step3Text.slice(0, 200),
-  });
   return {
-    ok: step3Resp.ok,
-    status: step3Resp.status,
+    ok: s3.response.ok,
+    status: s3.response.status,
     posted_to: step3Url,
-    response_preview: step3Text.slice(0, 4000),
-    message: step3Resp.ok ? "Feishu 3-step submission accepted" : `step 3 rejected: HTTP ${step3Resp.status}`,
+    response_preview: s3.text,
+    message: s3.response.ok ? "Feishu 3-step submission accepted" : `step 3 rejected: HTTP ${s3.response.status}`,
     steps,
   };
 }
@@ -1068,6 +1047,50 @@ function retryDelayMs(attempt: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Family-executor convenience wrapper. Combines fetchWithRetry's
+ * transient-failure handling with the FeishuStepLog bookkeeping that
+ * each executor needs to push into result.steps. Returns the response
+ * + decoded text, or the error message; either way appends one entry
+ * to `steps[]`.
+ */
+async function doStep(
+  step: string,
+  url: string,
+  init: RequestInit,
+  steps: FeishuStepLog[]
+): Promise<
+  | { ok: true; response: Response; text: string }
+  | { ok: false; status?: number; message: string }
+> {
+  const r = await fetchWithRetry(url, init, step);
+  if (!r.ok) {
+    steps.push({
+      step,
+      url,
+      status: r.status ?? 0,
+      ok: false,
+      message: r.message.slice(0, 200),
+    });
+    return { ok: false, status: r.status, message: r.message };
+  }
+  const response = r.response;
+  let text = "";
+  try {
+    text = (await response.text()).slice(0, 4000);
+  } catch {
+    /* binary or stream */
+  }
+  steps.push({
+    step,
+    url,
+    status: response.status,
+    ok: response.ok,
+    message: text.slice(0, 200) || `HTTP ${response.status}`,
+  });
+  return { ok: true, response, text };
 }
 
 /** Build the headers bag used by every Feishu/Beisen/Moka step. */
@@ -1166,41 +1189,43 @@ export async function executeMokaApply(
   const steps: FeishuStepLog[] = [];
   const sessionHeaders = sessionHeaderBag(session, host);
 
-  // Pre-flight limit check (optional — skip in debug since we'd redirect)
+  // Pre-flight limit check (optional — skip in debug since we'd redirect).
+  // Best-effort; we ignore failures here because the upstream submit will
+  // surface any blocker more authoritatively.
   if (!debug && session) {
     const lc = `${apiRoot}/api/outer/ats-apply/website/applicant-limit-check`;
-    try {
-      const resp = await fetch(lc, {
+    await doStep(
+      "limit-check",
+      lc,
+      {
         method: "POST",
         headers: { ...sessionHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ orgId: slug, jobId: staged.post_id }),
-      });
-      const txt = (await resp.text()).slice(0, 200);
-      steps.push({ step: "limit-check", url: lc, status: resp.status, ok: resp.ok, message: txt });
-    } catch (err) {
-      steps.push({ step: "limit-check", url: lc, status: 0, ok: false, message: String(err) });
-    }
+      },
+      steps
+    );
   }
 
   // Final submit
-  let resp: Response;
-  try {
-    resp = await fetch(targetUrl, {
+  const sFinal = await doStep(
+    "apply",
+    targetUrl,
+    {
       method: "POST",
       headers: sessionHeaders, // Content-Type: multipart/form-data; boundary set by undici
       body: fd,
-    });
-  } catch (err) {
-    steps.push({ step: "apply", url: targetUrl, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: targetUrl, message: "apply step network error", steps };
+    },
+    steps
+  );
+  if (!sFinal.ok) {
+    return { ok: false, posted_to: targetUrl, status: sFinal.status, message: `apply failed: ${sFinal.message}`, steps };
   }
-  const text = (await resp.text()).slice(0, 4000);
-  steps.push({ step: "apply", url: targetUrl, status: resp.status, ok: resp.ok, message: text.slice(0, 200) });
+  const resp = sFinal.response;
   return {
     ok: resp.ok,
     status: resp.status,
     posted_to: targetUrl,
-    response_preview: text,
+    response_preview: sFinal.text,
     message: resp.ok ? "Moka apply submitted" : `Moka apply rejected: HTTP ${resp.status}`,
     steps,
   };
@@ -1266,15 +1291,12 @@ export async function executeBeisenWecruit(
       ? new FileCtor([new Uint8Array(resumeBytes)], filename, { type: "application/pdf" })
       : new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" });
   uploadFd.append("file", filePart as Blob, filename);
-  let r1: Response;
-  try {
-    r1 = await fetch(step1Url, { method: "POST", headers: sessionHeaders, body: uploadFd });
-  } catch (err) {
-    steps.push({ step: "upload-file", url: step1Url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: step1Url, message: "step 1 network error", steps };
+  const s1 = await doStep("upload-file", step1Url, { method: "POST", headers: sessionHeaders, body: uploadFd }, steps);
+  if (!s1.ok) {
+    return { ok: false, posted_to: step1Url, status: s1.status, message: `step 1 failed: ${s1.message}`, steps };
   }
-  const text1 = (await r1.text()).slice(0, 2000);
-  steps.push({ step: "upload-file", url: step1Url, status: r1.status, ok: r1.ok, message: text1.slice(0, 200) });
+  const r1 = s1.response;
+  const text1 = s1.text;
   if (debug) {
     return { ok: r1.ok, status: r1.status, posted_to: step1Url, message: "debug: step 1 fired, steps 2+3 skipped", steps, response_preview: text1 };
   }
@@ -1289,35 +1311,37 @@ export async function executeBeisenWecruit(
 
   // STEP 2 — profile info
   const step2Url = `${apiBase}/resume/info/add/${encodeURIComponent(su)}`;
-  let r2: Response;
-  try {
-    r2 = await fetch(step2Url, {
+  const s2 = await doStep(
+    "profile-add",
+    step2Url,
+    {
       method: "POST",
       headers: { ...sessionHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ name: applicant.name, email: applicant.email, phone: applicant.phone, attachmentId }),
-    });
-  } catch (err) {
-    steps.push({ step: "profile-add", url: step2Url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: step2Url, message: "step 2 network error", steps };
+    },
+    steps
+  );
+  if (!s2.ok) {
+    return { ok: false, posted_to: step2Url, status: s2.status, message: `step 2 failed: ${s2.message}`, steps };
   }
-  const text2 = (await r2.text()).slice(0, 2000);
-  steps.push({ step: "profile-add", url: step2Url, status: r2.status, ok: r2.ok, message: text2.slice(0, 200) });
 
   // STEP 3 — final delivery
   const step3Url = `${apiBase}/delivery/resume/${encodeURIComponent(su)}`;
-  let r3: Response;
-  try {
-    r3 = await fetch(step3Url, {
+  const s3 = await doStep(
+    "deliver",
+    step3Url,
+    {
       method: "POST",
       headers: { ...sessionHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ postId: staged.post_id, attachmentId }),
-    });
-  } catch (err) {
-    steps.push({ step: "deliver", url: step3Url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: step3Url, message: "step 3 network error", steps };
+    },
+    steps
+  );
+  if (!s3.ok) {
+    return { ok: false, posted_to: step3Url, status: s3.status, message: `step 3 failed: ${s3.message}`, steps };
   }
-  const text3 = (await r3.text()).slice(0, 4000);
-  steps.push({ step: "deliver", url: step3Url, status: r3.status, ok: r3.ok, message: text3.slice(0, 200) });
+  const r3 = s3.response;
+  const text3 = s3.text;
   return {
     ok: r3.ok,
     status: r3.status,
@@ -1386,15 +1410,12 @@ export async function executeBeisenITalent(
       ? new FileCtor([new Uint8Array(resumeBytes)], filename, { type: "application/pdf" })
       : new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" });
   uploadFd.append("file", filePart as Blob, filename);
-  let r1: Response;
-  try {
-    r1 = await fetch(step1Url, { method: "POST", headers: sessionHeaders, body: uploadFd });
-  } catch (err) {
-    steps.push({ step: "upload", url: step1Url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: step1Url, message: "step 1 network error", steps };
+  const s1 = await doStep("upload", step1Url, { method: "POST", headers: sessionHeaders, body: uploadFd }, steps);
+  if (!s1.ok) {
+    return { ok: false, posted_to: step1Url, status: s1.status, message: `step 1 failed: ${s1.message}`, steps };
   }
-  const text1 = (await r1.text()).slice(0, 2000);
-  steps.push({ step: "upload", url: step1Url, status: r1.status, ok: r1.ok, message: text1.slice(0, 200) });
+  const r1 = s1.response;
+  const text1 = s1.text;
   if (debug) {
     return { ok: r1.ok, status: r1.status, posted_to: step1Url, message: "debug: step 1 fired, step 2 skipped", steps, response_preview: text1 };
   }
@@ -1407,9 +1428,10 @@ export async function executeBeisenITalent(
 
   // STEP 2 — submit apply
   const step2Url = `${apiRoot}/api/Apply/SubmitResume`;
-  let r2: Response;
-  try {
-    r2 = await fetch(step2Url, {
+  const s2 = await doStep(
+    "submit",
+    step2Url,
+    {
       method: "POST",
       headers: { ...sessionHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1419,18 +1441,18 @@ export async function executeBeisenITalent(
         Email: applicant.email,
         Mobile: applicant.phone,
       }),
-    });
-  } catch (err) {
-    steps.push({ step: "submit", url: step2Url, status: 0, ok: false, message: String(err) });
-    return { ok: false, posted_to: step2Url, message: "step 2 network error", steps };
+    },
+    steps
+  );
+  if (!s2.ok) {
+    return { ok: false, posted_to: step2Url, status: s2.status, message: `step 2 failed: ${s2.message}`, steps };
   }
-  const text2 = (await r2.text()).slice(0, 4000);
-  steps.push({ step: "submit", url: step2Url, status: r2.status, ok: r2.ok, message: text2.slice(0, 200) });
+  const r2 = s2.response;
   return {
     ok: r2.ok,
     status: r2.status,
     posted_to: step2Url,
-    response_preview: text2,
+    response_preview: s2.text,
     message: r2.ok ? "Beisen iTalent submission accepted" : `step 2 rejected: HTTP ${r2.status}`,
     steps,
   };

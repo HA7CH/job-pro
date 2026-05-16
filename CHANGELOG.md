@@ -4,6 +4,19 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.6 — retry-with-backoff extended to family executors
+
+All 4 family executors (executeFeishu3Step / executeMokaApply /
+executeBeisenWecruit / executeBeisenITalent) now route every HTTP
+step through fetchWithRetry, picking up the same transient-failure
+policy from 1.0.5. New `doStep(step, url, init, steps)` helper combines
+fetchWithRetry with FeishuStepLog bookkeeping so each call site is
+~5 lines instead of ~12.
+
+Coverage delta: every executor-routed adapter (45 / 50) now has
+retry on transient 5xx + network errors, with 4xx user-errors still
+short-circuiting to fail-fast.
+
 ## 1.0.5 — retry-with-backoff for submission
 
 `fetchWithRetry()` wraps the generic submitApplication path with
