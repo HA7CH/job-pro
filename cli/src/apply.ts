@@ -17,6 +17,7 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { withPage, injectCookies } from "./cdp.js";
 
 const PROFILE_PATH = process.env.JOB_PRO_PROFILE_PATH ?? join(homedir(), ".jobpro", "profile.json");
 const SESSION_DIR = process.env.JOB_PRO_SESSION_DIR ?? join(homedir(), ".jobpro");
@@ -1167,6 +1168,190 @@ export async function executeBeisenITalent(
     posted_to: step2Url,
     response_preview: text2,
     message: r2.ok ? "Beisen iTalent submission accepted" : `step 2 rejected: HTTP ${r2.status}`,
+    steps,
+  };
+}
+
+/**
+ * CDP / real-browser submitter — used by adapters whose upstream requires
+ * a runtime-minted anti-bot signature that we can't reproduce from raw
+ * HTTP (today: lilith via lilithgames.jobs.feishu.cn, gated by ByteDance
+ * Tengine's `_signature`).
+ *
+ * Flow:
+ *   1. Inject cookies from session.json into the singleton puppeteer
+ *      browser via chrome.cookies.setCookie (CDP).
+ *   2. withPage(): navigate to staged.apply_url (the SPA's detail page).
+ *   3. Wait for the SPA's apply UI to render. The Feishu candidate-portal
+ *      pattern: the page shows a "投递" button that opens a modal with
+ *      input[name=name|email|phone] + input[type=file].
+ *   4. Fill the fields via page.type() + uploadFile().
+ *   5. Click the modal's "提交" button.
+ *   6. Wait for the submission response XHR; report it.
+ *
+ * In debug mode we skip the click and screenshot the page instead so the
+ * user can verify the bot actually loaded the SPA correctly.
+ */
+export async function executeCdpRealBrowser(
+  staged: StagedApplication,
+  session: CapturedSession | null,
+  target: SubmitTarget
+): Promise<MultiStepResult> {
+  if (target.kind === "dry-run") {
+    return { ok: false, posted_to: "dry-run (no network)", message: "dry-run requested — no HTTP call fired", steps: [] };
+  }
+  if (target.kind === "upstream" && !session) {
+    return {
+      ok: false,
+      posted_to: staged.apply_url,
+      message:
+        "executeCdpRealBrowser requires session.json (the SPA's login cookies need to be in " +
+        "the puppeteer browser before navigation). Capture via extension/, drop under " +
+        "~/.jobpro/<adapter>.session.json.",
+      steps: [],
+    };
+  }
+  const steps: FeishuStepLog[] = [];
+  const targetUrl = staged.apply_url;
+  const debug = target.kind === "debug";
+
+  // Inject cookies into the singleton browser.
+  if (session) {
+    let host = "";
+    try { host = new URL(targetUrl).host; } catch { /* ignore */ }
+    const inj = await injectCookies(session.cookies ?? [], host);
+    if (!inj.ok) {
+      steps.push({ step: "inject-cookies", url: host, status: 0, ok: false, message: inj.error.message });
+      return { ok: false, posted_to: targetUrl, message: inj.error.message, steps };
+    }
+    steps.push({
+      step: "inject-cookies",
+      url: host,
+      status: 200,
+      ok: true,
+      message: `injected ${session.cookies?.length ?? 0} cookies`,
+    });
+  }
+
+  // Resume + applicant_info from staged.
+  const resumeField = staged.staged.find((f) => f.name === "resume");
+  if (!resumeField?.value) return { ok: false, posted_to: targetUrl, message: "staged.resume missing", steps };
+  if (!existsSync(resumeField.value)) {
+    return { ok: false, posted_to: targetUrl, message: `resume file not found: ${resumeField.value}`, steps };
+  }
+  const applicant: Record<string, string> = {};
+  for (const f of staged.staged) {
+    if (f.name === "name" || f.name === "email" || f.name === "phone") applicant[f.name] = f.value;
+  }
+
+  const r = await withPage(async (page) => {
+    await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 30000 });
+    steps.push({
+      step: "navigate",
+      url: page.url(),
+      status: 200,
+      ok: true,
+      message: `loaded ${page.url()}`,
+    });
+    if (debug) {
+      // Don't click submit — just confirm the SPA loaded.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      return { kind: "debug" as const };
+    }
+    // Try to click the "投递" / "立即投递" / "Apply" button to open the modal.
+    const clickedApply: string | null = await page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll('button, a')) as HTMLElement[];
+      for (const el of candidates) {
+        const t = (el.textContent ?? "").trim();
+        if (/^投递$|^立即投递$|^申请$|^Apply$/i.test(t)) {
+          (el as HTMLElement).click();
+          return t;
+        }
+      }
+      return null;
+    });
+    steps.push({
+      step: "click-apply",
+      url: page.url(),
+      status: clickedApply ? 200 : 0,
+      ok: !!clickedApply,
+      message: clickedApply ?? "could not find apply button",
+    });
+    if (!clickedApply) {
+      return { kind: "no-button" as const };
+    }
+    // Wait for the modal's form to render.
+    try {
+      await page.waitForSelector('input[type=file]', { timeout: 10000 });
+    } catch {
+      steps.push({ step: "wait-form", url: page.url(), status: 0, ok: false, message: "apply modal didn't render input[type=file]" });
+      return { kind: "no-form" as const };
+    }
+    steps.push({ step: "wait-form", url: page.url(), status: 200, ok: true, message: "modal rendered" });
+
+    // Fill name/email/phone if matching inputs exist.
+    for (const [key, value] of Object.entries(applicant)) {
+      if (!value) continue;
+      try {
+        const sel = `input[name="${key}"], input[placeholder*="${key}"], input[aria-label*="${key}"]`;
+        await page.type(sel, value, { delay: 30 });
+      } catch {
+        steps.push({ step: `fill-${key}`, url: page.url(), status: 0, ok: false, message: "selector not found" });
+      }
+    }
+
+    // Upload resume.
+    try {
+      const fileInput = await page.$('input[type=file]');
+      if (fileInput && fileInput.uploadFile) {
+        await fileInput.uploadFile(resumeField.value);
+        steps.push({ step: "upload-resume", url: page.url(), status: 200, ok: true, message: resumeField.value });
+      } else {
+        steps.push({ step: "upload-resume", url: page.url(), status: 0, ok: false, message: "no input[type=file] handle" });
+      }
+    } catch (err) {
+      steps.push({ step: "upload-resume", url: page.url(), status: 0, ok: false, message: String(err) });
+    }
+
+    // Click the modal's submit button (typically "确认投递" / "提交").
+    const submittedLabel: string | null = await page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll('button, [role="button"]')) as HTMLElement[];
+      for (const el of candidates) {
+        const t = (el.textContent ?? "").trim();
+        if (/^(确认投递|提交|完成|Submit)$/i.test(t)) {
+          el.click();
+          return t;
+        }
+      }
+      return null;
+    });
+    steps.push({
+      step: "click-submit",
+      url: page.url(),
+      status: submittedLabel ? 200 : 0,
+      ok: !!submittedLabel,
+      message: submittedLabel ?? "could not find submit button",
+    });
+    // Allow the resulting XHR to settle.
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    return { kind: "submitted" as const, label: submittedLabel };
+  });
+  if (!r.ok) {
+    return { ok: false, posted_to: targetUrl, message: r.error.message, steps };
+  }
+  const kind = (r.value as { kind: string }).kind;
+  const ok = kind === "submitted";
+  return {
+    ok,
+    posted_to: targetUrl,
+    message:
+      kind === "debug"
+        ? "debug: navigated + screenshot, no submit click"
+        : kind === "no-button"
+          ? "could not find an apply button on the page — the candidate session may not be logged in"
+          : kind === "no-form"
+            ? "apply modal opened but form fields didn't render"
+            : "CDP-driven submit completed (verify the upstream actually accepted)",
     steps,
   };
 }

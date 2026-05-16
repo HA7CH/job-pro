@@ -23,18 +23,48 @@ import { existsSync } from "node:fs";
 
 // puppeteer-core is imported dynamically so the bundle stays importable
 // even when the dep is missing (e.g. user did `--omit=optional`).
-type AnyBrowser = { newPage: () => Promise<AnyPage>; close: () => Promise<void> };
-type AnyPage = {
+export interface AnyCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  expires?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: "Strict" | "Lax" | "None";
+  url?: string;
+}
+type AnyBrowser = {
+  newPage: () => Promise<AnyPage>;
+  close: () => Promise<void>;
+  setCookie: (...cookies: AnyCookie[]) => Promise<void>;
+};
+type AnyResponse = {
+  url: () => string;
+  status: () => number;
+  json: () => Promise<unknown>;
+  text: () => Promise<string>;
+  request: () => { resourceType: () => string };
+};
+export type AnyPage = {
   setUserAgent: (ua: string) => Promise<void>;
   setExtraHTTPHeaders: (h: Record<string, string>) => Promise<void>;
+  setCookie: (...cookies: AnyCookie[]) => Promise<void>;
   goto: (url: string, opts?: { waitUntil?: string; timeout?: number }) => Promise<unknown>;
+  url: () => string;
   evaluate: <T, A extends unknown[]>(fn: (...args: A) => T | Promise<T>, ...args: A) => Promise<T>;
   waitForResponse: (
-    predicate: (r: { url: () => string; status: () => number; request: () => { resourceType: () => string } }) => boolean,
+    predicate: (r: AnyResponse) => boolean,
     opts?: { timeout?: number }
-  ) => Promise<{ url: () => string; status: () => number; json: () => Promise<unknown>; text: () => Promise<string> }>;
+  ) => Promise<AnyResponse>;
+  waitForSelector: (sel: string, opts?: { timeout?: number; visible?: boolean }) => Promise<{ uploadFile?: (...paths: string[]) => Promise<void>; click?: () => Promise<void> } | null>;
+  type: (sel: string, text: string, opts?: { delay?: number }) => Promise<void>;
+  click: (sel: string) => Promise<void>;
+  $: (sel: string) => Promise<{ uploadFile?: (...paths: string[]) => Promise<void>; click?: () => Promise<void> } | null>;
+  screenshot: (opts?: { path?: string; fullPage?: boolean }) => Promise<unknown>;
   close: () => Promise<void>;
 };
+export type { AnyBrowser };
 
 const CHROME_PATHS = [
   // macOS
@@ -222,5 +252,45 @@ export async function withPage<T>(
         /* ignore */
       }
     }
+  }
+}
+
+/**
+ * Inject a set of captured cookies (from extension/) into the singleton
+ * browser, so the next withPage call navigates as the logged-in user.
+ * Cookies are scoped to the host they were captured from.
+ */
+export async function injectCookies(
+  cookies: Array<{ name: string; value: string; domain?: string; path?: string; secure?: boolean; httpOnly?: boolean; sameSite?: string; expiresAt?: number }>,
+  defaultHost: string
+): Promise<{ ok: true } | { ok: false; error: CdpError }> {
+  const b = await getBrowser();
+  if (!b.ok) return b;
+  const toInject: AnyCookie[] = [];
+  for (const c of cookies) {
+    if (!c.name || !c.value) continue;
+    const domain = c.domain ?? defaultHost;
+    toInject.push({
+      name: c.name,
+      value: c.value,
+      domain,
+      path: c.path ?? "/",
+      secure: c.secure ?? true,
+      httpOnly: c.httpOnly ?? false,
+      sameSite: (c.sameSite ?? "Lax") as "Strict" | "Lax" | "None",
+      expires: typeof c.expiresAt === "number" ? c.expiresAt : undefined,
+    });
+  }
+  try {
+    if (toInject.length > 0) await b.browser.setCookie(...toInject);
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        reason: "launch-failed",
+        message: `cookie injection failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
   }
 }

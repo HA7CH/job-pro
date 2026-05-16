@@ -61,6 +61,7 @@ import {
   executeMokaApply,
   executeBeisenWecruit,
   executeBeisenITalent,
+  executeCdpRealBrowser,
   formatStaged,
   type ApplyFormSchema,
 } from "./apply.js";
@@ -74,7 +75,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.7";
+const VERSION = "0.9.8";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -518,6 +519,7 @@ async function runCompany(
         kindForDebug === "moka-aes" ? executeMokaApply :
         kindForDebug === "beisen-wecruit" ? executeBeisenWecruit :
         kindForDebug === "beisen-italent" ? executeBeisenITalent :
+        kindForDebug === "cdp-real-browser" ? executeCdpRealBrowser :
         null;
       if (debugExecutor) {
         const result = await debugExecutor(staged, session, { kind: "debug", url: debugUrl });
@@ -594,6 +596,7 @@ async function runCompany(
         kind === "moka-aes" ? executeMokaApply :
         kind === "beisen-wecruit" ? executeBeisenWecruit :
         kind === "beisen-italent" ? executeBeisenITalent :
+        kind === "cdp-real-browser" ? executeCdpRealBrowser :
         null;
       if (familyExecutor) {
         if (!session) {
