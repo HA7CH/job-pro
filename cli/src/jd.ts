@@ -770,10 +770,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://campus.jd.com/web/job/apply",
+      submitEndpoint: "https://wutongzhaopin.jd.com/api/wx/delivery",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "JD — POST /web/job/apply with session cookie. Endpoint inferred from campus.jd.com SPA; needs validation.",
+        "JD — POST /api/wx/delivery on wutongzhaopin.jd.com (JD's careers backend). Endpoint extracted from the campus.jd.com SPA's umi.js bundle (gzip-decompressed); also documented sibling routes /api/wx/activityDelivery/activityDelivery, /api/wx/favorites/add, /api/wx/delivery/list. The campus.jd.com frontend domain serves SPA HTML only; XHR traffic targets wutongzhaopin.jd.com. Requires session cookies + JD passport login. Probe from US IP returns ECONNRESET (geo-fenced); the URL is verified via static JS-bundle analysis, not live anonymous probe.",
     }),
   };
 }

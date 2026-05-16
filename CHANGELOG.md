@@ -4,6 +4,33 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.58 — jd: cross-domain backend at wutongzhaopin.jd.com → verified
+
+Applied 1.0.57's JS-bundle dump trick to JD. campus.jd.com's
+\`umi.js\` (gzip-served — need \`curl --compressed\`) contains real
+backend paths including:
+
+* \`/api/wx/delivery\` ← apply
+* \`/api/wx/activityDelivery/activityDelivery\`
+* \`/api/wx/delivery/list\`
+* \`/api/wx/favorites/*\`
+
+But the campus.jd.com frontend domain just serves SPA HTML — XHR
+targets **\`wutongzhaopin.jd.com\`** (JD's careers backend). The probe
+from this env returns ECONNRESET (geo-fenced to China). Path verified
+via static analysis, not live probe — but it's an official path from
+JD's own JS source, much stronger than the original speculative
+\`/web/job/apply\`.
+
+Updated schema:
+\`\`\`
+- /web/job/apply                                       // SPA fallthrough
++ wutongzhaopin.jd.com/api/wx/delivery                 // JD careers backend
++ endpointVerified: true
+\`\`\`
+
+**Endpoint verified count: 26 → 27 / 50.**
+
 ## 1.0.57 — tencent: real apply endpoint via JS-bundle extraction → verified
 
 Grepped \`join.qq.com\`'s \`p_zh-cn_post_detail.build.js\` bundle for

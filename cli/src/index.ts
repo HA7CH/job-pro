@@ -209,6 +209,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "baidu",
   // probe-verified via JS-bundle string extraction (1.0.57)
   "tencent",
+  // verified via JS-bundle path extraction + cross-domain check (1.0.58)
+  "jd",
 ]);
 
 const HELP = `
