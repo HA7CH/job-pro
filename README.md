@@ -79,8 +79,8 @@ application schema; 45 / 50 have a working submitter wired:
 
 ```bash
 # 1. Set up your profile (one-time)
-job-pro profile init                 # write ~/.jobpro/profile.json template
-$EDITOR ~/.jobpro/profile.json       # fill first_name / last_name / email / phone / resume_path
+job-pro profile init --interactive   # prompts for the 5 essential fields (validates each)
+# or: job-pro profile init && $EDITOR ~/.jobpro/profile.json
 
 # 2. Dry-run an application (no network)
 job-pro xpeng apply 8548990002       # stage + preview the POST
@@ -109,6 +109,11 @@ The CLI gates `--really-submit` behind three layers:
 1. `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` env-var attestation.
 2. `staged.ready` — every required field is filled.
 3. For non-anon families, `~/.jobpro/<co>.session.json` must exist.
+
+Bulk-stage with `apply --batch <file|-` (newline-separated post_ids;
+`-` reads stdin); pairs with `--form-file` for uniform answers. Batch
+intentionally refuses `--really-submit` — verify wire format with
+`--debug-submit-to`, then submit jobs individually.
 
 Five adapters (hikvision / cicc / cainiao / webank / unitree) are
 intentionally `external` — recruiting is mediated through Liepin

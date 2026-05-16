@@ -4,6 +4,18 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.9 — README + extension manifest cleanup
+
+* README quick-start now shows `profile init --interactive` as the
+  default (validation + re-prompt on bad input), with the
+  `init && $EDITOR` flow as fallback.
+* New paragraph on `apply --batch <file|-` (1.0.7) + the deliberate
+  refusal of `--batch --really-submit`.
+* Extension manifest no longer references `icon{16,48,128}.png` —
+  those PNGs were never shipped, so loading the unpacked extension
+  in Chrome printed a missing-icon warning. Removing the reference
+  is the correct fix until we ship real icons.
+
 ## 1.0.8 — \`profile init --interactive\`
 
 Cold-start UX: `job-pro profile init --interactive` walks the 5

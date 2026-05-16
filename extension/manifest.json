@@ -50,16 +50,6 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "job-pro session bridge",
-    "default_icon": {
-      "16": "icon16.png",
-      "48": "icon48.png",
-      "128": "icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icon16.png",
-    "48": "icon48.png",
-    "128": "icon128.png"
+    "default_title": "job-pro session bridge"
   }
 }
