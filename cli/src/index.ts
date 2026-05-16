@@ -637,6 +637,19 @@ async function runCompany(
         );
       }
       effectiveProfile = merged.profile;
+      // --remember + --form-file: persist the merged answers back to profile.
+      if (remember && !compact) {
+        const before = JSON.stringify(prof.profile.custom ?? {});
+        const after = JSON.stringify(effectiveProfile.custom ?? {});
+        if (before !== after) {
+          const saved = saveProfile(effectiveProfile);
+          if (saved.ok) {
+            console.log(`Saved form-file answers to ${saved.path} (custom.*).`);
+          } else {
+            console.error(`--remember failed: ${saved.message}`);
+          }
+        }
+      }
     }
 
     // --interactive: prompt stdin for each unanswered required field.

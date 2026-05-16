@@ -4,6 +4,16 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.11 — \`--remember\` also persists \`--form-file\` answers
+
+Extends 1.0.10: when `--remember` is paired with `--form-file <path>`,
+the merged answers get written back to `~/.jobpro/profile.json` (same
+shape as the interactive path — keyed by `custom.<question_name>`).
+Skips the write when the merged custom map is identical to disk, so
+there's no spurious touch when re-running with an unchanged form-file.
+
+The trio is now: print → fill → load with `--remember`. Once.
+
 ## 1.0.10 — \`apply --remember\` persists interactive answers
 
 `apply --interactive --remember` writes the collected answers back into
