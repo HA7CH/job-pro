@@ -127,12 +127,7 @@ const ADAPTERS = {
 // Anything OUTSIDE this set returning `ok:false` is a real regression and
 // must FAIL the suite. Adapters drift OUT of this list as they get unblocked
 // (e.g. moonshot/oppo/vivo/sf/byd moved from auth-gated to live in 6e22fba).
-const KNOWN_LIMITED: ReadonlySet<string> = new Set([
-  "hikvision",
-  "cicc",
-  "cainiao",
-  "webank",
-]);
+const KNOWN_LIMITED: ReadonlySet<string> = new Set<string>([]);
 
 type Result = { name: string; pass: boolean; tag: "PASS" | "WARN" | "FAIL"; reason: string };
 

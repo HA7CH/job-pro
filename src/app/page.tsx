@@ -190,7 +190,7 @@ const COMPANIES: Company[] = [
   {
     name: "Hikvision",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/hikvision.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -238,7 +238,7 @@ const COMPANIES: Company[] = [
   {
     name: "CICC",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cicc.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -292,7 +292,7 @@ const COMPANIES: Company[] = [
   {
     name: "Cainiao",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cainiao.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
@@ -304,7 +304,7 @@ const COMPANIES: Company[] = [
   {
     name: "WeBank",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/webank.ts",
-    listings: "building",
+    listings: "live",
     autoApply: "building",
   },
   {
