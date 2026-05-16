@@ -4,6 +4,30 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.89 — \`--via-cdp\` button selectors broadened for real-world labels
+
+The CDP executor's apply/submit button regexes were too strict:
+\`/^投递$|^立即投递$|^申请$|^Apply$/i\` — matched only exact label
+strings. Real Chinese careers sites use many variants:
+
+* 投递简历 / 在线投递 / 立即投递 / 投递职位
+* 申请职位 / 申请岗位 / 立即申请 / 网申
+* Apply Now / Submit Application
+
+Broadened to \`(?:^|[^查我])(?:投递|申请|网申|Apply)\` with an exclude
+list (查看, 我的, 历史, 记录, 状态, 进度, history) so we don't click
+"查看我的投递记录" (apply history link) by mistake.
+
+Submit button regex similarly widened: 确认投递 / 提交 / 确认提交 /
+确认申请 / 完成 / Submit / Confirm. Excludes 取消 / 关闭 / 返回 /
+Cancel / Close / Back.
+
+Also accepts elements with \`[role="button"]\` (Element Plus, Ant Design,
+and many React frameworks render clickable divs with that role).
+
+Element label-length capped at 30 chars — long text rarely belongs
+to action buttons (more likely a paragraph or tooltip).
+
 ## 1.0.88 — \`apply --via-cdp\`: DOM-driven submit for any adapter
 
 \`executeCdpRealBrowser\` already existed for lilith — it drives a

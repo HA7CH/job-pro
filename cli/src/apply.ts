@@ -1637,12 +1637,20 @@ export async function executeCdpRealBrowser(
       await new Promise((resolve) => setTimeout(resolve, 3000));
       return { kind: "debug" as const };
     }
-    // Try to click the "投递" / "立即投递" / "Apply" button to open the modal.
+    // Try to click the apply button. The label patterns we see across
+    // the 45 verified adapters: 投递, 立即投递, 投递简历, 在线投递, 申请,
+    // 立即申请, 申请职位, 申请岗位, 网申, Apply, Apply Now, Submit
+    // Application. Exclude common no-go labels like "查看投递", "我的投递",
+    // "投递记录" that link to the user's history.
     const clickedApply: string | null = await page.evaluate(() => {
-      const candidates = Array.from(document.querySelectorAll('button, a')) as HTMLElement[];
+      const include = /(?:^|[^查我])(?:投递|申请|网申|Apply)/i;
+      const exclude = /(?:查看|我的|历史|记录|状态|进度|history)/i;
+      const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]')) as HTMLElement[];
       for (const el of candidates) {
         const t = (el.textContent ?? "").trim();
-        if (/^投递$|^立即投递$|^申请$|^Apply$/i.test(t)) {
+        if (!t || t.length > 30) continue; // long labels rarely Apply buttons
+        if (exclude.test(t)) continue;
+        if (include.test(t)) {
           (el as HTMLElement).click();
           return t;
         }
@@ -1692,12 +1700,17 @@ export async function executeCdpRealBrowser(
       steps.push({ step: "upload-resume", url: page.url(), status: 0, ok: false, message: String(err) });
     }
 
-    // Click the modal's submit button (typically "确认投递" / "提交").
+    // Click the modal's submit button. Common labels: 确认投递, 提交,
+    // 完成, 立即提交, 确认提交, Submit, Confirm. Exclude "取消", "关闭".
     const submittedLabel: string | null = await page.evaluate(() => {
+      const include = /(?:确认投递|提交|确认提交|确认申请|完成|Submit|Confirm)/i;
+      const exclude = /(?:取消|关闭|返回|Cancel|Close|Back)/i;
       const candidates = Array.from(document.querySelectorAll('button, [role="button"]')) as HTMLElement[];
       for (const el of candidates) {
         const t = (el.textContent ?? "").trim();
-        if (/^(确认投递|提交|完成|Submit)$/i.test(t)) {
+        if (!t || t.length > 30) continue;
+        if (exclude.test(t)) continue;
+        if (include.test(t)) {
           el.click();
           return t;
         }
