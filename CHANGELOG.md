@@ -4,6 +4,14 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.30 — \`--debug-submit\` shorthand + README selftest hint
+
+* \`apply <id> --debug-submit\` (no URL needed) defaults to
+  \`https://httpbin.org/post\`. The common case is "just verify wire
+  format works"; the URL is rarely customized.
+* README install section now mentions \`job-pro selftest\` (1.0.29) so
+  fresh installers run the 3-stage end-to-end check immediately.
+
 ## 1.0.29 — \`job-pro selftest\` end-to-end check
 
 \`pnpm test\` / \`test:apply\` / \`test:debug-submit\` need the source

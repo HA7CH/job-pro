@@ -39,6 +39,7 @@ attach your resume, and let the agent drive the CLI end-to-end.
 ```bash
 npm i -g job-pro
 job-pro --version
+job-pro selftest          # 3-stage end-to-end check; ~3s
 ```
 
 Or one-shot via `npx`:

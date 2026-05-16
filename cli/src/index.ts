@@ -247,6 +247,7 @@ VERBS (same surface for every company)
                                     --remember                 + persist answers to profile.custom
                                     --batch <file|->           apply to many post_ids (one/line)
                                     --debug-submit-to <url>    verify wire format
+                                    --debug-submit             ↑ shorthand → httpbin.org/post
                                     --really-submit            actually fire (env-gated)
                                     --allow-stale-session      bypass 30-day session-age gate
   memory list | get <k> | set k=v | event <kind> [payload] | clear
@@ -521,7 +522,12 @@ async function runCompany(
     const schemaOnly = args.includes("--schema");
     const interactive = args.includes("--interactive");
     const remember = args.includes("--remember");
-    const { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
+    let { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
+    // Shorthand: `--debug-submit` without URL → default httpbin echo.
+    if (!debugUrl && aDebug.includes("--debug-submit")) {
+      aDebug = aDebug.filter((a) => a !== "--debug-submit");
+      debugUrl = "https://httpbin.org/post";
+    }
     const { args: aForm, value: formFilePath } = popFlagValue(aDebug, "--form-file");
     const { args: aBatch, value: batchPath } = popFlagValue(aForm, "--batch");
 
