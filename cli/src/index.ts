@@ -1464,13 +1464,16 @@ async function main() {
       scope.map(async (company): Promise<ReconResult> => {
         // lilith uses CDP (puppeteer launches Chrome) — its withTimeout
         // returns but the browser handle keeps the event loop alive, so
-        // the process never exits. Skip it explicitly; users who want to
-        // recon lilith can scope --companies=lilith and accept the hang.
-        if (company === "lilith") {
+        // the process never exits during a 50-company sweep. Skip when
+        // we're running a default/broad sweep; only probe lilith if the
+        // user explicitly scoped --companies and lilith is the ONLY one
+        // (so they're knowingly waiting for a CDP launch).
+        const lilithScopedExplicit = scope.length === 1 && scope[0] === "lilith";
+        if (company === "lilith" && !lilithScopedExplicit) {
           // lilith is in ENDPOINT_VERIFIED but we skip the probe (would
           // hang puppeteer). Surface the already_verified status so the
           // icon shows ⚠ ("schema verified, probe skipped") not "?".
-          return { company, classification: "probe-error", detail: "skipped — CDP adapter (puppeteer); pass --companies=lilith explicitly to probe", already_verified: true };
+          return { company, classification: "probe-error", detail: "skipped — CDP adapter (puppeteer); pass --companies=lilith alone to probe", already_verified: true };
         }
         const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[company];
         if (!adapter) return { company, classification: "probe-error", detail: "unknown adapter" };

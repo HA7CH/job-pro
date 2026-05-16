@@ -4,6 +4,27 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.82 — fix: \`recon --companies=lilith\` actually probes lilith
+
+The lilith CDP skip from 1.0.43 said in its detail string "pass
+\`--companies=lilith\` explicitly to probe" but the skip was
+unconditional — the code never actually honored that opt-in. Anyone
+following the message instruction got the same skip message back.
+
+Fixed: skip lilith only when scope is broader than lilith alone.
+When the user passes \`--companies=lilith\` (size 1, lilith only),
+the probe runs — accepting the puppeteer hang risk because they
+knowingly asked for it. The 1.0.43 \`process.exit(0)\` at end of
+\`recon\` still releases lingering handles.
+
+\`\`\`
+$ job-pro recon --companies=lilith
+# now actually drives puppeteer; takes a few seconds.
+
+$ job-pro recon --companies=lilith,xpeng
+# lilith still skipped (more than one in scope).
+\`\`\`
+
 ## 1.0.81 — \`recon\` shows session-presence column (🔐 / 🚫)
 
 \`recon\` output now combines two signals per row:
