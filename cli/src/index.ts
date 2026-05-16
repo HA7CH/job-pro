@@ -57,6 +57,7 @@ import {
   profileTemplate,
   stageApplication,
   submitApplication,
+  executeFeishu3Step,
   formatStaged,
   type ApplyFormSchema,
 } from "./apply.js";
@@ -70,7 +71,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.5";
+const VERSION = "0.9.6";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -506,8 +507,15 @@ async function runCompany(
 
     // Mode selection: --debug-submit-to <url> overrides everything.
     if (debugUrl) {
+      // Route through the family-specific executor where appropriate so the
+      // user can verify each step's wire format against their echo server.
+      const kindForDebug = sr.schema.submit_kind ?? "multipart-anon";
+      if (kindForDebug === "feishu-3-step") {
+        const result = await executeFeishu3Step(staged, session, { kind: "debug", url: debugUrl });
+        return emit({ mode: "debug-submit", staged, submit_kind: kindForDebug, result }, compact);
+      }
       const result = await submitApplication(staged, { kind: "debug", url: debugUrl });
-      return emit({ mode: "debug-submit", staged, result }, compact);
+      return emit({ mode: "debug-submit", staged, submit_kind: kindForDebug, result }, compact);
     }
 
     // --really-submit: actually hit the upstream endpoint. Guarded by both
@@ -569,6 +577,26 @@ async function runCompany(
           },
           compact
         );
+      }
+      if (kind === "feishu-3-step") {
+        if (!session) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: "really-submit-blocked",
+              staged,
+              message:
+                `Feishu 3-step submission requires a captured session at ` +
+                `~/.jobpro/${company}.session.json. Install extension/ in Chrome, ` +
+                `log in to the careers site, click Export.`,
+            },
+            compact
+          );
+        }
+        const result = await executeFeishu3Step(staged, session, { kind: "upstream" });
+        return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: true, result }, compact);
       }
       if (!isGenericMultipart) {
         return emit(

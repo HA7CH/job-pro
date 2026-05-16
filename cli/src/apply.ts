@@ -569,3 +569,254 @@ async function buildMultipartForm(staged: StagedApplication): Promise<FormData> 
   }
   return fd;
 }
+
+// ---------- Family executors ----------
+//
+// `submitApplication` above handles the generic multipart-anon and
+// multipart-session paths used by Greenhouse / Lever / most bespoke
+// adapters. The Phase-2 family-specific submission flows live below.
+// Each executor takes the same shape: (staged, profile, session?, target)
+// → SubmitResult. Dispatcher picks the executor based on
+// `staged.submit_kind`.
+//
+// Every executor honors `target.kind`:
+//   "dry-run"  → no network at all
+//   "debug"    → redirect each step's POST/PUT to target.url
+//   "upstream" → hit the real endpoints (requires session.json)
+//
+// Even with `--really-submit`, the user must (a) have a session.json
+// captured by the browser extension, (b) attest via
+// JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes, AND (c) own the candidate
+// account being used. The CLI never logs in for the user.
+
+interface FeishuStepLog {
+  step: string;
+  url: string;
+  status: number;
+  ok: boolean;
+  message: string;
+}
+
+interface MultiStepResult extends SubmitResult {
+  steps?: FeishuStepLog[];
+}
+
+/**
+ * Feishu Recruiting 3-step submission. Used by every 🟡 feishu-3-step
+ * adapter (xiaomi / nio / minimax / zhipu / iqiyi / agibot / zerooneai /
+ * baichuan, and moonshot when wired through the Feishu helper).
+ *
+ * Steps:
+ *   1. POST {host}/api/v1/attachment/upload/tokens
+ *      body: { filename, file_size }
+ *      → { code:0, data:{ upload_url, attachment_id, fields:{…} } }
+ *   2. POST/PUT to data.upload_url (lf-package-cn.feishucdn.com or similar)
+ *      multipart/form-data with fields[…] + file bytes
+ *   3. POST {host}/api/v1/resume/apply
+ *      body: { post_id, attachment_id, applicant_info:{ name, email, phone } }
+ *      → { code:0, data:{ application_id } }
+ *
+ * Session.json must contain valid Feishu cookies (typically `_csrf_token`,
+ * `lark_oapi_session`, `passport_csrf_token`) for the host.
+ */
+export async function executeFeishu3Step(
+  staged: StagedApplication,
+  session: CapturedSession | null,
+  target: SubmitTarget
+): Promise<MultiStepResult> {
+  if (!staged.submit_endpoint) {
+    return { ok: false, posted_to: "", message: "no submit_endpoint", steps: [] };
+  }
+  if (target.kind === "dry-run") {
+    return {
+      ok: false,
+      posted_to: "dry-run (no network)",
+      message: "dry-run requested — no HTTP call fired",
+      steps: [],
+    };
+  }
+  if (target.kind === "upstream" && !session) {
+    return {
+      ok: false,
+      posted_to: staged.submit_endpoint,
+      message:
+        "executeFeishu3Step requires a captured session (~/.jobpro/<adapter>.session.json) " +
+        "— Feishu apply endpoints all gate on candidate-session cookies. Install extension/ " +
+        "in Chrome, log in to the careers site, click Export.",
+      steps: [],
+    };
+  }
+
+  const submitUrl = new URL(staged.submit_endpoint);
+  const host = submitUrl.host;
+  const apiRoot = `${submitUrl.protocol}//${host}/api/v1`;
+  const debug = target.kind === "debug";
+
+  // Resolve the resume file from staged fields.
+  const resumeField = staged.staged.find((f) => f.name === "resume");
+  if (!resumeField || !resumeField.value) {
+    return { ok: false, posted_to: "", message: "staged.resume missing", steps: [] };
+  }
+  let resumeBytes: Buffer;
+  try {
+    resumeBytes = readFileSync(resumeField.value);
+  } catch (err) {
+    return {
+      ok: false,
+      posted_to: "",
+      message: `could not read resume ${resumeField.value}: ${err instanceof Error ? err.message : err}`,
+      steps: [],
+    };
+  }
+  const filename = resumeField.value.split("/").pop() ?? "resume.pdf";
+  const fileSize = resumeBytes.length;
+
+  const steps: FeishuStepLog[] = [];
+  const sessionHeaders = sessionHeaderBag(session, host);
+
+  // STEP 1 — upload tokens
+  const step1Url = debug ? target.url : `${apiRoot}/attachment/upload/tokens`;
+  let step1Resp: Response;
+  try {
+    step1Resp = await fetch(step1Url, {
+      method: "POST",
+      headers: {
+        ...sessionHeaders,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/plain, */*",
+      },
+      body: JSON.stringify({ filename, file_size: fileSize }),
+    });
+  } catch (err) {
+    steps.push({ step: "upload-tokens", url: step1Url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: step1Url, message: "step 1 network error", steps };
+  }
+  const step1Body = await step1Resp.text();
+  steps.push({
+    step: "upload-tokens",
+    url: step1Url,
+    status: step1Resp.status,
+    ok: step1Resp.ok,
+    message: step1Body.slice(0, 200),
+  });
+  if (!step1Resp.ok) {
+    return { ok: false, posted_to: step1Url, status: step1Resp.status, message: "step 1 failed (upload tokens)", steps, response_preview: step1Body.slice(0, 4000) };
+  }
+
+  // In debug mode, we don't actually have a presigned URL — short-circuit.
+  if (debug) {
+    return {
+      ok: true,
+      posted_to: step1Url,
+      status: step1Resp.status,
+      message: "debug-submit-to: step 1 fired; steps 2+3 skipped (no real upload URL in echo response)",
+      steps,
+      response_preview: step1Body.slice(0, 4000),
+    };
+  }
+
+  let step1Parsed: { code?: number; data?: { upload_url?: string; attachment_id?: string; fields?: Record<string, string> }; message?: string };
+  try {
+    step1Parsed = JSON.parse(step1Body);
+  } catch {
+    return { ok: false, posted_to: step1Url, message: "step 1 returned non-JSON", steps };
+  }
+  if (step1Parsed.code !== 0 || !step1Parsed.data?.upload_url) {
+    return {
+      ok: false,
+      posted_to: step1Url,
+      message: `step 1 upstream error: ${step1Parsed.message ?? `code=${step1Parsed.code}`}`,
+      steps,
+      response_preview: step1Body.slice(0, 4000),
+    };
+  }
+  const { upload_url, attachment_id, fields } = step1Parsed.data;
+
+  // STEP 2 — upload resume to presigned URL
+  const uploadFd = new FormData();
+  for (const [k, v] of Object.entries(fields ?? {})) uploadFd.append(k, v);
+  const FileCtor = (globalThis as { File?: typeof File }).File;
+  const filePart =
+    typeof FileCtor === "function"
+      ? new FileCtor([new Uint8Array(resumeBytes)], filename, { type: "application/pdf" })
+      : new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" });
+  uploadFd.append("file", filePart as Blob, filename);
+  let step2Resp: Response;
+  try {
+    step2Resp = await fetch(upload_url, { method: "POST", body: uploadFd });
+  } catch (err) {
+    steps.push({ step: "upload-file", url: upload_url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: upload_url, message: "step 2 network error", steps };
+  }
+  steps.push({
+    step: "upload-file",
+    url: upload_url,
+    status: step2Resp.status,
+    ok: step2Resp.ok,
+    message: `HTTP ${step2Resp.status}`,
+  });
+  if (!step2Resp.ok) {
+    return { ok: false, posted_to: upload_url, status: step2Resp.status, message: "step 2 failed (upload to CDN)", steps };
+  }
+
+  // STEP 3 — resume/apply
+  const applicantInfo: Record<string, string> = {};
+  for (const f of staged.staged) {
+    if (f.name === "name" || f.name === "email" || f.name === "phone") {
+      applicantInfo[f.name] = f.value;
+    }
+  }
+  const step3Body = {
+    post_id: staged.post_id,
+    attachment_id,
+    applicant_info: applicantInfo,
+  };
+  const step3Url = `${apiRoot}/resume/apply`;
+  let step3Resp: Response;
+  try {
+    step3Resp = await fetch(step3Url, {
+      method: "POST",
+      headers: {
+        ...sessionHeaders,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/plain, */*",
+      },
+      body: JSON.stringify(step3Body),
+    });
+  } catch (err) {
+    steps.push({ step: "resume-apply", url: step3Url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: step3Url, message: "step 3 network error", steps };
+  }
+  const step3Text = await step3Resp.text();
+  steps.push({
+    step: "resume-apply",
+    url: step3Url,
+    status: step3Resp.status,
+    ok: step3Resp.ok,
+    message: step3Text.slice(0, 200),
+  });
+  return {
+    ok: step3Resp.ok,
+    status: step3Resp.status,
+    posted_to: step3Url,
+    response_preview: step3Text.slice(0, 4000),
+    message: step3Resp.ok ? "Feishu 3-step submission accepted" : `step 3 rejected: HTTP ${step3Resp.status}`,
+    steps,
+  };
+}
+
+/** Build the headers bag used by every Feishu/Beisen/Moka step. */
+function sessionHeaderBag(session: CapturedSession | null, targetHost: string): Record<string, string> {
+  const out: Record<string, string> = {
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+  };
+  if (!session) return out;
+  const cookieHeader = serializeCookieHeader(session, targetHost);
+  if (cookieHeader) out.Cookie = cookieHeader;
+  for (const [k, v] of Object.entries(session.headers ?? {})) {
+    if (k.toLowerCase() === "cookie" || k.toLowerCase() === "content-type") continue;
+    out[k] = v;
+  }
+  return out;
+}
