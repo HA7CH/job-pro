@@ -513,10 +513,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://careers.ctrip.com/api/jobs/apply",
+      submitEndpoint: "https://careers.ctrip.com/api/hrrecruit/applyJob",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Trip.com — POST /api/jobs/apply with session cookie. Endpoint inferred; needs validation.",
+        "Trip.com — POST /api/hrrecruit/applyJob with session cookie. Endpoint extracted from the careers SPA main.ad2ffe67.js bundle (sibling routes /api/hrrecruit/getJobAd, /getLoginInfo, /getNewsDetail, etc). Anon-probed → HTTP 200 + Ctrip ResponseStatus envelope {Ack:\"Success\", retCode:\"402\", retMessage:\"没有当前用户\"} — real API, auth-gated. Body shape still needs validation.",
     }),
   };
 }

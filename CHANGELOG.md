@@ -4,6 +4,24 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.60 — trip: /api/hrrecruit/applyJob via JS-bundle extraction → verified
+
+Grepped \`bd-s.tripcdn.cn\`'s \`main.ad2ffe67.js\` (2.6MB) for /hrrecruit/
+paths — found \`/hrrecruit/applyJob\` alongside sibling routes
+\`/getJobAd\`, \`/getLoginInfo\`, etc. Probed \`https://careers.ctrip.com/
+api/hrrecruit/applyJob\`:
+
+\`\`\`
+200 OK
+{"ResponseStatus":{"Ack":"Success",…},
+ "retCode":"402","retMessage":"没有当前用户","retValue":null}
+\`\`\`
+
+Real Ctrip ResponseStatus envelope, auth-gated. Updated schema from
+\`/api/jobs/apply\` to \`/api/hrrecruit/applyJob\`.
+
+**Endpoint verified count: 28 → 29 / 50.**
+
 ## 1.0.59 — oppo: /api/delivery/saveDelivery via JS-chunk discovery → verified
 
 Read \`careers.oppo.com\`'s \`resume-787081aa.js\` chunk (extracted from
