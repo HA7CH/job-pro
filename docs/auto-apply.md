@@ -97,32 +97,43 @@ Status legend: `✅` apply schema wired + submit endpoint known + verified end-t
 | 49 | cainiao         | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 | 50 | webank          | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 
-**Tally as of 1.0.48:**
-* **17 ✅ verified** — endpoint URL confirmed real via probe or
-  end-to-end smoke. Cleared the 4th safety gate. See ✓ in `job-pro list`.
-  * 3 anon multipart (xpeng / weride / hoyoverse) — end-to-end smoked
-    against httpbin echo.
-  * 5 multipart-session (alibaba / pdd / meituan / mihoyo / liauto) —
-    probe returned auth gate or business error.
-  * 7 moka-aes (all Moka adapters: moonshot / megvii / deepseek /
-    galaxyuniversal / stepfun / cambricon / geely) — probe returned
-    AES `{data, necromancer}` envelope.
-  * 2 beisen-italent (iflytek / vivo) — probe returned HTTP 500 + IIS
-    server-error template (route exists, handler threw on missing input).
-* **28 🔑 executor-wired, endpoint speculative** — schema + executor
-  exist but probe returned 404 / HTML fallthrough. Split:
-  * 17 bespoke multipart-session — tencent / bytedance / xiaohongshu /
-    jd / kuaishou / baidu / netease / didi / bilibili / huawei / weibo
-    / pingan / trip / byd / antgroup / sf / oppo
+**Tally as of 1.0.60:**
+* **29 ✅ verified** — endpoint URL confirmed real via probe / JS-bundle
+  extraction / end-to-end smoke. Cleared the 4th safety gate. See ✓ in
+  `job-pro list`.
+  * 3 anon multipart (xpeng / weride / hoyoverse) — end-to-end smoked.
+  * 17 multipart-session — alibaba / pdd / meituan / mihoyo / liauto /
+    sf / netease / didi / pingan / byd / bilibili / xiaohongshu / baidu
+    / tencent / jd / oppo / trip
+  * 7 moka-aes (full Moka family).
+  * 2 beisen-italent (iflytek / vivo).
+* **16 🔑 speculative** — probe / JS-bundle dump returned 404 / HTML
+  fallthrough; need real-browser network capture. Split:
+  * 5 bespoke — bytedance / kuaishou / huawei / weibo / antgroup
+    (kuaishou's bundle had /api/v1/apply/* but they 404 on prod —
+    likely needs internal corp.kuaishou.com routes)
   * 8 feishu-3-step — xiaomi / nio / minimax / zhipu / iqiyi / agibot
     / zerooneai / baichuan
   * 2 beisen-wecruit — sensetime / horizonrobotics
   * 1 cdp-real-browser — lilith
-  Need real-browser network capture to find the right apply path.
   `--really-submit` requires `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
 * **5 ⛔ external** — Liepin recruiter chat × 4 (hikvision / cicc /
   cainiao / webank), Unitree WeChat QR × 1. Structurally non-API
   (IM-mediated); the CLI surfaces `apply_url` and declines to automate.
+
+**Techniques used to promote 26 adapters from 🔑 to ✅:**
+1. **Anon POST + classify response code** — Spring 401/403 / 405 /
+   business-error 200 → real route. SPA HTML 200/404 → wrong path.
+2. **Sub-tree probe siblings** — when one path 404s, try
+   `/applicant/apply`, `/resume/apply`, `/portal/...`, host-root etc.
+3. **Backend service split** — sf's `/api/web/position/*` was wrong
+   service; `/api/web/applicant/*` was right. byd similar (Spring
+   /position vs JWT gateway /resume).
+4. **JS-bundle path extraction** — `curl --compressed <bundle.js> |
+   grep -oE '/(api|openapi)/[a-zA-Z][a-zA-Z0-9/_-]+'`. Worked for
+   tencent (/api/v1/resume/bindResume), jd (cross-domain
+   wutongzhaopin.jd.com/api/wx/delivery), oppo (/api/delivery/*), trip
+   (/api/hrrecruit/applyJob).
 
 Run `job-pro recon` for the live matrix.
 

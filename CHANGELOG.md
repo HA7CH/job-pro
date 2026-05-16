@@ -4,6 +4,27 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.61 — docs/auto-apply tally + techniques playbook
+
+Synced docs/auto-apply.md to current state (29 ✅ / 16 🔑 / 5 ⛔).
+Added a 4-technique playbook documenting how each batch of
+adapters got promoted:
+
+1. Anon POST + classify response code
+2. Sub-tree probe siblings (host-root, /portal/, /applicant/, etc)
+3. Backend service split (sf, byd)
+4. JS-bundle path extraction (tencent, jd, oppo, trip)
+
+This documents the actual workflow so future contributors can apply
+it to remaining 🔑 adapters.
+
+Tried this iteration without promotion success:
+* kuaishou — bundle had /api/v1/apply/* but 404 on prod (likely
+  internal corp.kuaishou.com)
+* huawei — Jalor framework 404 (real route taxonomy, exact path hidden)
+* antgroup — RefererCheck rejects unauthenticated bundle access
+* weibo — no JS-bundle action paths matching probe filter
+
 ## 1.0.60 — trip: /api/hrrecruit/applyJob via JS-bundle extraction → verified
 
 Grepped \`bd-s.tripcdn.cn\`'s \`main.ad2ffe67.js\` (2.6MB) for /hrrecruit/
