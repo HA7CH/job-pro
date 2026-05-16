@@ -42,7 +42,105 @@
 //   - Both: city_info is null; city_list always populated
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 export { checkResume };
+
+// ---------- shared apply-schema helper (re-used by bespoke Feishu adapters) ----------
+//
+// xiaomi.ts / zhipu.ts / iqiyi.ts / agibot.ts / lilith.ts each predate the
+// factory and have their own searchPositions implementations. To give them
+// the same Phase-2 behaviour as factory-using adapters (nio / minimax /
+// baichuan / zerooneai), each can call `buildFeishuApplySchema()` from
+// its own fetchApplicationSchema function.
+
+/**
+ * Wire fetchApplicationSchema for a bespoke Feishu adapter that doesn't use
+ * createAdapter. The callback `fetchTitle(id)` is the adapter's own
+ * fetchPositionDetail (or any function that returns `{ ok, title }`).
+ *
+ * Usage:
+ *   export const fetchApplicationSchema = makeFeishuApplyFn({
+ *     host: HOST, source: SOURCE, channel: CHANNEL,
+ *     applyUrlPrefix: APPLY_PREFIX,
+ *     fetchTitle: (id) => fetchPositionDetail(id),
+ *     submitKind: "feishu-3-step",  // override for lilith → "cdp-real-browser"
+ *   });
+ */
+export function makeFeishuApplyFn(opts: {
+  host: string;
+  source: string;
+  channel: string;
+  applyUrlPrefix: string;
+  fetchTitle: (postId: string) => Promise<unknown>;
+  submitKind?: "feishu-3-step" | "cdp-real-browser";
+}) {
+  return async function fetchApplicationSchema(postId: string): Promise<
+    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
+  > {
+    const id = (postId ?? "").trim();
+    if (!id) return { ok: false, source: opts.source, message: "post_id is required" };
+    let title = "";
+    try {
+      const detail = (await opts.fetchTitle(id)) as { ok?: boolean; title?: string; message?: string };
+      if (detail?.ok === false) {
+        return { ok: false, source: opts.source, message: detail.message ?? "post not found" };
+      }
+      title = detail?.title ?? "";
+    } catch {
+      // detail call failures aren't fatal for the schema — we can still
+      // return what we know.
+    }
+    const schema = buildFeishuApplySchema({
+      host: opts.host,
+      source: opts.source,
+      channel: opts.channel,
+      applyUrlPrefix: opts.applyUrlPrefix,
+      postId: id,
+      jobTitle: title,
+    });
+    if (opts.submitKind === "cdp-real-browser") {
+      schema.submit_kind = "cdp-real-browser";
+      schema.submit_notes =
+        "Lilith's Feishu tenant requires a runtime-minted `_signature` token. " +
+        "Submission must drive a real browser (puppeteer-core) — staged dry-run " +
+        "only for now.";
+    }
+    return { ok: true, schema };
+  };
+}
+
+export function buildFeishuApplySchema(args: {
+  host: string;
+  source: string;
+  channel: string;
+  applyUrlPrefix: string;
+  postId: string;
+  jobTitle: string;
+}): ApplyFormSchema {
+  const standard: ApplyQuestion[] = [
+    { label: "Name",   required: true, fields: [{ name: "name",   type: "input_text" }] },
+    { label: "Email",  required: true, fields: [{ name: "email",  type: "input_text" }] },
+    { label: "Phone",  required: true, fields: [{ name: "phone",  type: "input_text" }] },
+    { label: "Resume", required: true, fields: [{ name: "resume", type: "input_file" }] },
+  ];
+  return {
+    source: args.source,
+    post_id: args.postId,
+    job_title: args.jobTitle,
+    apply_url: `${args.applyUrlPrefix}/${encodeURIComponent(args.postId)}/detail`,
+    submit_endpoint: `https://${args.host}/api/v1/resume/apply`,
+    submit_method: "POST",
+    submit_kind: "feishu-3-step",
+    submit_notes:
+      "Feishu apply is a 3-step token flow: POST /api/v1/attachment/upload/tokens → " +
+      "PUT presigned URL on lf-package-cn.feishucdn.com → POST /api/v1/attachment/exchange/tokens → " +
+      "POST /api/v1/resume/apply with { post_id, attachment_id, applicant_info }. " +
+      "Requires candidate session cookies (capture via extension/, drop under " +
+      "~/.jobpro/<adapter>.session.json). Multi-step submitter wires in next iteration; " +
+      "today this schema is dry-run only.",
+    questions: standard,
+  };
+}
 
 // ---------- adapter config ----------
 
@@ -659,6 +757,58 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     };
   }
 
+  // ---------- fetchApplicationSchema (Phase 2) ----------
+  //
+  // Feishu's apply funnel is a 3-step token flow, not a single multipart
+  // POST. Discovered via JS-bundle inspection of nio.jobs.feishu.cn
+  // (lf-package-cn.feishucdn.com/obj/atsx-throne/hire-fe-prod/portal/
+  // saas-career/static/js/*.js) — the routes baked into the bundle are:
+  //
+  //   1. POST {API_ROOT}/attachment/upload/tokens
+  //        → returns short-lived presigned upload URL + attachment_id
+  //   2. PUT  <presigned-URL on lf-package-cn.feishucdn.com>
+  //        → uploads the resume PDF/DOCX bytes directly
+  //   3. POST {API_ROOT}/attachment/exchange/tokens
+  //        → exchanges short-lived id for a permanent attachment_id
+  //   4. POST {API_ROOT}/user/delivery/check (pre-flight, optional)
+  //   5. POST {API_ROOT}/resume/apply
+  //        body: { post_id, attachment_id, applicant_info: { name, email,
+  //                phone, ... }, ... }
+  //        → returns { code:0, data:{ application_id } } on success
+  //
+  // The whole flow requires the user to be logged in as a candidate; the
+  // session cookie set during login authorizes every call above. Capture
+  // via the browser extension (~/.jobpro/<co>.session.json), then a
+  // future iteration adds an `executeSubmission` hook that drives the
+  // 3-step flow with the captured cookies.
+  //
+  // For now `fetchApplicationSchema` returns the contact-info schema
+  // (sufficient for dry-run staging) plus `submit_kind: "feishu-3-step"`
+  // so the dispatcher refuses --really-submit with a useful pointer.
+
+  async function fetchApplicationSchema(postId: string): Promise<
+    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
+  > {
+    const id = (postId ?? "").trim();
+    if (!id) return { ok: false, source, message: "post_id is required" };
+    const detail = await fetchPositionDetail(id);
+    const detailAny = detail as { ok?: boolean; title?: string; message?: string };
+    if (!detailAny.ok) {
+      return { ok: false, source, message: detailAny.message ?? "post not found" };
+    }
+    return {
+      ok: true,
+      schema: buildFeishuApplySchema({
+        host: cfg.host,
+        source,
+        channel: cfg.channel,
+        applyUrlPrefix: cfg.applyUrlPrefix,
+        postId: id,
+        jobTitle: detailAny.title ?? "",
+      }),
+    };
+  }
+
   return {
     searchPositions,
     fetchAllPositions,
@@ -669,5 +819,6 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
+    fetchApplicationSchema,
   };
 }

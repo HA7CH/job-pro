@@ -563,6 +563,11 @@ export function createAdapter(cfg: LeverAdapterConfig) {
         apply_url: job.applyUrl ?? job.hostedUrl ?? `${BOARD_URL}/${id}/apply`,
         submit_endpoint: `${BOARD_URL}/${id}/apply`,
         submit_method: "POST",
+        submit_kind: "multipart-anon",
+        submit_notes:
+          "Lever apply-page accepts anonymous multipart/form-data POST whose field " +
+          "names match Lever's hosted apply form (standard contact-info + each " +
+          "customQuestion's auto-named field).",
         questions: [...standard, ...custom],
       },
     };

@@ -161,6 +161,25 @@ export interface ApplyQuestion {
   fields: ApplyField[];
 }
 
+/**
+ * `submit_kind` selects which submission flow the dispatcher uses for
+ * `--really-submit`. Generic single-POST families (Greenhouse, Lever)
+ * use the built-in multipart sender. Families with proprietary
+ * multi-step token / encryption / signature dances declare their own
+ * kind here; the dispatcher refuses to fire submission until the
+ * matching `executeSubmission` is implemented.
+ */
+export type SubmitKind =
+  | "multipart-anon"        // Greenhouse / Lever public boards (no session needed)
+  | "multipart-session"     // Bespoke SPA with cookie session (Tencent, Bilibili, …)
+  | "feishu-3-step"         // get-token → upload-to-cdn → exchange-token → POST resume/apply
+  | "moka-aes"              // AES-128-CBC envelope same as our read-path
+  | "beisen-wecruit"        // Beisen Wecruit candidate-portal flow
+  | "beisen-italent"        // Beisen iTalent candidate-portal flow
+  | "cdp-real-browser"      // Requires puppeteer-core because of anti-bot signature (Lilith)
+  | "external"              // Open apply_url in a browser (Liepin IM-mediated, WeChat-only, …)
+  | (string & {});
+
 export interface ApplyFormSchema {
   /** Always present so dry-run output identifies which company. */
   source: string;
@@ -171,6 +190,10 @@ export interface ApplyFormSchema {
   submit_endpoint?: string;
   /** Submission HTTP method (Greenhouse: POST multipart/form-data). */
   submit_method?: "POST";
+  /** Submission flow family. Drives dispatcher gating. Default: "multipart-anon". */
+  submit_kind?: SubmitKind;
+  /** Human-readable note about how submission actually fires (e.g. Feishu's 3-step). */
+  submit_notes?: string;
   questions: ApplyQuestion[];
 }
 
@@ -192,6 +215,8 @@ export interface StagedApplication {
   apply_url: string;
   submit_endpoint?: string;
   submit_method?: "POST";
+  submit_kind?: SubmitKind;
+  submit_notes?: string;
   staged: StagedField[];
   unanswered_required: StagedField[];
   /** Set to true when every required field is filled. */
@@ -228,6 +253,8 @@ export function stageApplication(schema: ApplyFormSchema, profile: ResumeProfile
     apply_url: schema.apply_url,
     submit_endpoint: schema.submit_endpoint,
     submit_method: schema.submit_method,
+    submit_kind: schema.submit_kind,
+    submit_notes: schema.submit_notes,
     staged,
     unanswered_required,
     ready: unanswered_required.length === 0,
@@ -247,6 +274,14 @@ function resolveAnswer(field: ApplyField, profile: ResumeProfile): ResolvedAnswe
       return { value: profile.first_name ?? "", reason: "profile.first_name missing" };
     case "last_name":
       return { value: profile.last_name ?? "", reason: "profile.last_name missing" };
+    case "name":
+      // Feishu / Beisen / Moka often use a single `name` field. Compose
+      // first + last; gracefully degrade if only one is set.
+      const composed = [profile.first_name, profile.last_name].filter(Boolean).join(" ");
+      return {
+        value: composed || profile.first_name || profile.last_name || "",
+        reason: "profile.first_name and last_name both missing",
+      };
     case "email":
       return { value: profile.email ?? "", reason: "profile.email missing" };
     case "phone":

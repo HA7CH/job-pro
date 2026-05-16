@@ -676,3 +676,15 @@ export async function matchResume(
       "The only authority on selection is HR.",
   };
 }
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+import { makeFeishuApplyFn } from "./feishu.js";
+
+export const fetchApplicationSchema = makeFeishuApplyFn({
+  host: "zhipu-ai.jobs.feishu.cn",
+  source: "zhipu-ai.jobs.feishu.cn",
+  channel: "index",
+  applyUrlPrefix: "https://zhipu-ai.jobs.feishu.cn/index/position",
+  fetchTitle: (id) => fetchPositionDetail(id),
+});

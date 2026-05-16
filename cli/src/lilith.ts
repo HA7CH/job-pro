@@ -385,3 +385,16 @@ export async function matchResume(
 }
 
 export { extractResumeSignals, scoreOverlap };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+import { makeFeishuApplyFn } from "./feishu.js";
+
+export const fetchApplicationSchema = makeFeishuApplyFn({
+  host: "lilithgames.jobs.feishu.cn",
+  source: "lilithgames.jobs.feishu.cn",
+  channel: "career",
+  applyUrlPrefix: "https://lilithgames.jobs.feishu.cn/career/position",
+  fetchTitle: (id) => fetchPositionDetail(id),
+  submitKind: "cdp-real-browser",
+});

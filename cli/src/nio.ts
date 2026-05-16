@@ -28,6 +28,7 @@ export const {
   findNoticesByQuestion,
   matchResume,
   checkResume,
+  fetchApplicationSchema,
 } = createAdapter({
   host: "nio.jobs.feishu.cn",
   channel: "campus",

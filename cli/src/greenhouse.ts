@@ -568,6 +568,10 @@ export function createAdapter(cfg: GreenhouseAdapterConfig) {
         apply_url: job.absolute_url ?? `${BOARD_URL}/jobs/${id}`,
         submit_endpoint: `${API_ROOT}/jobs/${encodeURIComponent(id)}`,
         submit_method: "POST",
+        submit_kind: "multipart-anon",
+        submit_notes:
+          "Greenhouse Job Board API accepts anonymous multipart/form-data POSTs " +
+          "whose field names match the questions[].fields[].name returned here.",
         questions,
       },
     };

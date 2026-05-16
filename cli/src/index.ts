@@ -70,7 +70,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.2";
+const VERSION = "0.9.3";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -533,13 +533,37 @@ async function runCompany(
           compact
         );
       }
-      // Anon adapters (Greenhouse / Lever) don't need session.json.
-      // Bespoke / Beisen / Moka / Feishu adapters do — bail with a hint
-      // pointing at the browser extension.
-      const isAnonFamily =
-        staged.source.startsWith("boards-api.greenhouse.io/") ||
-        staged.source.startsWith("api.lever.co/");
-      if (!isAnonFamily && !session) {
+      // Submission flow selection by submit_kind. Only the generic
+      // multipart families are wired to actually fire today; everything
+      // else gets a useful refusal message.
+      const kind = (sr.schema.submit_kind ?? "multipart-anon");
+      const isAnonMultipart = kind === "multipart-anon";
+      const isSessionMultipart = kind === "multipart-session";
+      const isGenericMultipart = isAnonMultipart || isSessionMultipart;
+
+      if (!isGenericMultipart) {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            mode: "really-submit-blocked",
+            staged,
+            submit_kind: kind,
+            submit_notes: sr.schema.submit_notes,
+            message:
+              `submit_kind="${kind}" — this adapter family doesn't yet have an ` +
+              `executor wired. The application schema + submit endpoint are ` +
+              `documented (see submit_notes), but firing the submission needs a ` +
+              `family-specific multi-step flow (token exchange / AES envelope / ` +
+              `CDP / etc.). Landing per-family executors is the next iteration of ` +
+              `Phase 2. Use --debug-submit-to <url> to inspect what we have today.`,
+          },
+          compact
+        );
+      }
+      // Non-anon multipart families need session.json.
+      if (!isAnonMultipart && !session) {
         return emit(
           {
             ok: false,
@@ -556,7 +580,7 @@ async function runCompany(
         );
       }
       const result = await submitApplication(staged, { kind: "upstream" }, { session });
-      return emit({ mode: "really-submit", staged, session_used: !!session, result }, compact);
+      return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: !!session, result }, compact);
     }
 
     // Default: dry-run print, no network.

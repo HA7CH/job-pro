@@ -52,3 +52,4 @@ export const listNotices = _adapter.listNotices;
 export const getNotice = _adapter.getNotice;
 export const findNoticesByQuestion = _adapter.findNoticesByQuestion;
 export const matchResume = _adapter.matchResume;
+export const fetchApplicationSchema = _adapter.fetchApplicationSchema;
