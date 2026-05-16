@@ -4,6 +4,21 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.27 — README family-count fix
+
+The "Coverage by source family" table in the README had drifted: the
+counts added to 48, not 50. Three rows were stale:
+
+* Feishu Recruiting (ATSX): 7 → **9** (was missing Xiaomi + 01.AI;
+  Baichuan was lumped in differently).
+* Beisen iTalent: 3 → **2** (the "(more on the way)" hint never
+  realized — vivo + iFlytek are both that ships).
+* Moka: 6 → **7** (Moonshot was double-counted previously; Geely was
+  added but the row didn't reflect it).
+
+Now: 23 + 9 + 7 + 2 + 2 + 3 + 4 = 50 ✓. The Phase 2 paragraph also
+updated to past-tense — auto-apply is live, not "the plan".
+
 ## 1.0.26 — \`test:unit\` (no-network) + wired into CI
 
 New \`pnpm test:unit\` exercises everything you can verify without

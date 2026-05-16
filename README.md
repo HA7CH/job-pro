@@ -148,15 +148,19 @@ Coverage by source family:
 | Source family            | Companies | Notes                                                              |
 |--------------------------|-----------|--------------------------------------------------------------------|
 | Bespoke per-company API  | 23        | Tencent, ByteDance, Alibaba, Meituan, Xiaohongshu, JD, …            |
-| Feishu Recruiting (ATSX) | 7         | NIO, MiniMax, Moonshot, Zhipu, iQIYI, Agibot, Lilith *via CDP*     |
+| Feishu Recruiting (ATSX) | 9         | Xiaomi, NIO, MiniMax, Zhipu, iQIYI, Agibot, Lilith *via CDP*, 01.AI, Baichuan |
+| Moka (app.mokahr.com)    | 7         | Moonshot, Megvii, DeepSeek, GalaxyUniversal, StepFun, Cambricon, Geely |
 | Beisen Wecruit           | 2         | SenseTime, Horizon Robotics                                        |
-| Beisen iTalent (zhiye)   | 3         | vivo, iFlytek, (more on the way)                                   |
-| Moka (app.mokahr.com)    | 6         | Megvii, DeepSeek, Galaxy Universal, StepFun, Moonshot, Cambricon, Geely |
-| Greenhouse / Lever       | 3         | XPeng, WeRide, HoYoverse — these are international/US arms          |
+| Beisen iTalent (zhiye)   | 2         | vivo, iFlytek                                                      |
+| Greenhouse / Lever       | 3         | XPeng, WeRide, HoYoverse — international/US arms                   |
 | Liepin third-party feed  | 4         | Hikvision, CICC, Cainiao, WeBank (no canonical public feed exists) |
 
-`Phase 2 — Auto-apply` needs login cookies / OAuth, not just the public search
-endpoints. See [docs/auto-apply.md](./docs/auto-apply.md) for the plan.
+23 + 9 + 7 + 2 + 2 + 3 + 4 = 50.
+
+**Phase 2 — Auto-apply** is live: 45 / 50 adapters have a submitter
+wired (3 anon Greenhouse/Lever, 42 via captured browser session); the
+remaining 5 are intentionally `external` (Liepin recruiter chat × 4 +
+Unitree WeChat QR × 1 — IM-mediated, no API submission exists).
 
 ### Notes on coverage edge cases
 
