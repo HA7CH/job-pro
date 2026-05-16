@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.37 — docs/auto-apply tally + verify→ship playbook
+
+\`docs/auto-apply.md\`'s "Tally" was stale (counted 3 + 38 + 9 = 50 with
+the wrong split between "wired" and "structural"). Updated to the
+post-1.0.36 reality:
+
+* **3 ✅** verified-endpoint — anon Greenhouse/Lever.
+* **42 🔑** executor-wired but \`endpoint_verified !== true\` — most
+  inferred URLs are wrong (1.0.34 recon: 19/22 returned 404).
+* **5 ⛔** external — Liepin chat / Unitree WeChat.
+
+Adds the verify→ship playbook explicitly: static-only recon doesn't
+work for most of these adapters (their apply URL is webpack-output
+dynamic). Real-browser network capture via the extension is the only
+path to promoting 🔑 → ✅.
+
 ## 1.0.36 — 4th safety gate: speculative-endpoint refusal
 
 \`--really-submit\` now refuses by default when \`endpoint_verified !== true\`

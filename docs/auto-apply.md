@@ -97,10 +97,31 @@ Status legend: `✅` apply schema wired + submit endpoint known + verified end-t
 | 49 | cainiao         | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 | 50 | webank          | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 
-**Tally:** 3 ✅ wired, 38 🔑 awaiting session+endpoint recon, 9 ⛔ structural blocks
-(WeChat mini-program + Liepin IM-mediated). For the 38 🔑 entries, each
-unblock = one iteration: capture session via extension → probe upstream's
-apply XHR with puppeteer-core → wire the family's submit factory.
+**Tally as of 1.0.36:**
+* **3 ✅ verified** — multipart-anon (xpeng / weride / hoyoverse). Endpoint
+  end-to-end smoked via `pnpm test:debug-submit` against httpbin echo;
+  marked `endpoint_verified: true` in schema.
+* **42 🔑 executor-wired, endpoint speculative** — all have a family
+  executor and a submit_endpoint, but the URL itself is inferred from
+  static JS-bundle recon (not real-browser network capture). 1.0.34 probed
+  the 22 multipart-session bespokes anonymously: **only 3 (alibaba, pdd,
+  sf) returned an auth gate (401/403); 19 returned 404/HTML fallthrough**.
+  Family-executor endpoints (Feishu / Moka / Beisen × 17) were sampled —
+  upload-tokens / list endpoints responded but apply endpoints are unverified.
+  These adapters require `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes` on
+  `--really-submit` (4th safety gate, 1.0.36).
+* **5 ⛔ external** — Liepin recruiter chat × 4, Unitree WeChat QR × 1.
+  Structurally non-API (IM-mediated); the CLI surfaces `apply_url` and
+  declines to automate.
+
+To promote a 🔑 to ✅: capture the adapter's session via the browser
+extension, run `apply <id> --debug-submit-to <your-echo>` to inspect what
+goes out, fire a real `--really-submit` against your own application
+(under JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes), confirm 200, then patch
+the adapter to set `endpoint_verified: true`. Static-only recon (curl +
+grep on the JS bundle) doesn't work for most of these — the apply URL is
+constructed dynamically by the SPA's webpack output and requires
+real-browser network capture to extract reliably.
 
 ## Per-family unblock playbook
 
