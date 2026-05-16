@@ -1678,10 +1678,29 @@ export async function executeCdpRealBrowser(
     // email/phone for Feishu, etc.) — so input[name="<f.name>"] usually
     // matches. Falls back to placeholder / aria-label / id contains-match.
     let filled = 0, missed = 0;
+    const missedFields: string[] = [];
     for (const f of staged.staged) {
       if (f.type === "input_file") continue;
       if (!f.value) continue;
+      // For *_select kinds (Greenhouse multi_value_single_select), try
+      // native <select> first, then fall back to typing into an input.
+      // Custom React/Vue dropdowns (Element Plus, Ant Design) need a
+      // click-and-pick sequence we don't model — they show as missed.
+      const isSelectKind = (f.type ?? "").includes("select");
       try {
+        if (isSelectKind) {
+          const selectSel = `select[name="${f.name}"], select[id="${f.name}"]`;
+          const native = await page.$(selectSel);
+          if (native) {
+            await page.select(selectSel, f.value);
+            filled++;
+            continue;
+          }
+          // No native select — likely a custom dropdown. Skip + report.
+          missed++;
+          missedFields.push(`${f.name} (custom dropdown — needs human or per-adapter handler)`);
+          continue;
+        }
         const sel =
           `input[name="${f.name}"], textarea[name="${f.name}"], ` +
           `input[id="${f.name}"], textarea[id="${f.name}"], ` +
@@ -1690,9 +1709,13 @@ export async function executeCdpRealBrowser(
         filled++;
       } catch {
         missed++;
+        missedFields.push(f.name);
       }
     }
-    steps.push({ step: "fill-fields", url: page.url(), status: 200, ok: filled > 0, message: `filled ${filled}, missed ${missed}` });
+    const fillMsg = missed > 0
+      ? `filled ${filled}, missed ${missed}: ${missedFields.slice(0, 5).join(", ")}${missedFields.length > 5 ? "…" : ""}`
+      : `filled ${filled}`;
+    steps.push({ step: "fill-fields", url: page.url(), status: 200, ok: filled > 0, message: fillMsg });
 
     // Upload resume.
     try {

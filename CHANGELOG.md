@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.92 — CDP walker handles native \`<select>\` + reports missed fields
+
+Greenhouse boards have many \`multi_value_single_select\` questions
+(Yes/No work-auth, sponsorship, etc.). Previous CDP walker used
+\`page.type()\` which fails on \`<select>\` elements — those 6+ fields
+silently went missed.
+
+Now the walker:
+1. For \`*_select\` field types, tries \`select[name="<f.name>"]\` /
+   \`select[id="<f.name>"]\` and calls \`page.select(sel, value)\`.
+2. If no native select, logs explicitly: "\`<name>\` (custom dropdown —
+   needs human or per-adapter handler)". This is the Element Plus /
+   Ant Design React-dropdown case which the walker can't generalize.
+3. The fill step's message now lists which fields were missed:
+   "filled 4, missed 7: question_36528767002, question_36528768002, …".
+
+\`AnyPage\` interface in \`cdp.ts\` extended with the \`select\` method
+(missing previously).
+
+Coverage analysis:
+* Greenhouse (xpeng/weride/hoyoverse) — native \`<select>\`, fully
+  walkable now.
+* Feishu / Moka — typically use custom dropdowns. The walker will
+  report which fields couldn't be auto-filled; the user can then
+  fall back to the API path or do those few clicks themselves.
+
 ## 1.0.91 — CDP executor fills every staged field, not just name/email/phone
 
 The CDP DOM walker had a Feishu-shaped fill loop:

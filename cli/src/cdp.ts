@@ -60,6 +60,7 @@ export type AnyPage = {
   waitForSelector: (sel: string, opts?: { timeout?: number; visible?: boolean }) => Promise<{ uploadFile?: (...paths: string[]) => Promise<void>; click?: () => Promise<void> } | null>;
   type: (sel: string, text: string, opts?: { delay?: number }) => Promise<void>;
   click: (sel: string) => Promise<void>;
+  select: (sel: string, ...values: string[]) => Promise<string[]>;
   $: (sel: string) => Promise<{ uploadFile?: (...paths: string[]) => Promise<void>; click?: () => Promise<void> } | null>;
   screenshot: (opts?: { path?: string; fullPage?: boolean }) => Promise<unknown>;
   close: () => Promise<void>;
