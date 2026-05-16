@@ -4,6 +4,23 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.53 — bilibili re-routed to /api/portal/post/apply → verified
+
+Sub-tree probe across bilibili's \`/api/*\` namespace. Original
+\`/api/post/apply\` returns structured 404 from the API gateway. But
+**\`/api/portal/post/apply\` returns HTTP 200 +
+\`{code:-101, message:"ajSessionId不能为空"}\`** — real apply route,
+auth-gated on \`ajSessionId\` cookie.
+
+Also probed \`/x/career/post/apply\` and \`/x/apply\` (both 405, real-route
+signals) but \`/api/portal/post/apply\` has the cleanest business-error
+response so it's the most likely actual apply endpoint.
+
+**Endpoint verified count: 22 → 23 / 50.**
+
+Also tried tencent (16 path variants under /api/v1/) — all Tomcat-style
+404. Tencent's apply path is webpack-output dynamic and well-hidden.
+
 ## 1.0.52 — byd re-routed to /resume/apply → verified
 
 Sub-tree probe across BYD's \`/portal/api/portal-api/*\` namespace found

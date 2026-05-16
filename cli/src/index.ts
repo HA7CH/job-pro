@@ -201,6 +201,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "netease", "didi", "pingan",
   // probe-verified via re-routed sub-tree + JWT gateway response (1.0.52)
   "byd",
+  // probe-verified via re-routed sub-tree (1.0.53)
+  "bilibili",
 ]);
 
 const HELP = `

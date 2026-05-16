@@ -577,10 +577,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://jobs.bilibili.com/api/post/apply",
+      submitEndpoint: "https://jobs.bilibili.com/api/portal/post/apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Bilibili — POST /api/post/apply with session cookie. Endpoint inferred; needs validation.",
+        "Bilibili — POST /api/portal/post/apply with ajSessionId cookie. Endpoint anon-probed → HTTP 200 + {code:-101, msg:\"ajSessionId不能为空\"} (real apply route; original /api/post/apply returns structured 404, but the /api/portal/* sub-tree is the real customer-facing one). Body shape still needs validation.",
     }),
   };
 }
