@@ -982,9 +982,10 @@ async function runCompany(
             mode: "really-submit-blocked",
             staged,
             message:
-              `no captured session at ~/.jobpro/${company}.session.json. Install the ` +
-              `extension/ directory in Chrome, log into the careers site, click Export, ` +
-              `then mv ~/Downloads/jobpro/${company}.session.json ~/.jobpro/`,
+              `no captured session at ~/.jobpro/${company}.session.json. Run ` +
+              `\`job-pro extension\` for the bundled MV3 path + Chrome install ` +
+              `walkthrough; log into the careers site, click Export, then ` +
+              `mv ~/Downloads/jobpro/${company}.session.json ~/.jobpro/`,
           },
           compact
         );

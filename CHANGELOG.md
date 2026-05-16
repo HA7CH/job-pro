@@ -4,6 +4,20 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.87 — last "Install extension/" wording polished
+
+Two more spots:
+
+* The generic multipart-session no-session error in the dispatcher
+  said "Install the extension/ directory in Chrome". Updated to point
+  at \`job-pro extension\`.
+* \`examples/README.md\` "Capturing a session" section said the same.
+  Updated to mention the bundled MV3 path + 6-step walkthrough.
+
+\`grep -rn "Install extension/\\|install extension/"\` is now empty
+across cli/src + docs + examples + README. Every reference to the
+extension flows through \`job-pro extension\` (1.0.17+).
+
 ## 1.0.86 — "Install extension/" → "Run \`job-pro extension\`" across CLI
 
 Three more stale-wording fixes. Since 1.0.17 the extension is bundled

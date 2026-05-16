@@ -60,9 +60,10 @@ JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
 
 ## Capturing a session (for non-Greenhouse/Lever adapters)
 
-The 42 non-anon adapters need a logged-in candidate session. Install
-`extension/` in Chrome, log into the careers site, click the toolbar
-icon → **Export**. Then move the file:
+The 42 non-anon adapters need a logged-in candidate session. Run
+`job-pro extension` to get the bundled MV3 path + 6-step Chrome install
+walkthrough. Load it unpacked, log into the careers site, click the
+toolbar icon → **Export**. Then move the file:
 
 ```bash
 mv ~/Downloads/jobpro/nio.session.json ~/.jobpro/
