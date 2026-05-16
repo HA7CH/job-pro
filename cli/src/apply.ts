@@ -94,6 +94,23 @@ const TEMPLATE: ResumeProfile = {
   },
 };
 
+/**
+ * Read profile.json as-is, returning whatever is there.
+ * Skips the loadProfile() validation so callers (like `profile lint`)
+ * can inspect partial / broken profiles instead of getting a flat fail.
+ */
+export function loadProfileRaw(): { ok: true; profile: ResumeProfile; path: string } | { ok: false; message: string; path: string } {
+  if (!existsSync(PROFILE_PATH)) {
+    return { ok: false, path: PROFILE_PATH, message: `profile not found at ${PROFILE_PATH}` };
+  }
+  try {
+    const raw = readFileSync(PROFILE_PATH, "utf8");
+    return { ok: true, path: PROFILE_PATH, profile: JSON.parse(raw) as ResumeProfile };
+  } catch (err) {
+    return { ok: false, path: PROFILE_PATH, message: `could not parse ${PROFILE_PATH}: ${err instanceof Error ? err.message : err}` };
+  }
+}
+
 export function loadProfile(): { ok: true; profile: ResumeProfile } | { ok: false; message: string } {
   if (!existsSync(PROFILE_PATH)) {
     return {

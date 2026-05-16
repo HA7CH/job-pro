@@ -53,6 +53,7 @@ import * as cambricon from "./cambricon.js";
 import type { CompanyAdapter } from "./adapter.js";
 import {
   loadProfile,
+  loadProfileRaw,
   loadSession,
   profileTemplate,
   saveProfile,
@@ -172,6 +173,8 @@ USAGE
                                       write ~/.jobpro/profile.json
                                       --interactive fills it via prompts.
   job-pro profile show                print the loaded profile
+  job-pro profile lint                validate format of every field
+                                      (exits 1 on any FAIL — scriptable)
   job-pro find <keyword>              search ALL 50 companies in parallel
                                       [--limit N] [--companies a,b,c]
                                       [--timeout ms] [--apply-ready]
@@ -1388,7 +1391,71 @@ async function main() {
       console.log(JSON.stringify(r.profile, null, 2));
       return;
     }
-    die(`usage: job-pro profile <init [--interactive] [--force] | show>`);
+    if (sub === "lint") {
+      const compact = args.includes("--compact");
+      const r = loadProfileRaw();
+      if (!r.ok) {
+        console.error(r.message);
+        process.exit(1);
+      }
+      const p = r.profile;
+      type Finding = { level: "PASS" | "WARN" | "FAIL"; check: string; message: string };
+      const findings: Finding[] = [];
+      // first_name / last_name
+      for (const k of ["first_name", "last_name"] as const) {
+        const v = (p[k] ?? "").trim();
+        if (!v) findings.push({ level: "FAIL", check: k, message: "missing" });
+        else findings.push({ level: "PASS", check: k, message: v });
+      }
+      // email
+      const email = (p.email ?? "").trim();
+      if (!email) findings.push({ level: "FAIL", check: "email", message: "missing" });
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+        findings.push({ level: "FAIL", check: "email", message: `"${email}" doesn't look like a valid address` });
+      else findings.push({ level: "PASS", check: "email", message: email });
+      // phone
+      const phone = (p.phone ?? "").trim();
+      if (!phone) findings.push({ level: "FAIL", check: "phone", message: "missing" });
+      else {
+        const digitCount = phone.replace(/\D/g, "").length;
+        if (digitCount < 7) findings.push({ level: "FAIL", check: "phone", message: `"${phone}" has ${digitCount} digit(s); need 7+` });
+        else if (!phone.startsWith("+"))
+          findings.push({ level: "WARN", check: "phone", message: `"${phone}" missing country code (recommended for non-anon adapters; e.g. +86 / +1)` });
+        else findings.push({ level: "PASS", check: "phone", message: phone });
+      }
+      // resume_path
+      const rp = (p.resume_path ?? "").trim();
+      if (!rp) findings.push({ level: "FAIL", check: "resume_path", message: "missing" });
+      else if (!existsSync(rp)) findings.push({ level: "FAIL", check: "resume_path", message: `file not found: ${rp}` });
+      else {
+        const lower = rp.toLowerCase();
+        if (!/\.(pdf|docx?|md|txt|rtf)$/i.test(lower))
+          findings.push({ level: "WARN", check: "resume_path", message: `unusual extension: ${rp} (most ATS expect .pdf or .docx)` });
+        else findings.push({ level: "PASS", check: "resume_path", message: rp });
+      }
+      // custom
+      const customCount = Object.keys(p.custom ?? {}).length;
+      if (customCount > 0) {
+        const emptyValues = Object.entries(p.custom ?? {})
+          .filter(([, v]) => typeof v !== "string" || v.trim() === "")
+          .map(([k]) => k);
+        if (emptyValues.length > 0)
+          findings.push({ level: "WARN", check: "custom", message: `${emptyValues.length} empty value(s): ${emptyValues.slice(0, 5).join(", ")}` });
+        else findings.push({ level: "PASS", check: "custom", message: `${customCount} answer(s)` });
+      }
+      const fails = findings.filter((f) => f.level === "FAIL").length;
+      const warns = findings.filter((f) => f.level === "WARN").length;
+      if (compact) {
+        console.log(JSON.stringify({ ok: fails === 0, fails, warns, findings }));
+      } else {
+        const ICON: Record<string, string> = { PASS: "✓", WARN: "!", FAIL: "✗" };
+        for (const f of findings) console.log(`  ${ICON[f.level]} ${f.check.padEnd(13)} ${f.message}`);
+        console.log(`\n  ${fails} fail / ${warns} warn / ${findings.length - fails - warns} pass`);
+      }
+      if (fails > 0) process.exit(1);
+      return;
+    }
+    die(`usage: job-pro profile <init [--interactive] [--force] | show | lint>`);
   }
 
   const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[cmd];

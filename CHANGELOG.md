@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.16 — \`profile lint\` format validation
+
+\`job-pro profile lint\` checks every profile field for actual validity,
+not just presence (which is all \`status\` did):
+
+* \`email\` regex
+* \`phone\` digit-count + country-code recommendation (WARN if missing)
+* \`resume_path\` file-exists + extension sniff (WARN on non-pdf/docx)
+* \`custom.*\` empty-value detection
+
+Exits 1 on any FAIL so it's scriptable in CI / pre-commit / wrapper
+scripts. JSON via \`--compact\`. New \`loadProfileRaw()\` helper in
+apply.ts skips the validation gate so lint can inspect partial /
+broken profiles instead of getting a flat "missing required field"
+short-circuit.
+
 ## 1.0.15 — \`apply --schema\` + README sync
 
 * New \`apply --schema\` short-circuit: dumps the raw
