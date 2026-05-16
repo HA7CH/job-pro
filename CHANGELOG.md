@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.71 — fix: \`executeFeishu3Step\` step 3 follows schema's submit_endpoint
+
+1.0.62 updated the Feishu factory's \`submit_endpoint\` from
+\`/api/v1/resume/apply\` to the verified \`/api/v1/user/applications\`,
+but \`executeFeishu3Step\` was still hardcoding \`\${apiRoot}/resume/apply\`
+for step 3 — schema/executor drifted.
+
+Now step 3 reads \`staged.submit_endpoint\` (single source of truth)
+with a safe fallback. Same pattern as moka's executor (which already
+did this right).
+
+Audited the other family executors:
+
+* moka — uses \`staged.submit_endpoint\` (line 1246) ✓
+* beisen-wecruit — hardcoded \`\${apiBase}/delivery/resume/\${su}\` but
+  matches schema's \`\${SITE_ROOT}/wecruit/delivery/resume/\${channelId}\` ✓
+* beisen-italent — hardcoded \`\${apiRoot}/api/Apply/SubmitResume\` but
+  matches schema's \`https://\${host}/api/Apply/SubmitResume\` ✓
+
+Submit-smoke still 27/27 / 0 broken. The drift was silent because
+debug-mode replaces step3 with httpbin URL — a real submit would
+have 404'd against the wrong upstream path.
+
 ## 1.0.70 — docs/auto-apply: final-state tally + 9-technique playbook
 
 Synced docs/auto-apply.md to the final 45 ✅ / 5 ⛔ state. Rewrote

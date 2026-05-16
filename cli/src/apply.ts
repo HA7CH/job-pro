@@ -992,7 +992,9 @@ export async function executeFeishu3Step(
     return { ok: false, posted_to: upload_url, status: s2.response.status, message: "step 2 failed (upload to CDN)", steps };
   }
 
-  // STEP 3 — resume/apply
+  // STEP 3 — final apply call. Uses staged.submit_endpoint (e.g.
+  // /api/v1/user/applications, verified in 1.0.62 + 1.0.63) rather than
+  // hardcoding, so the schema is the single source of truth.
   const applicantInfo: Record<string, string> = {};
   for (const f of staged.staged) {
     if (f.name === "name" || f.name === "email" || f.name === "phone") {
@@ -1004,9 +1006,11 @@ export async function executeFeishu3Step(
     attachment_id,
     applicant_info: applicantInfo,
   };
-  const step3Url = `${apiRoot}/resume/apply`;
+  const step3Url = debug
+    ? (target as { kind: "debug"; url: string }).url
+    : (staged.submit_endpoint ?? `${apiRoot}/user/applications`);
   const s3 = await doStep(
-    "resume-apply",
+    "apply",
     step3Url,
     {
       method: "POST",
