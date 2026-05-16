@@ -344,6 +344,118 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
+// ---------- fillable-form template ----------
+//
+// Stage 1 of a complete `apply` flow has the user read the upstream
+// schema and fill in any custom-question answers. The CLI exposes two
+// affordances for that:
+//
+//   `apply <postId> --print-form`        → writes a JSON template to
+//                                          stdout listing each question
+//                                          with its label, type, allowed
+//                                          values, and a `value: ""`
+//                                          placeholder per field.
+//
+//   `apply <postId> --form-file <path>`  → loads { name: value } map
+//                                          from the file and merges it
+//                                          into profile.custom for
+//                                          this single call. Allows
+//                                          per-job overrides without
+//                                          polluting ~/.jobpro/profile.json.
+
+export interface FormTemplateField {
+  name: string;
+  type: FieldType;
+  required: boolean;
+  label: string;
+  description?: string | null;
+  /** Allowed values for *_select / multi_value_* fields. */
+  options?: Array<{ value: string; label: string }>;
+  /** Current value resolved from profile (so user sees what we'd send). */
+  value: string;
+  /** When value is "", an explanation of why it's empty. */
+  unanswered_reason?: string;
+}
+
+export interface FormTemplate {
+  source: string;
+  post_id: string;
+  job_title: string;
+  apply_url: string;
+  submit_kind?: SubmitKind;
+  fields: FormTemplateField[];
+}
+
+export function buildFormTemplate(schema: ApplyFormSchema, profile: ResumeProfile): FormTemplate {
+  const out: FormTemplateField[] = [];
+  for (const q of schema.questions) {
+    for (const f of q.fields) {
+      const resolved = resolveAnswer(f, profile);
+      out.push({
+        name: f.name,
+        type: f.type,
+        required: q.required,
+        label: q.label,
+        description: q.description,
+        options: f.values && f.values.length > 0 ? f.values : undefined,
+        value: resolved.value,
+        unanswered_reason: resolved.value ? undefined : resolved.reason || undefined,
+      });
+    }
+  }
+  return {
+    source: schema.source,
+    post_id: schema.post_id,
+    job_title: schema.job_title,
+    apply_url: schema.apply_url,
+    submit_kind: schema.submit_kind,
+    fields: out,
+  };
+}
+
+/** Merge a `{ field_name: value }` map into the profile's custom overrides. */
+export function applyFormFile(profile: ResumeProfile, formFilePath: string): { ok: true; profile: ResumeProfile } | { ok: false; message: string } {
+  if (!existsSync(formFilePath)) {
+    return { ok: false, message: `form file not found: ${formFilePath}` };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(formFilePath, "utf8");
+  } catch (err) {
+    return { ok: false, message: `read ${formFilePath} failed: ${err instanceof Error ? err.message : err}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, message: `${formFilePath} is not valid JSON: ${err instanceof Error ? err.message : err}` };
+  }
+  // Accept either:
+  //   (a) a flat { name: value } map, or
+  //   (b) the full FormTemplate shape (fields:[{ name, value }, …])
+  const overrides: Record<string, string> = {};
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as FormTemplate).fields)) {
+    for (const f of (parsed as FormTemplate).fields) {
+      if (typeof f.name === "string" && typeof f.value === "string" && f.value.length > 0) {
+        overrides[f.name] = f.value;
+      }
+    }
+  } else if (parsed && typeof parsed === "object") {
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "string" && v.length > 0) overrides[k] = v;
+    }
+  } else {
+    return { ok: false, message: "form file must be a JSON object or FormTemplate" };
+  }
+  return {
+    ok: true,
+    profile: {
+      ...profile,
+      custom: { ...(profile.custom ?? {}), ...overrides },
+    },
+  };
+}
+
 // ---------- bespoke schema helper ----------
 //
 // Most adapter families share the same 4-question contact-info form

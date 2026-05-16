@@ -62,6 +62,8 @@ import {
   executeBeisenWecruit,
   executeBeisenITalent,
   executeCdpRealBrowser,
+  buildFormTemplate,
+  applyFormFile,
   formatStaged,
   type ApplyFormSchema,
 } from "./apply.js";
@@ -75,7 +77,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -194,8 +196,10 @@ VERBS (same surface for every company)
                                     pass "-" to read resume from stdin
   resume-check <resume-text-or-->   structural sanity check on a resume
   apply <post_id>                   stage an application (Phase 2 dry-run)
-                                    --really-submit is intentionally disabled
-                                    until per-ATS flows are validated.
+                                    --print-form               emit a fillable JSON template
+                                    --form-file <path>         merge per-job answers
+                                    --debug-submit-to <url>    verify wire format
+                                    --really-submit            actually fire (env-gated)
   memory list | get <k> | set k=v | event <kind> [payload] | clear
 
 OUTPUT
@@ -464,9 +468,12 @@ async function runCompany(
 
   if (verb === "apply") {
     const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--dry-run | --debug-submit-to <url> | --really-submit]`);
+    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--print-form | --form-file <path>] [--dry-run | --debug-submit-to <url> | --really-submit]`);
     const reallySubmit = args.includes("--really-submit");
+    const printForm = args.includes("--print-form");
     const { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
+    const { args: _aForm, value: formFilePath } = popFlagValue(aDebug, "--form-file");
+    void _aForm;
 
     const fetchSchema = adapter.fetchApplicationSchema;
     if (typeof fetchSchema !== "function") {
@@ -506,7 +513,33 @@ async function runCompany(
         compact
       );
     }
-    const staged = stageApplication(sr.schema, prof.profile);
+
+    // --print-form short-circuits everything else: emit a fillable
+    // template specific to this job's schema and exit.
+    if (printForm) {
+      const template = buildFormTemplate(sr.schema, prof.profile);
+      return emit(template, compact);
+    }
+
+    // --form-file merges per-job overrides into profile.custom.
+    let effectiveProfile = prof.profile;
+    if (formFilePath) {
+      const merged = applyFormFile(effectiveProfile, formFilePath);
+      if (!merged.ok) {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            message: merged.message,
+          },
+          compact
+        );
+      }
+      effectiveProfile = merged.profile;
+    }
+
+    const staged = stageApplication(sr.schema, effectiveProfile);
     const session = loadSession(company);
 
     // Mode selection: --debug-submit-to <url> overrides everything.
@@ -671,9 +704,16 @@ async function runCompany(
     }
     if (!staged.ready) {
       console.log(
-        `\nFill the unanswered required fields in ${profileTemplate().path} ` +
-          `(profile.custom.<name> for unknown fields), then re-run.`
+        `\nFill the unanswered required fields. Easiest path:\n` +
+          `  1. job-pro ${company} apply ${postId} --print-form > form.json\n` +
+          `  2. Edit form.json — set each \`value\` for required fields.\n` +
+          `  3. job-pro ${company} apply ${postId} --form-file form.json\n` +
+          `Or paste the following into ${profileTemplate().path} under \`custom\`:`
       );
+      // Emit a copy-pasteable JSON snippet listing each unanswered required.
+      const snippet: Record<string, string> = {};
+      for (const f of staged.unanswered_required) snippet[f.name] = "";
+      console.log(JSON.stringify({ custom: snippet }, null, 2));
     } else {
       const isAnon =
         staged.source.startsWith("boards-api.greenhouse.io/") ||
