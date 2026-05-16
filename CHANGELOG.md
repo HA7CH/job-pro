@@ -4,6 +4,38 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.88 — \`apply --via-cdp\`: DOM-driven submit for any adapter
+
+\`executeCdpRealBrowser\` already existed for lilith — it drives a
+puppeteer-core browser through the SPA's apply form (click "投递",
+fill name/email/phone, upload resume, click "提交"). DOM-based, so
+it bypasses any API body-shape uncertainty.
+
+\`--via-cdp\` now exposes this path for **any adapter**:
+
+\`\`\`
+JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
+  job-pro tencent apply <id> --really-submit --via-cdp
+\`\`\`
+
+The CDP executor walks any SPA that follows the common 投递 → modal
+→ form pattern (most Chinese careers sites). Slower than API +
+needs Chrome, but rescues users whose API submission failed
+because of body-shape drift, CSRF token churn, or unknown signature
+requirements.
+
+Non-anon adapters still need a captured session (cookies injected
+into puppeteer); multipart-anon (Greenhouse/Lever) skips the session
+requirement since those forms accept anon submits.
+
+Use cases:
+* API submission keeps 4xx-ing — fall back to DOM.
+* Want to verify the apply UI actually loads correctly (\`--via-cdp
+  --debug-submit-to http://noop\` won't work because CDP doesn't echo;
+  but it logs the navigation step in result.steps[]).
+* Curious about which selectors the CDP executor uses (\`steps[]\` has
+  click-apply / fill-name / upload-resume / submit names).
+
 ## 1.0.87 — last "Install extension/" wording polished
 
 Two more spots:

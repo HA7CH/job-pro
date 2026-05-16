@@ -1575,14 +1575,18 @@ export async function executeCdpRealBrowser(
   if (target.kind === "dry-run") {
     return { ok: false, posted_to: "dry-run (no network)", message: "dry-run requested — no HTTP call fired", steps: [] };
   }
-  if (target.kind === "upstream" && !session) {
+  // Non-anon adapters need session.json (the SPA's login cookies); anon
+  // multipart adapters (Greenhouse/Lever boards) can fire the apply form
+  // without a session — the DOM walker handles those too.
+  const needsSession = staged.submit_kind !== "multipart-anon";
+  if (target.kind === "upstream" && needsSession && !session) {
     return {
       ok: false,
       posted_to: staged.apply_url,
       message:
-        "executeCdpRealBrowser requires session.json (the SPA's login cookies need to be in " +
-        "the puppeteer browser before navigation). Capture via extension/, drop under " +
-        "~/.jobpro/<adapter>.session.json.",
+        "executeCdpRealBrowser requires session.json for non-anon adapters " +
+        "(the SPA's login cookies need to be in the puppeteer browser before " +
+        "navigation). Run `job-pro extension` to capture one.",
       steps: [],
     };
   }

@@ -283,6 +283,9 @@ VERBS (same surface for every company)
                                     --debug-submit-to <url>    verify wire format
                                     --debug-submit             ↑ shorthand → httpbin.org/post
                                     --really-submit            actually fire (env-gated)
+                                    --via-cdp                  drive a puppeteer browser through
+                                                               the SPA's apply form (DOM-based,
+                                                               bypasses API body-shape uncertainty)
                                     --allow-stale-session      bypass 30-day session-age gate
   memory list | get <k> | set k=v | event <kind> [payload] | clear
 
@@ -552,6 +555,7 @@ async function runCompany(
 
   if (verb === "apply") {
     const reallySubmit = args.includes("--really-submit");
+    const viaCdp = args.includes("--via-cdp");
     const printForm = args.includes("--print-form");
     const schemaOnly = args.includes("--schema");
     const interactive = args.includes("--interactive");
@@ -895,7 +899,12 @@ async function runCompany(
       }
       // Family executors: each takes (staged, session, target) and returns
       // a MultiStepResult. All gate on session.json existing.
-      const familyExecutor =
+      // --via-cdp forces the puppeteer DOM-driven path for any adapter,
+      // bypassing the API endpoint and any body-shape uncertainty. The
+      // CDP executor walks the SPA's apply form like a human: click
+      // "投递", fill name/email/phone, upload resume, click submit.
+      // Slower + needs Chrome, but reliable when API is uncertain.
+      const familyExecutor = viaCdp ? executeCdpRealBrowser :
         kind === "feishu-3-step" ? executeFeishu3Step :
         kind === "moka-aes" ? executeMokaApply :
         kind === "beisen-wecruit" ? executeBeisenWecruit :
@@ -903,7 +912,11 @@ async function runCompany(
         kind === "cdp-real-browser" ? executeCdpRealBrowser :
         null;
       if (familyExecutor) {
-        if (!session) {
+        // --via-cdp on multipart-anon (xpeng/weride/hoyoverse) doesn't
+        // need a session — Greenhouse/Lever forms accept anon submits.
+        // The CDP executor's own check is relaxed for multipart-anon.
+        const sessionRequired = !(viaCdp && kind === "multipart-anon");
+        if (sessionRequired && !session) {
           return emit(
             {
               ok: false,
