@@ -199,6 +199,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "sf",
   // multipart-session probe-verified via 405 (route exists, method/body wrong)
   "netease", "didi", "pingan",
+  // probe-verified via re-routed sub-tree + JWT gateway response (1.0.52)
+  "byd",
 ]);
 
 const HELP = `

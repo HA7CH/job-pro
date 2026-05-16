@@ -511,10 +511,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://job.byd.com/portal/api/portal-api/position/apply",
+      submitEndpoint: "https://job.byd.com/portal/api/portal-api/resume/apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "BYD — POST /portal/api/portal-api/position/apply with JWT bearer + session. Endpoint inferred from job.byd.com bundle; needs validation.",
+        "BYD — POST /portal/api/portal-api/resume/apply with JWT bearer (Token). Endpoint anon-probed → HTTP 200 + {code:4001, msg:\"Token无效或已过期: Not Authenticated\"} (unified gateway token middleware; the originally-inferred /position/apply returns structured 404 from the Spring position service, but /resume/apply, /job/apply, /applicant/apply, /resume/submit, /career/apply all hit the auth gateway). Body shape still needs validation against a real candidate session.",
     }),
   };
 }

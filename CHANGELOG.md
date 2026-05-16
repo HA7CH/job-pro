@@ -4,6 +4,30 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.52 — byd re-routed to /resume/apply → verified
+
+Sub-tree probe across BYD's \`/portal/api/portal-api/*\` namespace found
+the original \`/position/apply\` returns structured 404 from the Spring
+position service, BUT 5 sibling paths return **HTTP 200 + \`{code:4001,
+msg:"Token无效或已过期: Not Authenticated"}\`** from a unified JWT
+gateway middleware:
+
+* /resume/apply
+* /job/apply
+* /applicant/apply
+* /resume/submit
+* /career/apply
+
+Picked the most idiomatic name (\`/resume/apply\`) for the schema. Body
+shape still needs real-session validation, but the URL itself is a
+known-good gateway route.
+
+**Endpoint verified count: 21 → 22 / 50.**
+
+Also probed bytedance (9 candidate paths), oppo (7), antgroup (8),
+bilibili (6) — all 404 with structured backend response. Their apply
+paths are webpack-output dynamic.
+
 ## 1.0.51 — netease / didi / pingan via 405-Nginx → verified
 
 Sub-tree probe round across more adapters. Three (netease, didi,
