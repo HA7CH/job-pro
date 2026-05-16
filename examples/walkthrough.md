@@ -7,21 +7,37 @@ This walks through exactly what happens when you run
 
 ## Stage 1 — Profile
 
-Run `job-pro profile init`, then edit `~/.jobpro/profile.json`:
+The fastest path is the interactive wizard (1.0.8+):
 
-```json
-{
-  "first_name": "Jian",
-  "last_name": "Zhang",
-  "email": "jian.zhang@example.com",
-  "phone": "+86 13800138000",
-  "resume_path": "/Users/jian/Documents/resume.pdf",
-  "cover_letter_text": "",
-  "custom": {}
-}
+```bash
+$ job-pro profile init --interactive
+First name: Jian
+Last name: Zhang
+Email: jian.zhang@example.com
+Phone (with country code, e.g. +86 13800138000): +86 13800138000
+Resume file path (absolute, PDF/DOCX): /Users/jian/Documents/resume.pdf
 ```
 
-Then `job-pro status` should report `Profile ✓ 5 filled`.
+Or write the template and edit manually:
+
+```bash
+$ job-pro profile init && $EDITOR ~/.jobpro/profile.json
+```
+
+Either way, verify the result:
+
+```bash
+$ job-pro profile lint           # checks email regex, phone country code, resume_path exists
+  ✓ first_name    Jian
+  ✓ last_name     Zhang
+  ✓ email         jian.zhang@example.com
+  ✓ phone         +86 13800138000
+  ✓ resume_path   /Users/jian/Documents/resume.pdf
+
+  0 fail / 0 warn / 5 pass
+```
+
+`job-pro status` should also report `Profile ✓`.
 
 ## Stage 2 — Find a job
 
@@ -103,6 +119,17 @@ Have you ever worked at XPENG or any of its affiliates? (required)
 
 Collected 7 answer(s). Staging now…
 ready: ✓ all required fields filled
+```
+
+Add `--remember` to persist the collected answers into
+`~/.jobpro/profile.json` under `custom.<question_name>`. Next job at
+the same Greenhouse board will auto-resolve shared questions without
+re-prompting:
+
+```bash
+$ job-pro xpeng apply 8548990002 --interactive --remember
+…
+Saved 7 answer(s) to /Users/jian/.jobpro/profile.json (custom.*).
 ```
 
 ### Option B — `--form-file`

@@ -31,7 +31,7 @@ JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
   job-pro xpeng apply 8548990002 --really-submit                # actually fires
 
 # Adapters needing session.json (Beisen / Moka / Feishu / bespoke):
-# 1. Install extension/ in Chrome
+# 1. job-pro extension  (prints path + 6-step Chrome install walkthrough)
 # 2. Log into the careers site in your normal browser
 # 3. Click extension → Export → mv ~/Downloads/jobpro/<co>.session.json ~/.jobpro/
 # 4. job-pro <co> apply <postId> --really-submit (with the env-var set)

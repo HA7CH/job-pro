@@ -4,6 +4,19 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.18 — docs catch up with 1.0.10 / 1.0.16 / 1.0.17
+
+The README and \`examples/walkthrough.md\` had drifted: no mention of
+\`--remember\` (1.0.10), \`profile lint\` (1.0.16), or \`job-pro
+extension\` (1.0.17). Synced.
+
+\`docs/auto-apply.md\` likewise: the session-capture step now points at
+\`job-pro extension\` instead of "install extension/ in Chrome"
+(\`extension/\` is internal — \`job-pro extension\` is the user-facing
+entry point now that 1.0.17 bundles it).
+
+No code changes.
+
 ## 1.0.17 — \`job-pro extension\` + bundle extension in npm package
 
 Before this, \`extension/\` only existed in the GitHub repo — users

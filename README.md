@@ -85,24 +85,29 @@ application schema; 45 / 50 have a working submitter wired:
 ```bash
 # 1. Set up your profile (one-time)
 job-pro profile init --interactive   # prompts for the 5 essential fields (validates each)
+job-pro profile lint                 # check format of every field (exit 1 on fail)
 # or: job-pro profile init && $EDITOR ~/.jobpro/profile.json
 
-# 2. Dry-run an application (no network)
-job-pro xpeng apply 8548990002       # stage + preview the POST
+# 2. Inspect a job's schema (no profile required)
+job-pro xpeng apply 8548990002 --schema
 
-# 3. Verify the wire format against an echo server (no upstream impact)
+# 3. Dry-run an application (no network)
+job-pro xpeng apply 8548990002       # stage + preview the POST
+job-pro xpeng apply 8548990002 --interactive --remember  # fills answers, persists to profile
+
+# 4. Verify the wire format against an echo server (no upstream impact)
 job-pro xpeng apply 8548990002 --debug-submit-to https://httpbin.org/post
 
-# 4. Actually submit
+# 5. Actually submit
 JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
   job-pro xpeng apply 8548990002 --really-submit
 ```
 
 Greenhouse / Lever boards (xpeng / hoyoverse / weride) submit
-anonymously. Every other family needs a captured session — install
-the `extension/` browser extension, log into the careers site once,
-click Export, then drop `~/Downloads/jobpro/<adapter>.session.json`
-under `~/.jobpro/`.
+anonymously. Every other family needs a captured session — run
+`job-pro extension` for the path + install walkthrough, log into the
+careers site once, click Export, then drop
+`~/Downloads/jobpro/<adapter>.session.json` under `~/.jobpro/`.
 
 ```bash
 # After capturing nio's session via the extension:
