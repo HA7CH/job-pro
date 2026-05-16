@@ -230,6 +230,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "weibo",
   // huawei: /reccampportal/services/portal/portaluser/ Jalor framework (1.0.66)
   "huawei",
+  // lilith: atsx-throne tenant, /api/v1/user/applications 405 (1.0.67)
+  "lilith",
 ]);
 
 const HELP = `
