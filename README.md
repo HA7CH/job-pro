@@ -2,6 +2,7 @@
 
 [![ci](https://github.com/HA7CH/job-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/HA7CH/job-pro/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/job-pro.svg)](https://www.npmjs.com/package/job-pro)
+[![apply ready](https://img.shields.io/badge/apply--ready-45%20%2F%2050-green)](./docs/auto-apply.md)
 
 Query Chinese big-tech campus recruiting from your terminal — [job.ha7ch.com](https://job.ha7ch.com)
 
