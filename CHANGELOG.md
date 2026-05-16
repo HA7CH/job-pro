@@ -4,6 +4,23 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.5 — retry-with-backoff for submission
+
+`fetchWithRetry()` wraps the generic submitApplication path with
+exponential-backoff retries on transient failures. Policy:
+
+* **Network errors** → retry (transient, retryable).
+* **5xx** → retry with backoff (250ms × 2^attempt, ±25% jitter).
+* **4xx** → no retry (user error: bad session / malformed body — retrying
+  would just waste resume upload attempts against a server that's
+  politely saying "no").
+* Default: 2 retries (3 total attempts), override with `JOB_PRO_RETRY=N`.
+
+Wired into submitApplication today (multipart-anon + multipart-session =
+25 / 45 executor-routed adapters). Family executors (Feishu / Moka /
+Beisen / CDP) still use bare fetch — same policy applies in a follow-up
+iteration.
+
 ## 1.0.4 — examples/ + web Phase 2 panel
 
 Web landing page (`job.ha7ch.com`) now has a dedicated "Phase 2 —

@@ -689,20 +689,20 @@ export async function submitApplication(
     Object.assign(headers, options.extraHeaders);
   }
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: staged.submit_method ?? "POST",
-      headers,
-      body: fd,
-    });
-  } catch (err) {
+  const r = await fetchWithRetry(
+    url,
+    { method: staged.submit_method ?? "POST", headers, body: fd },
+    "submit"
+  );
+  if (!r.ok) {
     return {
       ok: false,
       posted_to: url,
-      message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+      status: r.status,
+      message: r.message,
     };
   }
+  const response = r.response;
   let preview = "";
   try {
     preview = (await response.text()).slice(0, 4000);
@@ -998,6 +998,76 @@ export async function executeFeishu3Step(
     message: step3Resp.ok ? "Feishu 3-step submission accepted" : `step 3 rejected: HTTP ${step3Resp.status}`,
     steps,
   };
+}
+
+/**
+ * Retry helper for transient network failures + 5xx upstream errors.
+ *
+ * Intentionally narrow: we DO NOT retry on 4xx because those are user
+ * errors (bad session, malformed body, etc.). Retrying would just waste
+ * the user's resume upload attempts against a server that's politely
+ * saying "no, fix the request". Configurable via JOB_PRO_RETRY env
+ * (default 2 retries → 3 total attempts).
+ *
+ * Each attempt's outcome is appended to the optional `log` array so
+ * the dispatcher's MultiStepResult.steps preserves the trail.
+ */
+export interface RetryAttemptLog {
+  attempt: number;
+  ok: boolean;
+  status?: number;
+  message: string;
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  label: string,
+  log?: RetryAttemptLog[]
+): Promise<{ ok: true; response: Response } | { ok: false; message: string; status?: number }> {
+  const maxRetries = Math.max(0, Math.min(5, Number.parseInt(process.env.JOB_PRO_RETRY ?? "2", 10) || 2));
+  let lastErr = "";
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let response: Response | null = null;
+    try {
+      response = await fetch(url, init);
+    } catch (err) {
+      lastErr = `network error: ${err instanceof Error ? err.message : String(err)}`;
+      log?.push({ attempt: attempt + 1, ok: false, message: `${label}: ${lastErr}` });
+      // Network errors are retryable. Back off and try again.
+      if (attempt < maxRetries) {
+        await sleep(retryDelayMs(attempt));
+        continue;
+      }
+      return { ok: false, message: lastErr };
+    }
+    // 4xx → user error, don't retry.
+    if (response.status >= 400 && response.status < 500) {
+      log?.push({ attempt: attempt + 1, ok: false, status: response.status, message: `${label}: HTTP ${response.status} (no retry — 4xx)` });
+      return { ok: false, status: response.status, message: `HTTP ${response.status}: ${response.statusText}` };
+    }
+    // 5xx → server error, retry.
+    if (response.status >= 500 && attempt < maxRetries) {
+      lastErr = `HTTP ${response.status}: ${response.statusText}`;
+      log?.push({ attempt: attempt + 1, ok: false, status: response.status, message: `${label}: ${lastErr} (will retry)` });
+      await sleep(retryDelayMs(attempt));
+      continue;
+    }
+    log?.push({ attempt: attempt + 1, ok: response.ok, status: response.status, message: `${label}: HTTP ${response.status}` });
+    return { ok: true, response };
+  }
+  return { ok: false, message: lastErr || "exhausted retries" };
+}
+
+function retryDelayMs(attempt: number): number {
+  // Exponential backoff with jitter: 250ms / 500ms / 1s / 2s / 4s, ±25%.
+  const base = 250 * Math.pow(2, attempt);
+  const jitter = base * (Math.random() * 0.5 - 0.25);
+  return Math.round(base + jitter);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Build the headers bag used by every Feishu/Beisen/Moka step. */
