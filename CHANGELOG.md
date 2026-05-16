@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.57 — tencent: real apply endpoint via JS-bundle extraction → verified
+
+Grepped \`join.qq.com\`'s \`p_zh-cn_post_detail.build.js\` bundle for
+quoted \`'/api/v1/…'\` strings. Filtered out search / dictionary /
+banner / etc. — found 8 \`/api/v1/resume/*\` action endpoints. Probed
+the 5 most apply-related:
+
+* \`/api/v1/resume/openResume\` → 200 + {message:"未登录…",status:401}
+* \`/api/v1/resume/saveResumeInfo\` → 200 + {message:"未登录…",status:401}
+* \`/api/v1/resume/uploadFile\` → 200 + {message:"未登录…",status:401}
+* \`/api/v1/resume/bindResume\` → 200 + {message:"未登录…",status:401}
+* \`/api/v1/resume/subscriptIntentionEditable\` → 200 + "Method不支持"
+
+All 4 POST-acceptable endpoints are real, auth-gated. \`bindResume\`
+is the route that binds a saved resume to a specific post = the apply
+action.
+
+Updated submit_endpoint from the speculative
+\`/api/v1/position/applyResume\` (which 404'd) to
+\`/api/v1/resume/bindResume\`. \`endpoint_verified: true\`.
+
+**Endpoint verified count: 25 → 26 / 50.**
+
 ## 1.0.56 — submit-smoke covers all 8 newly-verified multipart-session
 
 Adds the 8 multipart-session adapters promoted in 1.0.50-1.0.55

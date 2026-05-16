@@ -918,10 +918,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://join.qq.com/api/v1/position/applyResume",
+      submitEndpoint: "https://join.qq.com/api/v1/resume/bindResume",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Tencent join.qq.com — POST /api/v1/position/applyResume with session cookie + CSRF. Endpoint inferred from python-reference/tencent.py + WorkBuddy skill bundle; not yet verified against live submit.",
+        "Tencent join.qq.com — POST /api/v1/resume/bindResume with session cookie + CSRF. Endpoint extracted from join.qq.com's p_zh-cn_post_detail.build.js bundle (sibling action endpoints /openResume, /saveResumeInfo, /uploadFile all probed → 200 + {message:\"未登录或登录已过期\",status:401}). bindResume is the route that binds a saved resume to a specific post = the apply action. Body shape still needs validation against a real candidate session.",
     }),
   };
 }

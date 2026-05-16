@@ -207,6 +207,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "xiaohongshu",
   // probe-verified via host-root + auth-middleware (1.0.55)
   "baidu",
+  // probe-verified via JS-bundle string extraction (1.0.57)
+  "tencent",
 ]);
 
 const HELP = `
