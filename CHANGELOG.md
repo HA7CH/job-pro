@@ -4,6 +4,21 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.41 — docs/auto-apply tally synced (15 verified)
+
+\`docs/auto-apply.md\` tally was last touched in 1.0.37 (3 verified).
+Synced to current state (1.0.40):
+
+* **15 ✅ verified** — 3 anon + 5 multipart-session + 7 moka-aes
+* **30 🔑 speculative** — schemas + executors wired, endpoint URLs
+  return 404/HTML on probe (need real-browser capture)
+* **5 ⛔ external** — Liepin / WeChat (structural)
+
+Probe attempts on Feishu apply path (\`/api/v1/resume/apply\`,
+\`/api/v1/application\`, \`/api/v2/…\`, \`/api/atsx/…\`, several others)
+all returned 404 — Feishu's apply path requires real-browser capture
+to locate. Same for Beisen × 4. Recorded in the doc.
+
 ## 1.0.40 — 3 more anon-probed: meituan / mihoyo / liauto → verified
 
 Continued endpoint recon across the remaining 18 multipart-session

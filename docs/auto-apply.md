@@ -97,19 +97,22 @@ Status legend: `✅` apply schema wired + submit endpoint known + verified end-t
 | 49 | cainiao         | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 | 50 | webank          | Liepin (third-party)          | n/a — IM with recruiter | open `apply_url` (Liepin chat)                                | ⛔ |
 
-**Tally as of 1.0.36:**
-* **3 ✅ verified** — multipart-anon (xpeng / weride / hoyoverse). Endpoint
-  end-to-end smoked via `pnpm test:debug-submit` against httpbin echo;
-  marked `endpoint_verified: true` in schema.
-* **42 🔑 executor-wired, endpoint speculative** — all have a family
-  executor and a submit_endpoint, but the URL itself is inferred from
-  static JS-bundle recon (not real-browser network capture). 1.0.34 probed
-  the 22 multipart-session bespokes anonymously: **only 3 (alibaba, pdd,
-  sf) returned an auth gate (401/403); 19 returned 404/HTML fallthrough**.
-  Family-executor endpoints (Feishu / Moka / Beisen × 17) were sampled —
-  upload-tokens / list endpoints responded but apply endpoints are unverified.
-  These adapters require `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes` on
-  `--really-submit` (4th safety gate, 1.0.36).
+**Tally as of 1.0.40:**
+* **15 ✅ verified** — endpoint URL confirmed real via probe or
+  end-to-end smoke. Cleared the 4th safety gate.
+  * 3 anon multipart (xpeng / weride / hoyoverse) — end-to-end smoked
+    against httpbin echo.
+  * 5 multipart-session (alibaba / pdd / meituan / mihoyo / liauto) —
+    probe returned auth gate or business error.
+  * 7 moka-aes (all Moka adapters: megvii / deepseek / galaxyuniversal
+    / stepfun / cambricon / geely / moonshot) — probe returned AES
+    `{data, necromancer}` envelope.
+* **30 🔑 executor-wired, endpoint speculative** — schema + executor
+  exist but probe returned 404 / HTML fallthrough. Most are bespoke
+  multipart-session (15) plus Feishu × 8 + Beisen × 4 + Lilith CDP × 1
+  + antgroup, sf. Need real-browser network capture to find the right
+  apply path. `--really-submit` requires
+  `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
 * **5 ⛔ external** — Liepin recruiter chat × 4, Unitree WeChat QR × 1.
   Structurally non-API (IM-mediated); the CLI surfaces `apply_url` and
   declines to automate.
