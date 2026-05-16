@@ -624,10 +624,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://talent.baidu.com/external/baidu/applyJob.json",
+      submitEndpoint: "https://talent.baidu.com/applyJob.json",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Baidu — POST /external/baidu/applyJob.json with session cookie. Endpoint inferred; needs validation.",
+        "Baidu — POST /applyJob.json (host root) with session cookie. Endpoint anon-probed → HTTP 200 + {status:\"need-login\",message:\"need login!\"} (real auth-middleware gateway; the original /external/baidu/ prefix returns 404 HTML but the gateway lives at host root). Body shape still needs validation.",
     }),
   };
 }

@@ -205,6 +205,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "bilibili",
   // probe-verified via host-root path (1.0.54)
   "xiaohongshu",
+  // probe-verified via host-root + auth-middleware (1.0.55)
+  "baidu",
 ]);
 
 const HELP = `

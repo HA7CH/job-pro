@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.55 — baidu re-routed to /applyJob.json (host root) → verified
+
+Same pattern as 1.0.54 (xiaohongshu): drop the over-specific path
+prefix and probe host root. baidu's auth-middleware lives at
+\`talent.baidu.com/<path>.json\`, not under \`/external/baidu/\`.
+
+Five candidate paths all returned **HTTP 200 +
+\`{status:"need-login",message:"need login!"}\`**:
+
+* /applyJob.json (picked — most idiomatic)
+* /baidu/applyJob.json
+* /postApply.json
+* /job/apply.json
+* /recruit/apply
+
+Updated submit_endpoint accordingly. \`endpoint_verified: true\`.
+
+**Endpoint verified count: 24 → 25 / 50 — exactly half of 50.**
+
+Also probed weibo / trip / kuaishou / huawei with the same root-path
+strategy — all returned 404 or HTML fallthrough. Need real-browser
+capture.
+
 ## 1.0.54 — xiaohongshu re-routed to /recruit/apply (no /api/) → verified
 
 Last broad probe round across xiaohongshu / kuaishou / baidu / weibo /
