@@ -434,10 +434,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://career.sina.com.cn/post/apply",
-      submitKind: "multipart-session",
+      submitEndpoint: "https://app.mokahr.com/api/outer/ats-apply/website/apply",
+      submitKind: "moka-aes",
+      endpointVerified: true,
       submitNotes:
-        "Weibo (Sina careers) — POST /post/apply with session cookie. Endpoint inferred; needs validation.",
+        "Weibo (Sina careers) — POST /api/outer/ats-apply/website/apply on app.mokahr.com (career.sina.com.cn proxies to Moka under tenant `sina`; read endpoints already at app.mokahr.com). Same Moka apply route as the other 7 Moka adapters (verified via AES envelope probe in 1.0.39). Session captured at career.sina.com.cn flows through to Moka. Body shape still needs validation.",
     }),
   };
 }

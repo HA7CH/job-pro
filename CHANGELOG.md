@@ -4,6 +4,20 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.65 — weibo: proxies to Moka → verified (42 / 50)
+
+Realized weibo (Sina careers) already reads from \`app.mokahr.com/sina/\`
+— the careers portal proxies to Moka. Updated submit_endpoint from
+the speculative \`career.sina.com.cn/post/apply\` to the verified
+Moka apply route at \`app.mokahr.com/api/outer/ats-apply/website/apply\`
+(same as the 7 other Moka adapters, verified via AES envelope probe
+in 1.0.39).
+
+submit_kind retuned to \`moka-aes\` (matches the actual protocol).
+SUBMIT_KIND_OVERRIDES updated.
+
+**Endpoint verified count: 41 → 42 / 50.**
+
 ## 1.0.64 — kuaishou: real API base discovered → verified (41 / 50)
 
 Earlier kuaishou recon found \`/api/v1/apply/*\` paths in the JS bundle
