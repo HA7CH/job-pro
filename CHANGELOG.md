@@ -4,6 +4,18 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.22 — closeout / both smoke tests green
+
+Cumulative end-of-loop verification:
+
+* \`pnpm test\` — Phase 1 read paths: **50 healthy, 0 broken / 50
+  total (3.6s)**.
+* \`pnpm test:apply\` — Phase 2 schema fetch: **50 schema-ok, 0
+  broken / 50 total (4.5s)**.
+
+README now links \`./CHANGELOG.md\` so the release narrative is one
+click away from the npm page.
+
 ## 1.0.21 — \`--really-submit\` session-age gate
 
 A captured \`~/.jobpro/<co>.session.json\` older than 30 days now blocks

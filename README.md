@@ -14,7 +14,8 @@ straight to each company's public API (e.g. `join.qq.com` for Tencent) and
 prints JSON. Pipe it into `jq`, Claude Code, anything.
 
 Run `job-pro help` for the full company list, or see the roadmap matrix at
-[job.ha7ch.com](https://job.ha7ch.com).
+[job.ha7ch.com](https://job.ha7ch.com). Per-release notes:
+[CHANGELOG.md](./CHANGELOG.md).
 
 ## Demo: hand it to Claude Code
 
