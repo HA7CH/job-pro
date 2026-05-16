@@ -4,6 +4,21 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.10 — \`apply --remember\` persists interactive answers
+
+`apply --interactive --remember` writes the collected answers back into
+`~/.jobpro/profile.json` under `custom.<question_name>`. Question names
+(e.g. `question_36528767002`) are stable per-board in Greenhouse, so
+the next job at the same company auto-resolves shared questions
+without re-prompting.
+
+Opt-in by design — without `--remember`, interactive answers stay
+in-memory for that one apply, so one-off job-specific questions
+don't pollute the profile.
+
+New `saveProfile()` helper in `apply.ts` writes the full profile back
+atomically; reused later for any other "persist this back" workflow.
+
 ## 1.0.9 — README + extension manifest cleanup
 
 * README quick-start now shows `profile init --interactive` as the

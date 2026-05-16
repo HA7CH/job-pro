@@ -55,6 +55,7 @@ import {
   loadProfile,
   loadSession,
   profileTemplate,
+  saveProfile,
   stageApplication,
   submitApplication,
   executeFeishu3Step,
@@ -210,6 +211,7 @@ VERBS (same surface for every company)
                                     --print-form               emit a fillable JSON template
                                     --form-file <path>         merge per-job answers
                                     --interactive              prompt for unanswered fields
+                                    --remember                 + persist answers to profile.custom
                                     --batch <file|->           apply to many post_ids (one/line)
                                     --debug-submit-to <url>    verify wire format
                                     --really-submit            actually fire (env-gated)
@@ -483,6 +485,7 @@ async function runCompany(
     const reallySubmit = args.includes("--really-submit");
     const printForm = args.includes("--print-form");
     const interactive = args.includes("--interactive");
+    const remember = args.includes("--remember");
     const { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
     const { args: aForm, value: formFilePath } = popFlagValue(aDebug, "--form-file");
     const { args: aBatch, value: batchPath } = popFlagValue(aForm, "--batch");
@@ -570,7 +573,7 @@ async function runCompany(
     void aBatch;
 
     const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--print-form | --form-file <path> | --interactive | --batch <file>] [--debug-submit-to <url> | --really-submit]`);
+    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--print-form | --form-file <path> | --interactive [--remember] | --batch <file>] [--debug-submit-to <url> | --really-submit]`);
 
     const fetchSchema = adapter.fetchApplicationSchema;
     if (typeof fetchSchema !== "function") {
@@ -657,7 +660,16 @@ async function runCompany(
         ...effectiveProfile,
         custom: { ...(effectiveProfile.custom ?? {}), ...overrides },
       };
-      console.log(`\nCollected ${Object.keys(overrides).length} answer(s). Staging now…\n`);
+      const collectedCount = Object.keys(overrides).length;
+      console.log(`\nCollected ${collectedCount} answer(s). Staging now…\n`);
+      if (remember && collectedCount > 0) {
+        const saved = saveProfile(effectiveProfile);
+        if (saved.ok) {
+          console.log(`Saved ${collectedCount} answer(s) to ${saved.path} (custom.*).\n`);
+        } else {
+          console.error(`--remember failed: ${saved.message}`);
+        }
+      }
     }
 
     const staged = stageApplication(sr.schema, effectiveProfile);

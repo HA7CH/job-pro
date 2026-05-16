@@ -14,7 +14,7 @@
 // passed through to whatever per-company custom question matches their
 // `name` (e.g. `linkedin_url`, `nationality`).
 
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { withPage, injectCookies } from "./cdp.js";
@@ -125,6 +125,16 @@ export function loadProfile(): { ok: true; profile: ResumeProfile } | { ok: fals
 
 export function profileTemplate(): { path: string; template: ResumeProfile } {
   return { path: PROFILE_PATH, template: TEMPLATE };
+}
+
+/** Persist a profile back to disk. Used by `apply --remember`. */
+export function saveProfile(profile: ResumeProfile): { ok: true; path: string } | { ok: false; message: string } {
+  try {
+    writeFileSync(PROFILE_PATH, JSON.stringify(profile, null, 2) + "\n", "utf8");
+    return { ok: true, path: PROFILE_PATH };
+  } catch (err) {
+    return { ok: false, message: `could not write ${PROFILE_PATH}: ${err instanceof Error ? err.message : err}` };
+  }
 }
 
 // ---------- shared schema types ----------
