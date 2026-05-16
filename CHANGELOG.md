@@ -4,6 +4,17 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.33 — apply-smoke checks submit_endpoint URL well-formedness
+
+Adds a per-adapter check to \`pnpm test:apply\`: every non-external
+schema must expose a \`submit_endpoint\` that parses as a valid
+HTTPS URL. Catches adapter-level typos that would otherwise only
+surface when a real user fires \`--really-submit\`.
+
+50 PASS / 0 broken — all 45 non-external adapters have well-formed
+endpoint URLs. Adds defense-in-depth between schema-fetch and
+real submission.
+
 ## 1.0.32 — \`find --apply-ready\` lists hidden buckets
 
 Previously \`--apply-ready\` ended with \`(N company-bucket(s) hidden)\`

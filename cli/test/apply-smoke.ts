@@ -177,6 +177,24 @@ async function probe(name: string, adapter: Adapter): Promise<Result> {
   if (!sr.schema.questions || !Array.isArray(sr.schema.questions) || sr.schema.questions.length === 0) {
     return { name, tag: "FAIL", submit_kind: kind, reason: "schema.questions empty" };
   }
+  // submit_endpoint URL well-formedness: required for every kind except
+  // "external" (Liepin / WeChat — no API to point at). Catches adapter-
+  // level typos in the submit URL — would otherwise surface only when a
+  // real user fires --really-submit.
+  if (kind !== "external") {
+    const endpoint = sr.schema.submit_endpoint ?? "";
+    if (!endpoint) {
+      return { name, tag: "FAIL", submit_kind: kind, reason: "submit_endpoint missing on non-external schema" };
+    }
+    try {
+      const u = new URL(endpoint);
+      if (u.protocol !== "https:" && u.protocol !== "http:") {
+        return { name, tag: "FAIL", submit_kind: kind, reason: `submit_endpoint has unexpected protocol: ${u.protocol}` };
+      }
+    } catch {
+      return { name, tag: "FAIL", submit_kind: kind, reason: `submit_endpoint not a valid URL: ${endpoint}` };
+    }
+  }
   return {
     name,
     tag: "PASS",
