@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.28 — 4xx error-message hints
+
+\`fetchWithRetry\` returned bare \`HTTP 401: \` on auth failures — the
+user got no signal about what to do. Now appends an actionable hint:
+
+* **401 / 403** → "session likely stale — recapture via \`job-pro
+  extension\`, log into the careers site, click Export"
+* **404** → "endpoint not found — submit_endpoint may have drifted
+  upstream; verify via \`apply --schema\` + \`--debug-submit-to\`"
+* **400 / 422** → "request rejected — likely a missing/malformed
+  answer; rerun \`apply --interactive\` to refill required fields"
+* **429** → "rate limited — retry after a few minutes"
+
+The session-age gate (1.0.21) catches >30d stale sessions, but
+sometimes they revoke earlier (logout from another tab, password
+change, server-side invalidation) — this hint catches those.
+
+Wired into apply-flow's HTTP path, so every executor (multipart-anon,
+multipart-session, feishu-3-step, moka-aes, beisen-wecruit,
+beisen-italent) inherits the hints automatically.
+
+unit-smoke grew to **32 assertions** (added 6 hintForStatus cases).
+
 ## 1.0.27 — README family-count fix
 
 The "Coverage by source family" table in the README had drifted: the

@@ -1047,10 +1047,13 @@ async function fetchWithRetry(
       }
       return { ok: false, message: lastErr };
     }
-    // 4xx → user error, don't retry.
+    // 4xx → user error, don't retry. Enrich with a hint pointing at the most
+    // likely cause — bare "HTTP 401: " gives the user nothing to act on.
     if (response.status >= 400 && response.status < 500) {
+      const hint = hintForStatus(response.status);
+      const message = `HTTP ${response.status}: ${response.statusText}${hint ? ` — ${hint}` : ""}`;
       log?.push({ attempt: attempt + 1, ok: false, status: response.status, message: `${label}: HTTP ${response.status} (no retry — 4xx)` });
-      return { ok: false, status: response.status, message: `HTTP ${response.status}: ${response.statusText}` };
+      return { ok: false, status: response.status, message };
     }
     // 5xx → server error, retry.
     if (response.status >= 500 && attempt < maxRetries) {
@@ -1063,6 +1066,27 @@ async function fetchWithRetry(
     return { ok: true, response };
   }
   return { ok: false, message: lastErr || "exhausted retries" };
+}
+
+function hintForStatus(status: number): string {
+  // Stale-session hints are by far the most common cause of 401/403 here —
+  // the session.json cookies have expired since capture. The
+  // really-submit-blocked / session-age gate catches >30d staleness, but
+  // sessions sometimes expire earlier (logout from another tab, password
+  // change, server-side revoke).
+  if (status === 401 || status === 403) {
+    return "session likely stale — recapture via `job-pro extension`, log into the careers site, click Export";
+  }
+  if (status === 404) {
+    return "endpoint not found — submit_endpoint may have drifted upstream; verify via `apply --schema` + `--debug-submit-to`";
+  }
+  if (status === 422 || status === 400) {
+    return "request rejected — likely a missing/malformed answer; rerun `apply --interactive` to refill required fields";
+  }
+  if (status === 429) {
+    return "rate limited — retry after a few minutes";
+  }
+  return "";
 }
 
 function retryDelayMs(attempt: number): number {

@@ -142,6 +142,21 @@ async function main(): Promise<void> {
     record("phone regex accepts (555) 123-4567", validPhone("(555) 123-4567") === true);
     record("phone regex rejects 5 digits", validPhone("12345") === false);
     record("phone regex rejects empty", validPhone("") === false);
+
+    // 8. HTTP-status hint table (mirrors `hintForStatus` in apply.ts).
+    function hintForStatus(status: number): string {
+      if (status === 401 || status === 403) return "session likely stale — recapture via `job-pro extension`, log into the careers site, click Export";
+      if (status === 404) return "endpoint not found — submit_endpoint may have drifted upstream; verify via `apply --schema` + `--debug-submit-to`";
+      if (status === 422 || status === 400) return "request rejected — likely a missing/malformed answer; rerun `apply --interactive` to refill required fields";
+      if (status === 429) return "rate limited — retry after a few minutes";
+      return "";
+    }
+    record("hintForStatus(401) mentions stale session", hintForStatus(401).includes("stale"));
+    record("hintForStatus(403) mentions stale session", hintForStatus(403).includes("stale"));
+    record("hintForStatus(404) mentions submit_endpoint", hintForStatus(404).includes("submit_endpoint"));
+    record("hintForStatus(422) mentions --interactive", hintForStatus(422).includes("--interactive"));
+    record("hintForStatus(429) mentions rate limit", hintForStatus(429).includes("rate limited"));
+    record("hintForStatus(500) returns empty (5xx not a hint case)", hintForStatus(500) === "");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
