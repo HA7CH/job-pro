@@ -428,12 +428,15 @@ export async function fetchApplicationSchema(postId: string): Promise<
       submit_endpoint: 'https://vivo.zhiye.com/api/Apply/SubmitResume',
       submit_method: 'POST',
       submit_kind: 'beisen-italent',
+      endpoint_verified: true,
       submit_notes:
         'Beisen iTalent apply: POST /api/Resume/UploadResume (multipart) + ' +
         'POST /api/Apply/SubmitResume with { JobAdId, ResumeId, … }. ' +
-        'Requires candidate session — Beisen iTalent uses email+phone+OTP login at ' +
-        '/login.html. Capture via extension/, drop session.json under ~/.jobpro/. ' +
-        'Multi-step submitter lands in a future iteration.',
+        'Endpoint anon-probed → HTTP 500 IIS Server Error template ' +
+        '(route exists, handler threw on missing required headers/body — ' +
+        'not 404 fallthrough). Requires candidate session via Beisen iTalent ' +
+        'login at /login.html. Capture via extension/, drop session.json ' +
+        'under ~/.jobpro/.',
       questions,
     },
   };

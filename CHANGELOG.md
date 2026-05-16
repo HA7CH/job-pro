@@ -4,6 +4,31 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.46 — iflytek / vivo (Beisen iTalent) → endpoint_verified
+
+OPTIONS-preflight probe revealed mixed signals — \`xiaohongshu\`,
+\`jd\`, \`huawei\` all OPTIONS-200 but their POST still 404s (the
+preflight 200 is a CORS no-op, not route confirmation). No promotion
+from that round.
+
+But the two Beisen iTalent adapters (\`iflytek\` and \`vivo\`) both
+return HTTP 500 + the same IIS \`Server Error\` template on POST.
+Same template across both adapters confirms a shared Beisen backend
+that received the request and threw on missing required headers/body —
+not the SPA's 404 fallthrough. Marked \`endpoint_verified: true\`.
+
+**Endpoint verified count: 15 → 17 / 50.** Adapters now clearing the
+4th safety gate without env bypass:
+
+* multipart-anon × 3 (xpeng / weride / hoyoverse)
+* multipart-session × 5 (alibaba / pdd / meituan / mihoyo / liauto)
+* moka-aes × 7 (full Moka family)
+* beisen-italent × 2 (iflytek / vivo) ← new
+
+Body shape still needs validation against a real candidate session,
+but the failure mode goes from "blind 404" to "real backend response"
+which is debuggable.
+
 ## 1.0.45 — README accurately describes the 4-layer safety gate
 
 The README's Phase 2 section had a stale "three layers" description
