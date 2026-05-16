@@ -183,6 +183,20 @@ function submitKindFor(adapterKey: string, family: CompanyFamily): string {
   return SUBMIT_KIND_OVERRIDES[adapterKey] ?? SUBMIT_KIND_BY_FAMILY[family];
 }
 
+// Mirrors `endpoint_verified: true` in each adapter's schema. Kept here as
+// the canonical set so `list` can surface it without firing 50 schema
+// fetches. Update whenever an adapter is promoted (see CHANGELOG 1.0.34+).
+const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
+  // multipart-anon (end-to-end smoked via httpbin)
+  "xpeng", "weride", "hoyoverse",
+  // multipart-session (anon-probe-verified)
+  "alibaba", "pdd", "meituan", "mihoyo", "liauto",
+  // moka-aes (anon-probe-verified — AES envelope)
+  "moonshot", "megvii", "deepseek", "galaxyuniversal", "stepfun", "cambricon", "geely",
+  // beisen-italent (anon-probe-verified — IIS 500 template)
+  "iflytek", "vivo",
+]);
+
 const HELP = `
 job-pro — query Chinese big-tech campus recruiting from your terminal
             (job.ha7ch.com)
@@ -1321,7 +1335,11 @@ function printCompanyList(compact: boolean): void {
     // submit_kind } — submit_kind derived from the family map + overrides.
     console.log(
       JSON.stringify(
-        COMPANIES.map((c) => ({ ...c, submit_kind: submitKindFor(c.key, c.family) }))
+        COMPANIES.map((c) => ({
+          ...c,
+          submit_kind: submitKindFor(c.key, c.family),
+          endpoint_verified: ENDPOINT_VERIFIED.has(c.key),
+        }))
       )
     );
     return;
@@ -1354,7 +1372,8 @@ function printCompanyList(compact: boolean): void {
     for (const c of entries) {
       const kind = submitKindFor(c.key, c.family);
       const kindCol = kind === kindForFamily ? "".padEnd(kindWidth) : kind.padEnd(kindWidth);
-      console.log(`  ${c.key.padEnd(keyWidth)}  ${kindCol}  ${c.source.padEnd(srcWidth)}  ${c.label}`);
+      const verifiedTag = ENDPOINT_VERIFIED.has(c.key) ? " ✓" : "  ";
+      console.log(`  ${c.key.padEnd(keyWidth)} ${verifiedTag} ${kindCol}  ${c.source.padEnd(srcWidth)}  ${c.label}`);
     }
   }
   console.log(`\nTotal: ${COMPANIES.length}. Run \`job-pro <key> search "…"\` against any of them.`);

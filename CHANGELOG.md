@@ -4,6 +4,25 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.48 — \`list\` surfaces endpoint_verified ✓
+
+\`job-pro list\` now shows ✓ next to every adapter with
+\`endpoint_verified: true\` — 17 of 50 today. \`list --compact\` JSON
+gets an \`endpoint_verified: boolean\` field per row so scripts /
+LLMs can filter directly.
+
+\`\`\`
+Bespoke (23) — submit_kind=multipart-session
+  tencent                               join.qq.com                ...
+  alibaba          ✓                    campus-talent.alibaba.com  ...
+  meituan          ✓                    zhaopin.meituan.com        ...
+  ...
+\`\`\`
+
+New \`ENDPOINT_VERIFIED\` set at the top of \`index.ts\` is the single
+source of truth (mirrors each adapter's \`endpoint_verified: true\`
+declaration). Update when promoting/demoting an adapter.
+
 ## 1.0.47 — \`recon\` classifier handles 5xx correctly
 
 1.0.46 marked iflytek/vivo verified-real (HTTP 500 IIS Server Error
