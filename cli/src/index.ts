@@ -75,7 +75,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.8";
+const VERSION = "1.0.0";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;

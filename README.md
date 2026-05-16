@@ -64,9 +64,59 @@ job-pro tencent resume-check resume.md
 job-pro tencent memory set "stack=Go,Python" "target_city=深圳"
 job-pro tencent memory event applied "腾讯后台 1200791473415778304"
 job-pro tencent memory list
+
+# list / browse adapters
+job-pro list                 # human-readable, grouped by ATS family
+job-pro list --compact       # JSON for piping
 ```
 
 Add `--compact` to any command for a single-line JSON output (pipe-friendly).
+
+## Phase 2 — auto-apply (1.0+)
+
+Submit applications from the CLI. 50 / 50 adapters expose an
+application schema; 45 / 50 have a working submitter wired:
+
+```bash
+# 1. Set up your profile (one-time)
+job-pro profile init                 # write ~/.jobpro/profile.json template
+$EDITOR ~/.jobpro/profile.json       # fill first_name / last_name / email / phone / resume_path
+
+# 2. Dry-run an application (no network)
+job-pro xpeng apply 8548990002       # stage + preview the POST
+
+# 3. Verify the wire format against an echo server (no upstream impact)
+job-pro xpeng apply 8548990002 --debug-submit-to https://httpbin.org/post
+
+# 4. Actually submit
+JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
+  job-pro xpeng apply 8548990002 --really-submit
+```
+
+Greenhouse / Lever boards (xpeng / hoyoverse / weride) submit
+anonymously. Every other family needs a captured session — install
+the `extension/` browser extension, log into the careers site once,
+click Export, then drop `~/Downloads/jobpro/<adapter>.session.json`
+under `~/.jobpro/`.
+
+```bash
+# After capturing nio's session via the extension:
+JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
+  job-pro nio apply 7639693860494543167 --really-submit
+```
+
+The CLI gates `--really-submit` behind three layers:
+1. `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` env-var attestation.
+2. `staged.ready` — every required field is filled.
+3. For non-anon families, `~/.jobpro/<co>.session.json` must exist.
+
+Five adapters (hikvision / cicc / cainiao / webank / unitree) are
+intentionally `external` — recruiting is mediated through Liepin
+recruiter chat or WeChat mini-programs; no API submission exists.
+For those, `apply` surfaces the `apply_url` to open in browser.
+
+See [docs/auto-apply.md](./docs/auto-apply.md) for the full per-adapter
+submission flow matrix.
 
 ## Roadmap
 
