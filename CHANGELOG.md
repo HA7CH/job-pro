@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.45 — README accurately describes the 4-layer safety gate
+
+The README's Phase 2 section had a stale "three layers" description
+from 0.9.x — missing the session-age gate (1.0.21) and the endpoint-
+verified gate (1.0.36). Synced to current 4-layer stack:
+
+1. \`JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes\`
+2. \`staged.ready\`
+3. \`endpoint_verified\` || \`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\`
+4. session.json present + <30d || \`--allow-stale-session\`
+
+Phase 2 lead paragraph updated to call out the 15-of-50 verified count
+explicitly (3 anon end-to-end smoked + 5 multipart-session probe-
+verified + 7 Moka probe-verified) so users understand which adapters
+fire today vs. which still need recon.
+
 ## 1.0.44 — submit-smoke covers all 5 multipart-session probe-verified
 
 Adds the 5 multipart-session adapters newly promoted to

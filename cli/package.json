@@ -1,6 +1,6 @@
 {
   "name": "job-pro",
-  "version": "1.0.44",
+  "version": "1.0.45",
   "description": "Query Chinese big-tech campus recruiting from your terminal. 50 companies, all 50 live. 46 via each company's own API; the 4 with no public canonical feed (Hikvision, CICC, Cainiao, WeBank) surfaced via Liepin as a clearly-labeled third-party fallback. No signup, no token, no server.",
   "homepage": "https://job.ha7ch.com",
   "repository": "https://github.com/HA7CH/job-pro",
