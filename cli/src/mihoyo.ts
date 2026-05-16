@@ -254,7 +254,10 @@ export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
   if (!id) return { ok: false, source: SOURCE, message: "post_id is required" };
 
-  const response = await postJson<RawJobDetail>("/v1/job/info", { id });
+  // /v1/job/info requires channelDetailIds (the channel mhy splits social /
+  // campus / intern positions on); without it the API returns "职位渠道不可
+  // 以为空" even for a valid post id.
+  const response = await postJson<RawJobDetail>("/v1/job/info", { id, channelDetailIds: CHANNEL_DETAIL_IDS });
   if (!response.ok || !response.data) {
     return { ok: false, source: SOURCE, message: response.message, post_id: id };
   }

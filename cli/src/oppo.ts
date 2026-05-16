@@ -235,8 +235,12 @@ interface RawDetail extends RawPositionEntry {
 export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
   if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required", post_id: id };
+  // The endpoint expects `id`, not `idRecruitPosition` — passing
+  // `idRecruitPosition` returns the puzzling "id不能为空" error even when the
+  // value is present. The response body still keys the id back as
+  // `idRecruitPosition`, which is what tripped this in the first place.
   const r = await call<RawDetail>("GET", "/openapi/position/detail", {
-    query: { idRecruitPosition: id },
+    query: { id },
   });
   if (!r.ok || !r.data) {
     return { ok: false as const, source: SOURCE, message: r.message || "no detail returned", post_id: id };

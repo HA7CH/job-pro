@@ -221,9 +221,10 @@ export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
   if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required", post_id: id };
 
-  // Some SF builds expose details via /api/position/findById/<id>, others via the
-  // SPA's "findById" route — both share the same backend. We always hit /api/...
-  const url = `${API_ROOT}/api/position/findById/${encodeURIComponent(id)}`;
+  // /api/position/findById/ is the auth-gated internal route; /api/web/position/
+  // is the public anon route the SPA actually uses (sibling of /api/web/position/
+  // query for search). Without the /web/ prefix this 401s.
+  const url = `${API_ROOT}/api/web/position/findById/${encodeURIComponent(id)}`;
   let response: Response;
   try {
     response = await fetch(url, { method: "GET", headers: DEFAULT_HEADERS });

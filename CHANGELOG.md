@@ -4,6 +4,31 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.19 — detail-endpoint bugfixes: mihoyo / oppo / sf
+
+Three latent bugs in \`fetchPositionDetail\` surfaced by reading the
+apply-smoke WARN list. Each was producing "ok:false" on real post IDs
+that the read-side search returned:
+
+* **mihoyo** — \`/v1/job/info\` requires \`channelDetailIds\` in the
+  body; without it the upstream rejects with "职位渠道不可以为空". Now
+  passes the same default (\`[1]\`) the search uses.
+* **oppo** — \`/openapi/position/detail\` actually expects the query
+  param \`id=\`, not \`idRecruitPosition=\`. The latter triggered
+  "id不能为空" despite a non-empty value (the response body keys it
+  back as \`idRecruitPosition\`, which is what misled the original
+  recon).
+* **sf** — \`/api/position/findById/<id>\` is auth-gated; the
+  public-anon path the SPA uses is \`/api/web/position/findById/<id>\`,
+  sibling of \`/api/web/position/query\` which search already hit.
+
+apply-smoke now reports **48 PASS / 2 ok:false / 0 broken / 50** (was
+46 PASS). The two remaining are upstream / architectural, not bugs:
+
+* baidu — picked-up real post is in "发布中" upstream state.
+* antgroup — has no direct detail endpoint, so detail brute-scans the
+  search; the test id is page-deep and the 20-page budget exhausts.
+
 ## 1.0.18 — docs catch up with 1.0.10 / 1.0.16 / 1.0.17
 
 The README and \`examples/walkthrough.md\` had drifted: no mention of
