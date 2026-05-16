@@ -162,6 +162,27 @@ const COMPANIES: CompanyDirEntry[] = [
   { key: "webank",          family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "WeBank / 微众银行" },
 ];
 
+// Family → default submit_kind. Mirrors what fetchApplicationSchema returns
+// for each adapter today; kept here as the static source of truth used by
+// `list` output and `find`'s apply-status derivation.
+const SUBMIT_KIND_BY_FAMILY: Record<CompanyFamily, string> = {
+  "Bespoke":                       "multipart-session",
+  "Feishu":                        "feishu-3-step",
+  "Moka":                          "moka-aes",
+  "Beisen Wecruit":                "beisen-wecruit",
+  "Beisen iTalent":                "beisen-italent",
+  "Greenhouse / Lever (intl arm)": "multipart-anon",
+  "Liepin (third-party)":          "external",
+};
+// Adapter-level deviations from their family default.
+const SUBMIT_KIND_OVERRIDES: Record<string, string> = {
+  unitree: "external",       // Bespoke family, but WeChat-QR — no API submit.
+  lilith:  "cdp-real-browser", // Feishu tenant, but needs ByteDance _signature bypass.
+};
+function submitKindFor(adapterKey: string, family: CompanyFamily): string {
+  return SUBMIT_KIND_OVERRIDES[adapterKey] ?? SUBMIT_KIND_BY_FAMILY[family];
+}
+
 const HELP = `
 job-pro — query Chinese big-tech campus recruiting from your terminal
             (job.ha7ch.com)
@@ -1248,8 +1269,13 @@ function printCompanyList(compact: boolean): void {
   }
 
   if (compact) {
-    // Machine-readable: emit a JSON array of { key, family, source, label }.
-    console.log(JSON.stringify(COMPANIES));
+    // Machine-readable: emit a JSON array of { key, family, source, label,
+    // submit_kind } — submit_kind derived from the family map + overrides.
+    console.log(
+      JSON.stringify(
+        COMPANIES.map((c) => ({ ...c, submit_kind: submitKindFor(c.key, c.family) }))
+      )
+    );
     return;
   }
 
@@ -1270,13 +1296,17 @@ function printCompanyList(compact: boolean): void {
   ];
   const keyWidth = Math.max(...COMPANIES.map((c) => c.key.length));
   const srcWidth = Math.max(...COMPANIES.map((c) => c.source.length));
+  const kindWidth = Math.max(...COMPANIES.map((c) => submitKindFor(c.key, c.family).length));
   console.log(`job-pro — 50 companies, all live. ATS-family breakdown:`);
   for (const family of order) {
     const entries = byFamily.get(family);
     if (!entries) continue;
-    console.log(`\n${family} (${entries.length})`);
+    const kindForFamily = SUBMIT_KIND_BY_FAMILY[family];
+    console.log(`\n${family} (${entries.length}) — submit_kind=${kindForFamily}`);
     for (const c of entries) {
-      console.log(`  ${c.key.padEnd(keyWidth)}  ${c.source.padEnd(srcWidth)}  ${c.label}`);
+      const kind = submitKindFor(c.key, c.family);
+      const kindCol = kind === kindForFamily ? "".padEnd(kindWidth) : kind.padEnd(kindWidth);
+      console.log(`  ${c.key.padEnd(keyWidth)}  ${kindCol}  ${c.source.padEnd(srcWidth)}  ${c.label}`);
     }
   }
   console.log(`\nTotal: ${COMPANIES.length}. Run \`job-pro <key> search "…"\` against any of them.`);
@@ -1353,13 +1383,16 @@ Or copy the path to clipboard (macOS):
     if (!keyword || keyword.startsWith("--")) {
       die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--apply-ready] [--compact | --text]`);
     }
-    // Static apply-readiness map. Source of truth for what kind of submission
-    // each adapter supports — kept in sync with apply-smoke's submit_kind tally.
-    const ANON_ADAPTERS = new Set(["xpeng", "weride", "hoyoverse"]);
-    const EXTERNAL_ADAPTERS = new Set(["hikvision", "cicc", "cainiao", "webank", "unitree"]);
+    // Apply-readiness derives from the canonical SUBMIT_KIND_BY_FAMILY map
+    // (single source of truth shared with `list`). multipart-anon is fire-
+    // and-go; external is structurally blocked; everything else needs a
+    // captured session.
     const applyStatusFor = (adapterKey: string): "anon" | "session" | "missing-session" | "external" => {
-      if (EXTERNAL_ADAPTERS.has(adapterKey)) return "external";
-      if (ANON_ADAPTERS.has(adapterKey)) return "anon";
+      const dirEntry = COMPANIES.find((c) => c.key === adapterKey);
+      if (!dirEntry) return "missing-session";
+      const kind = submitKindFor(adapterKey, dirEntry.family);
+      if (kind === "external") return "external";
+      if (kind === "multipart-anon") return "anon";
       return loadSession(adapterKey) ? "session" : "missing-session";
     };
     const { args: aLimit, value: limitStr } = popFlagValue(args, "--limit");

@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.25 — single source of truth for submit_kind per adapter
+
+Adds \`SUBMIT_KIND_BY_FAMILY\` + \`SUBMIT_KIND_OVERRIDES\` (just unitree
+and lilith) at the top of \`index.ts\`. Used by:
+
+* \`find\`'s apply-status derivation (replaces the inline
+  \`ANON_ADAPTERS\` / \`EXTERNAL_ADAPTERS\` sets — they were already
+  manually kept in sync with the family map; now there's only one).
+* \`list\` output — every family header now shows its
+  \`submit_kind=…\`, and adapter rows with a non-default kind
+  (unitree → external, lilith → cdp-real-browser) print the kind
+  inline. \`--compact\` JSON also gets a \`submit_kind\` field per row.
+
+Useful "what can I submit to right now" view without firing
+\`apply --schema\` 50 times.
+
 ## 1.0.24 — submit smoke expands to all 5 executor families
 
 \`test:debug-submit\` now covers one representative per executor type:
