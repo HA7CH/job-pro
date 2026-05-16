@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.47 — \`recon\` classifier handles 5xx correctly
+
+1.0.46 marked iflytek/vivo verified-real (HTTP 500 IIS Server Error
+template = real route), but \`job-pro recon\` still classified them
+as \`html-fallthrough\` because of the body-is-HTML check. Fixed:
+
+\`\`\`ts
+// 5xx + any body = handler threw on us, route exists. IIS / Spring
+// generic 500 templates are HTML but still real-route signals.
+if (status >= 500) return "verified-real";
+\`\`\`
+
+Now iflytek and vivo show as ✓ verified-real (with 🟢 schema tag)
+instead of ✗ html-fallthrough. Recon and \`endpoint_verified\` schema
+flags are now consistent for all 17 promoted adapters.
+
 ## 1.0.46 — iflytek / vivo (Beisen iTalent) → endpoint_verified
 
 OPTIONS-preflight probe revealed mixed signals — \`xiaohongshu\`,

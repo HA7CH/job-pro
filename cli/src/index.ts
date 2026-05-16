@@ -1406,6 +1406,9 @@ async function main() {
     };
     function classify(status: number, body: string, contentType: string): ReconResult["classification"] {
       const isHTML = contentType.includes("html") || body.trim().startsWith("<");
+      // 5xx + any body = handler threw on us, route exists. IIS / Spring
+      // generic 500 templates are HTML but still real-route signals.
+      if (status >= 500) return "verified-real";
       if (status === 404) return isHTML ? "html-fallthrough" : "speculative-404";
       if (isHTML) return "html-fallthrough";
       // 401/403/200-with-error-body/405/4xx-with-business-error = real route
