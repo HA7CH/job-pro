@@ -172,6 +172,9 @@ USAGE
                                       write ~/.jobpro/profile.json
                                       --interactive fills it via prompts.
   job-pro profile show                print the loaded profile
+  job-pro find <keyword>              search ALL 50 companies in parallel
+                                      [--limit N] [--companies a,b,c]
+                                      [--timeout ms] [--compact]
   job-pro --version
   job-pro help
 
@@ -1233,6 +1236,77 @@ async function main() {
     printStatus(compact);
     return;
   }
+  if (cmd === "find") {
+    const compact = args.includes("--compact");
+    const keyword = args[1];
+    if (!keyword || keyword.startsWith("--")) {
+      die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--compact]`);
+    }
+    const { args: aLimit, value: limitStr } = popFlagValue(args, "--limit");
+    const { args: aCompanies, value: companiesStr } = popFlagValue(aLimit, "--companies");
+    const { args: aTimeout, value: timeoutStr } = popFlagValue(aCompanies, "--timeout");
+    void aTimeout;
+    const limit = limitStr ? Math.max(1, parseInt(limitStr, 10)) : 3;
+    const timeout = timeoutStr ? Math.max(1000, parseInt(timeoutStr, 10)) : 8000;
+    const scope: string[] = companiesStr
+      ? companiesStr.split(",").map((s) => s.trim()).filter(Boolean)
+      : Object.keys(ADAPTERS);
+    const unknown = scope.filter((c) => !(c in ADAPTERS));
+    if (unknown.length > 0) die(`unknown company in --companies: ${unknown.join(", ")}`);
+
+    const startedAt = Date.now();
+    const settled = await Promise.all(
+      scope.map(async (company) => {
+        const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[company];
+        const t0 = Date.now();
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        try {
+          const timeoutP = new Promise<{ timedOut: true }>((resolve) => {
+            timer = setTimeout(() => resolve({ timedOut: true }), timeout);
+          });
+          const searchP = adapter
+            .searchPositions({ keyword, pageSize: limit })
+            .then((r) => ({ ok: true as const, value: r }));
+          const raced = await Promise.race([timeoutP, searchP]);
+          const elapsed = Date.now() - t0;
+          if ("timedOut" in raced) {
+            return { company, ok: false, count: 0, positions: [], message: `timeout after ${timeout}ms`, elapsed_ms: elapsed };
+          }
+          const r = raced.value as { ok?: boolean; positions?: unknown[]; message?: string };
+          if (r?.ok === false) {
+            return { company, ok: false, count: 0, positions: [], message: r.message ?? "search failed", elapsed_ms: elapsed };
+          }
+          const positions = Array.isArray(r?.positions) ? r.positions.slice(0, limit) : [];
+          return { company, ok: true, count: positions.length, positions, elapsed_ms: elapsed };
+        } catch (err) {
+          const elapsed = Date.now() - t0;
+          const message = err instanceof Error ? err.message : String(err);
+          return { company, ok: false, count: 0, positions: [], message, elapsed_ms: elapsed };
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      })
+    );
+
+    const totalMs = Date.now() - startedAt;
+    const withHits = settled.filter((r) => r.count > 0);
+    const total = withHits.reduce((s, r) => s + r.count, 0);
+    emit(
+      {
+        ok: true,
+        keyword,
+        total,
+        company_count: withHits.length,
+        scanned_companies: scope.length,
+        elapsed_ms: totalMs,
+        results: withHits,
+        failed: settled.filter((r) => !r.ok).map((r) => ({ company: r.company, message: r.message })),
+      },
+      compact
+    );
+    return;
+  }
+
   if (cmd === "profile") {
     const sub = args[1];
     if (sub === "init") {

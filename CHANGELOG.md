@@ -4,6 +4,22 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.12 — \`job-pro find <keyword>\` cross-company parallel search
+
+New top-level verb: \`job-pro find "intern"\` fires
+`searchPositions({ keyword, pageSize: limit })` against every adapter
+in parallel (Promise.all + per-adapter timeout, default 8000ms) and
+aggregates the results. Default \`--limit 3\` per company; scope with
+\`--companies xpeng,bytedance,…\` to skip slow / session-required ones.
+
+Output is one JSON blob: \`{ ok, keyword, total, company_count,
+scanned_companies, elapsed_ms, results:[…], failed:[…] }\`. Pipe to
+\`jq\` for the typical "give me every intern role across the board"
+question. Live tested across xpeng/weride/hoyoverse: 5 hits in 2.4s.
+
+Same per-adapter timeout in failed[] entries so partial outages don't
+sink the whole sweep.
+
 ## 1.0.11 — \`--remember\` also persists \`--form-file\` answers
 
 Extends 1.0.10: when `--remember` is paired with `--form-file <path>`,
