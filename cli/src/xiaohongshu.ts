@@ -623,10 +623,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://job.xiaohongshu.com/api/recruit/apply",
+      submitEndpoint: "https://job.xiaohongshu.com/recruit/apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Xiaohongshu — POST /api/recruit/apply with session cookie. Endpoint inferred; needs validation.",
+        "Xiaohongshu — POST /recruit/apply (no /api/ prefix) with session cookie. Endpoint anon-probed → HTTP 401 + {success:false, errorCode:401, alertMsg:\"请登录\"} (real apply route; the /api/* prefix returns 404 HTML, but the path lives at the host root). Body shape still needs validation.",
     }),
   };
 }

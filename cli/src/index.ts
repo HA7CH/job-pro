@@ -203,6 +203,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "byd",
   // probe-verified via re-routed sub-tree (1.0.53)
   "bilibili",
+  // probe-verified via host-root path (1.0.54)
+  "xiaohongshu",
 ]);
 
 const HELP = `

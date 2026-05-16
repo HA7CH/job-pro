@@ -4,6 +4,23 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.54 — xiaohongshu re-routed to /recruit/apply (no /api/) → verified
+
+Last broad probe round across xiaohongshu / kuaishou / baidu / weibo /
+trip. Xiaohongshu hit: \`POST /recruit/apply\` (no \`/api/\` prefix)
+returns HTTP 401 + \`{"success":false, "errorCode":401, "alertMsg":
+"请登录"}\` — real apply route. The original \`/api/recruit/apply\` is
+404 HTML (the Nginx \`/api/\` prefix isn't where this route lives).
+
+Updated submit_endpoint to \`https://job.xiaohongshu.com/recruit/apply\`.
+
+**Endpoint verified count: 23 → 24 / 50.**
+
+Also tried tencent (11 more variants), bytedance (7), jd (6), Feishu
+(15 variants on /api/v1/, /atsx-portal/, /portal-api/, /api/saas/,
+/api/recruiter/, /api/career/, etc.) — all 404 / HTML. Apply paths
+genuinely webpack-output dynamic.
+
 ## 1.0.53 — bilibili re-routed to /api/portal/post/apply → verified
 
 Sub-tree probe across bilibili's \`/api/*\` namespace. Original
