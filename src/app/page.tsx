@@ -462,24 +462,24 @@ export default function Home() {
           external — Liepin recruiter chat / WeChat mini-program.
         </p>
         <pre className="phase2-snippet">{`# one-time setup
-job-pro profile init
-$EDITOR ~/.jobpro/profile.json          # fill name/email/phone/resume_path
+job-pro profile init --interactive      # prompts 5 essential fields
+job-pro profile lint                    # validate format (email/phone/resume)
 
-# day-to-day
-job-pro status                          # what's set up
-job-pro xpeng search "intern"           # find a job
-job-pro xpeng apply <id> --interactive  # fill the form in the terminal
+# scan the whole market
+job-pro find "intern" --apply-ready --text   # only show buckets you can fire today
+
+# inspect + stage a job
+job-pro xpeng apply <id> --schema                  # peek at the form
+job-pro xpeng apply <id> --interactive --remember  # fill in terminal; persist answers
 
 # actually submit (3-layer safety gate)
 JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
   job-pro xpeng apply <id> --really-submit`}</pre>
         <p className="phase2-detail">
           For non-Greenhouse adapters (Feishu / Moka / Beisen / bespoke),
-          capture a session in your own browser via the{" "}
-          <a href="https://github.com/HA7CH/job-pro/tree/main/extension" target="_blank" rel="noopener noreferrer">
-            <code>extension/</code>
-          </a>{" "}
-          MV3 add-on, then drop <code>~/Downloads/jobpro/&lt;adapter&gt;.session.json</code>{" "}
+          run <code>job-pro extension</code> for the bundled MV3 add-on
+          path + a 6-step Chrome install walkthrough, then drop{" "}
+          <code>~/Downloads/jobpro/&lt;adapter&gt;.session.json</code>{" "}
           under <code>~/.jobpro/</code>.
           See{" "}
           <a href="https://github.com/HA7CH/job-pro/blob/main/docs/auto-apply.md" target="_blank" rel="noopener noreferrer">
