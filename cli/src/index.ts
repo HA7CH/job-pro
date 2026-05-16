@@ -174,7 +174,8 @@ USAGE
   job-pro profile show                print the loaded profile
   job-pro find <keyword>              search ALL 50 companies in parallel
                                       [--limit N] [--companies a,b,c]
-                                      [--timeout ms] [--compact | --text]
+                                      [--timeout ms] [--apply-ready]
+                                      [--compact | --text]
   job-pro --version
   job-pro help
 
@@ -1239,10 +1240,20 @@ async function main() {
   if (cmd === "find") {
     const compact = args.includes("--compact");
     const textMode = args.includes("--text");
+    const applyReadyOnly = args.includes("--apply-ready");
     const keyword = args[1];
     if (!keyword || keyword.startsWith("--")) {
-      die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--compact | --text]`);
+      die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--apply-ready] [--compact | --text]`);
     }
+    // Static apply-readiness map. Source of truth for what kind of submission
+    // each adapter supports — kept in sync with apply-smoke's submit_kind tally.
+    const ANON_ADAPTERS = new Set(["xpeng", "weride", "hoyoverse"]);
+    const EXTERNAL_ADAPTERS = new Set(["hikvision", "cicc", "cainiao", "webank", "unitree"]);
+    const applyStatusFor = (adapterKey: string): "anon" | "session" | "missing-session" | "external" => {
+      if (EXTERNAL_ADAPTERS.has(adapterKey)) return "external";
+      if (ANON_ADAPTERS.has(adapterKey)) return "anon";
+      return loadSession(adapterKey) ? "session" : "missing-session";
+    };
     const { args: aLimit, value: limitStr } = popFlagValue(args, "--limit");
     const { args: aCompanies, value: companiesStr } = popFlagValue(aLimit, "--companies");
     const { args: aTimeout, value: timeoutStr } = popFlagValue(aCompanies, "--timeout");
@@ -1278,7 +1289,7 @@ async function main() {
             return { company, ok: false, count: 0, positions: [], message: r.message ?? "search failed", elapsed_ms: elapsed };
           }
           const positions = Array.isArray(r?.positions) ? r.positions.slice(0, limit) : [];
-          return { company, ok: true, count: positions.length, positions, elapsed_ms: elapsed };
+          return { company, ok: true, count: positions.length, positions, apply_status: applyStatusFor(company), elapsed_ms: elapsed };
         } catch (err) {
           const elapsed = Date.now() - t0;
           const message = err instanceof Error ? err.message : String(err);
@@ -1290,13 +1301,24 @@ async function main() {
     );
 
     const totalMs = Date.now() - startedAt;
-    const withHits = settled.filter((r) => r.count > 0);
+    const allHits = settled.filter((r) => r.count > 0);
+    const withHits = applyReadyOnly
+      ? allHits.filter((r) => r.apply_status === "anon" || r.apply_status === "session")
+      : allHits;
     const total = withHits.reduce((s, r) => s + r.count, 0);
     const failed = settled.filter((r) => !r.ok).map((r) => ({ company: r.company, message: r.message }));
     if (textMode) {
-      console.log(`\nfind "${keyword}" — ${total} hit(s) across ${withHits.length}/${scope.length} companies (${totalMs}ms)\n`);
+      const STATUS_ICON: Record<string, string> = {
+        anon: "✅",
+        session: "🟢",
+        "missing-session": "🟡",
+        external: "⛔",
+      };
+      const filterNote = applyReadyOnly ? " [apply-ready only]" : "";
+      console.log(`\nfind "${keyword}" — ${total} hit(s) across ${withHits.length}/${scope.length} companies (${totalMs}ms)${filterNote}\n`);
       for (const r of withHits) {
-        console.log(`▌ ${r.company} (${r.count})`);
+        const icon = STATUS_ICON[r.apply_status ?? ""] ?? "?";
+        console.log(`${icon} ${r.company} (${r.count}) — ${r.apply_status}`);
         for (const p of r.positions as Array<{ post_id?: string; title?: string; work_cities?: string; apply_url?: string }>) {
           const title = (p.title ?? "").trim().replace(/\s+/g, " ");
           const loc = (p.work_cities ?? "").trim();
@@ -1304,6 +1326,10 @@ async function main() {
           if (p.apply_url) console.log(`    ${p.apply_url}`);
         }
         console.log("");
+      }
+      const hiddenCount = allHits.length - withHits.length;
+      if (applyReadyOnly && hiddenCount > 0) {
+        console.log(`(${hiddenCount} company-bucket(s) hidden — missing-session / external)\n`);
       }
       if (failed.length > 0) {
         console.log(`Failed (${failed.length}):`);

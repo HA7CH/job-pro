@@ -4,6 +4,23 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.14 — \`find\` apply-readiness annotations
+
+Each company bucket in \`find\` output now carries \`apply_status\`:
+
+* \`anon\` (✅) — multipart-anon submitter (xpeng / weride / hoyoverse),
+  ready to fire \`--really-submit\` without a session.
+* \`session\` (🟢) — non-anon adapter with a captured
+  \`~/.jobpro/<co>.session.json\`. Apply-ready.
+* \`missing-session\` (🟡) — non-anon adapter without a session.
+  Capture via the browser extension first.
+* \`external\` (⛔) — Liepin IM-mediated or WeChat-only. Can't be
+  automated structurally; surfaces the apply_url for browser hand-off.
+
+New \`--apply-ready\` flag filters \`find\` to anon + session-having
+buckets only — useful when you want a "what can I literally submit
+right now" view. JSON output gets the field too.
+
 ## 1.0.13 — \`find --text\` human-readable output
 
 Adds a `--text` mode to 1.0.12's `find`. JSON stays the default
