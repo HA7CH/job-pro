@@ -248,6 +248,8 @@ USAGE
   job-pro recon [--companies a,b,c]   probe every adapter's submit_endpoint
                                       (classifies as verified-real / 404 /
                                       html-fallthrough / external)
+                                      [--summary] for tally only
+                                      [--compact] for JSON
   job-pro profile init [--interactive] [--force]
                                       write ~/.jobpro/profile.json
                                       --interactive fills it via prompts.
@@ -1446,6 +1448,7 @@ async function main() {
     // upstream renamed it) and is the same probe routine I used by hand
     // to populate endpoint_verified for the 15 verified adapters.
     const compact = args.includes("--compact");
+    const summary = args.includes("--summary");
     const { args: aCompanies, value: companiesStr } = popFlagValue(args, "--companies");
     void aCompanies;
     const scope: string[] = companiesStr
@@ -1565,17 +1568,19 @@ async function main() {
       "probe-error": "?",
     };
     console.log(`\njob-pro recon — endpoint probe across ${results.length} adapters`);
-    console.log(`  (anon POST with {} body; schema-verified adapters tagged 🟢)\n`);
-    for (const r of results) {
-      const tag = r.status ? `${r.status}` : "—";
-      const vTag = r.already_verified ? " 🟢" : "";
-      // If the schema asserts endpoint_verified: true but the anon probe
-      // sees 404/HTML, the framework's response is misleading — schema's
-      // probe round was deeper. Surface a ⚠ icon instead of ✗ to signal
-      // "schema says verified, probe disagrees".
-      const probeOK = r.classification === "verified-real" || r.classification === "external";
-      const icon = r.already_verified && !probeOK ? "⚠" : ICON[r.classification];
-      console.log(`  ${icon} ${r.company.padEnd(width)}  ${tag.padEnd(4)} ${r.classification.padEnd(17)}${vTag}  ${r.detail}`);
+    if (!summary) {
+      console.log(`  (anon POST with {} body; schema-verified adapters tagged 🟢)\n`);
+      for (const r of results) {
+        const tag = r.status ? `${r.status}` : "—";
+        const vTag = r.already_verified ? " 🟢" : "";
+        // If the schema asserts endpoint_verified: true but the anon probe
+        // sees 404/HTML, the framework's response is misleading — schema's
+        // probe round was deeper. Surface a ⚠ icon instead of ✗ to signal
+        // "schema says verified, probe disagrees".
+        const probeOK = r.classification === "verified-real" || r.classification === "external";
+        const icon = r.already_verified && !probeOK ? "⚠" : ICON[r.classification];
+        console.log(`  ${icon} ${r.company.padEnd(width)}  ${tag.padEnd(4)} ${r.classification.padEnd(17)}${vTag}  ${r.detail}`);
+      }
     }
     console.log(`\n  Tally:`);
     for (const [k, v] of [...tally.entries()].sort()) {

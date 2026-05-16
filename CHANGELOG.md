@@ -4,6 +4,26 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.76 — \`recon --summary\` skips per-adapter lines
+
+For dashboards / drift monitoring, the per-adapter dump is noise:
+
+\`\`\`
+$ job-pro recon --summary
+
+job-pro recon — endpoint probe across 50 adapters
+
+  Tally:
+    external              5
+    html-fallthrough      5
+    probe-error           2
+    speculative-404       1
+    verified-real        37
+\`\`\`
+
+Pairs with \`--compact\` (JSON output) for both modes — summary +
+machine-readable.
+
 ## 1.0.75 — docs/auto-apply tally arithmetic fix (45 verified)
 
 The family-count table in \`docs/auto-apply.md\` had two issues:
