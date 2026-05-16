@@ -793,8 +793,9 @@ export async function fetchApplicationSchema(postId: string): Promise<
       applyUrl,
       submitEndpoint: "https://zhaopin.meituan.com/api/job-apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Meituan — POST /api/job-apply with session cookie. Endpoint inferred; needs validation.",
+        "Meituan — POST /api/job-apply with session cookie. Endpoint anon-probed → {data: {errorCode: 401, message: \"未登陆\"}} (real auth gate). Body shape still needs validation.",
     }),
   };
 }

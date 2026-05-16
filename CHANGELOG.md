@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.40 — 3 more anon-probed: meituan / mihoyo / liauto → verified
+
+Continued endpoint recon across the remaining 18 multipart-session
+bespokes. 3 more came back with real-route signals:
+
+* **meituan** — \`POST /api/job-apply\` returns
+  \`{data: {errorCode: 401, message: "未登陆"}}\` (real auth gate).
+* **mihoyo** — \`POST /ats-portal/v1/application/create\` returns
+  \`{code: -3, message: "用户未登录或登录失效"}\` (real auth gate).
+* **liauto** — \`POST /api/career/apply\` returns
+  \`{code: 2, msg: "请在配置文件配置可访问域名"}\` (real backend; needs
+  Origin/Referer headers, which the executor already attaches in real
+  submissions).
+
+The other 15 in this probe round returned either structured 404 from
+backend (bytedance, byd, bilibili, oppo, tencent), 405 (didi, netease,
+pingan), or HTML fallthrough (baidu, kuaishou, huawei, jd, trip, weibo,
+xiaohongshu) — all need real-browser network capture to find the right
+path.
+
+**Net: \`endpoint_verified: true\` for 15 of 50** (was 12). Adapters
+clearing the 4th safety gate now:
+* multipart-anon × 3 (xpeng / weride / hoyoverse)
+* multipart-session × 5 (alibaba / pdd / meituan / mihoyo / liauto)
+* moka-aes × 7 (the whole Moka family)
+
 ## 1.0.39 — promote 9 anon-probed adapters to \`endpoint_verified: true\`
 
 Redefines \`endpoint_verified\` from "end-to-end smoked" to "URL verified

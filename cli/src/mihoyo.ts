@@ -458,8 +458,9 @@ export async function fetchApplicationSchema(postId: string): Promise<
       applyUrl,
       submitEndpoint: "https://ats.openout.mihoyo.com/ats-portal/v1/application/create",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "miHoYo — POST /ats-portal/v1/application/create with session cookie. Endpoint inferred from ats.openout.mihoyo.com SPA; needs validation.",
+        "miHoYo — POST /ats-portal/v1/application/create with session cookie. Endpoint anon-probed → {code: -3, message: \"用户未登录或登录失效\"} (real auth gate). Body shape still needs validation.",
     }),
   };
 }

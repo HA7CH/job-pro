@@ -542,8 +542,9 @@ export async function fetchApplicationSchema(postId: string): Promise<
       applyUrl,
       submitEndpoint: "https://www.lixiang.com/api/career/apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Li Auto — POST /api/career/apply with session cookie. Endpoint inferred; needs validation.",
+        "Li Auto — POST /api/career/apply with session cookie. Endpoint anon-probed → {code: 2, msg: \"请在配置文件配置可访问域名\"} (real backend, domain ACL needs Origin/Referer headers). Body shape still needs validation.",
     }),
   };
 }
