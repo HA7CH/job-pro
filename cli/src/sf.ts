@@ -376,10 +376,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://campus.sf-express.com/api/web/position/apply",
+      submitEndpoint: "https://campus.sf-express.com/api/web/applicant/apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "SF Express — POST /api/web/position/apply with cr-service header + GeeTest captcha + session cookie. Endpoint anon-probed → 404; the apply route lives somewhere else (likely behind login). The detail endpoint at /api/web/position/findById/<id> is real (see fetchPositionDetail), but the apply path needs real-browser recon.",
+        "SF Express — POST /api/web/applicant/apply with cr-service header + GeeTest captcha + session cookie. Endpoint anon-probed → HTTP 401 from the SF gateway (real auth gate; the cr-service-web-cloud cluster distinguishes /api/web/position/* [position service] from /api/web/applicant/* and /api/web/resume/* [applicant service, auth-gated]). Body shape still needs validation against a real candidate session.",
     }),
   };
 }

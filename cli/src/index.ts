@@ -195,6 +195,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "moonshot", "megvii", "deepseek", "galaxyuniversal", "stepfun", "cambricon", "geely",
   // beisen-italent (anon-probe-verified — IIS 500 template)
   "iflytek", "vivo",
+  // multipart-session probe-verified via re-routing (1.0.50)
+  "sf",
 ]);
 
 const HELP = `

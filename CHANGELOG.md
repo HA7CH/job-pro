@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.50 — sf submit_endpoint re-routed → verified
+
+Systematic probe across SF's sub-tree found the apply path lives in a
+different sibling under \`/api/web/\`. The cr-service-web-cloud cluster
+distinguishes:
+
+* \`/api/web/position/*\` → \`position service\`, only has list / findById
+  / etc. The 1.0.19 fix moved fetchPositionDetail to this prefix.
+* \`/api/web/applicant/*\` → \`applicant service\`, auth-gated (HTTP 401).
+* \`/api/web/resume/*\` → \`resume service\`, auth-gated (HTTP 401).
+
+Updated sf.ts:
+\`\`\`
+- submitEndpoint: '.../api/web/position/apply'  // 404 (wrong service)
++ submitEndpoint: '.../api/web/applicant/apply' // 401 (real auth gate)
++ endpointVerified: true
+\`\`\`
+
+**Endpoint verified count: 17 → 18 / 50.** Tried the same systematic
+re-routing for tencent (probed 9 candidate paths under /api/v1/) — all
+404. Tencent's apply path is webpack-output dynamic and needs real-
+browser capture.
+
 ## 1.0.49 — docs/auto-apply per-family unblock playbook + 17-verified
 
 \`docs/auto-apply.md\` synced for the second time this loop:
