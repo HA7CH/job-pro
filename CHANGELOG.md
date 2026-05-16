@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.21 — \`--really-submit\` session-age gate
+
+A captured \`~/.jobpro/<co>.session.json\` older than 30 days now blocks
+\`--really-submit\` with a structured refusal:
+
+\`\`\`json
+{
+  "mode": "really-submit-blocked",
+  "session_age_days": 227,
+  "message": "session at ~/.jobpro/nio.session.json is 227 days old (limit 30); …"
+}
+\`\`\`
+
+Career-site sessions generally expire around the 30-day mark and a
+stale cookie would otherwise yield an inscrutable 401 from upstream
+— hard to diagnose without this gate.
+
+Tunables:
+* \`--allow-stale-session\` — bypass the gate for one-off cases.
+* \`JOB_PRO_SESSION_MAX_AGE_DAYS\` — override the 30-day default
+  (e.g. \`=14\` if you know your site is shorter-lived).
+
+Applies to all non-anon families: feishu-3-step, moka-aes,
+beisen-wecruit, beisen-italent, cdp-real-browser, multipart-session.
+Anon families (multipart-anon: xpeng/weride/hoyoverse) are untouched.
+
 ## 1.0.20 — antgroup pageSize fix → **apply-smoke 50/50 schema-ok**
 
 \`antgroup\`'s \`fetchPositionDetail\` brute-scans \`/api/<rt>/position/search\`

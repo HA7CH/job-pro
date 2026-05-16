@@ -226,6 +226,7 @@ VERBS (same surface for every company)
                                     --batch <file|->           apply to many post_ids (one/line)
                                     --debug-submit-to <url>    verify wire format
                                     --really-submit            actually fire (env-gated)
+                                    --allow-stale-session      bypass 30-day session-age gate
   memory list | get <k> | set k=v | event <kind> [payload] | clear
 
 OUTPUT
@@ -725,6 +726,19 @@ async function runCompany(
       return emit({ mode: "debug-submit", staged, submit_kind: kindForDebug, result }, compact);
     }
 
+    // Session staleness gate (applies to any --really-submit that uses a
+    // captured session). Sessions for non-anon adapters generally expire
+    // around the 30-day mark; firing a stale cookie just nets a 401 with
+    // no diagnostic. Catch it before the submit fires.
+    const allowStaleSession = args.includes("--allow-stale-session");
+    const maxAgeDays = Number(process.env.JOB_PRO_SESSION_MAX_AGE_DAYS ?? 30);
+    function sessionAgeDays(s: typeof session): number | null {
+      if (!s?.exported_at) return null;
+      const ts = Date.parse(s.exported_at);
+      if (!Number.isFinite(ts)) return null;
+      return Math.floor((Date.now() - ts) / 86_400_000);
+    }
+
     // --really-submit: actually hit the upstream endpoint. Guarded by both
     // an env-var attestation and (for non-anon adapters) a session.json.
     if (reallySubmit) {
@@ -812,6 +826,26 @@ async function runCompany(
             compact
           );
         }
+        const age = sessionAgeDays(session);
+        if (age !== null && age > maxAgeDays && !allowStaleSession) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: "really-submit-blocked",
+              staged,
+              submit_kind: kind,
+              session_age_days: age,
+              message:
+                `session at ~/.jobpro/${company}.session.json is ${age} days old (limit ${maxAgeDays}); ` +
+                `careers-site sessions usually expire around 30d and a stale cookie would yield ` +
+                `an inscrutable 401. Re-capture via the extension, or pass --allow-stale-session ` +
+                `(also: JOB_PRO_SESSION_MAX_AGE_DAYS env).`,
+            },
+            compact
+          );
+        }
         const result = await familyExecutor(staged, session, { kind: "upstream" });
         return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: true, result }, compact);
       }
@@ -852,6 +886,26 @@ async function runCompany(
           },
           compact
         );
+      }
+      if (!isAnonMultipart) {
+        const age = sessionAgeDays(session);
+        if (age !== null && age > maxAgeDays && !allowStaleSession) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: "really-submit-blocked",
+              staged,
+              submit_kind: kind,
+              session_age_days: age,
+              message:
+                `session at ~/.jobpro/${company}.session.json is ${age} days old (limit ${maxAgeDays}); ` +
+                `re-capture via the extension or pass --allow-stale-session.`,
+            },
+            compact
+          );
+        }
       }
       const result = await submitApplication(staged, { kind: "upstream" }, { session });
       return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: !!session, result }, compact);
