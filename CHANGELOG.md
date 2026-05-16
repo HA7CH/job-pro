@@ -4,6 +4,25 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.83 — comments & error messages caught up with executor reality
+
+Two stale code paths from the multi-step-executor scaffolding era
+(0.9.x):
+
+1. \`SubmitKind\` doc comment for \`feishu-3-step\` said
+   "→ POST resume/apply" — the path moved to \`/user/applications\` in
+   1.0.62. Updated.
+
+2. \`apply --really-submit\`'s "unknown family" error message said
+   "Landing per-family executors is the next iteration of Phase 2."
+   Phase 2 family executors all landed by 1.0.20. Rewrote to say
+   "submit_kind=X is unknown — wire an executor in cli/src/apply.ts"
+   with the actual 7-family list. This path now only fires if a
+   contributor adds a brand-new SubmitKind without wiring it.
+
+Also stale doc comment in apply.ts's executeFeishu3Step header
+fixed (line 863 said \`/api/v1/resume/apply\`).
+
 ## 1.0.82 — fix: \`recon --companies=lilith\` actually probes lilith
 
 The lilith CDP skip from 1.0.43 said in its detail string "pass

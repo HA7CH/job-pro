@@ -200,7 +200,7 @@ export interface ApplyQuestion {
 export type SubmitKind =
   | "multipart-anon"        // Greenhouse / Lever public boards (no session needed)
   | "multipart-session"     // Bespoke SPA with cookie session (Tencent, Bilibili, …)
-  | "feishu-3-step"         // get-token → upload-to-cdn → exchange-token → POST resume/apply
+  | "feishu-3-step"         // get-token → upload-to-cdn → POST user/applications
   | "moka-aes"              // AES-128-CBC envelope same as our read-path
   | "beisen-wecruit"        // Beisen Wecruit candidate-portal flow
   | "beisen-italent"        // Beisen iTalent candidate-portal flow
@@ -860,9 +860,10 @@ interface MultiStepResult extends SubmitResult {
  *      → { code:0, data:{ upload_url, attachment_id, fields:{…} } }
  *   2. POST/PUT to data.upload_url (lf-package-cn.feishucdn.com or similar)
  *      multipart/form-data with fields[…] + file bytes
- *   3. POST {host}/api/v1/resume/apply
- *      body: { post_id, attachment_id, applicant_info:{ name, email, phone } }
- *      → { code:0, data:{ application_id } }
+ *   3. POST {host}/api/v1/user/applications  (was /api/v1/resume/apply
+ *      pre-1.0.62; the real route discovered via atsx-throne SPA chunk
+ *      dump). Body: { post_id, attachment_id, applicant_info:{ name,
+ *      email, phone } } → { code:0, data:{ application_id } }
  *
  * Session.json must contain valid Feishu cookies (typically `_csrf_token`,
  * `lark_oapi_session`, `passport_csrf_token`) for the host.

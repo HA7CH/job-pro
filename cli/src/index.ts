@@ -944,6 +944,11 @@ async function runCompany(
         return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: true, result }, compact);
       }
       if (!isGenericMultipart) {
+        // Reachable only if a schema returns a SubmitKind that isn't in the
+        // current taxonomy (multipart-anon/session/feishu-3-step/moka-aes/
+        // beisen-wecruit/beisen-italent/cdp-real-browser/external). The
+        // SubmitKind type permits `(string & {})` extensibility, so a future
+        // contributor adding a new family without wiring it would land here.
         return emit(
           {
             ok: false,
@@ -954,12 +959,12 @@ async function runCompany(
             submit_kind: kind,
             submit_notes: sr.schema.submit_notes,
             message:
-              `submit_kind="${kind}" — this adapter family doesn't yet have an ` +
-              `executor wired. The application schema + submit endpoint are ` +
-              `documented (see submit_notes), but firing the submission needs a ` +
-              `family-specific multi-step flow (token exchange / AES envelope / ` +
-              `CDP / etc.). Landing per-family executors is the next iteration of ` +
-              `Phase 2. Use --debug-submit-to <url> to inspect what we have today.`,
+              `submit_kind="${kind}" is unknown — no wired executor. The 7 ` +
+              `current families are: multipart-anon, multipart-session, ` +
+              `feishu-3-step, moka-aes, beisen-wecruit, beisen-italent, ` +
+              `cdp-real-browser. To add a new family, wire an executor in ` +
+              `cli/src/apply.ts. Use --debug-submit-to <url> in the meantime ` +
+              `to verify the wire format you'd want.`,
           },
           compact
         );
