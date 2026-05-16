@@ -4,6 +4,34 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.36 — 4th safety gate: speculative-endpoint refusal
+
+\`--really-submit\` now refuses by default when \`endpoint_verified !== true\`
+on a non-anon adapter. Justification: 1.0.34's recon found that **19 of
+22 inferred bespoke endpoints are wrong** (404 / HTML fallthrough on
+no-auth probe). Without this gate, a user firing \`--really-submit\`
+against tencent / bytedance / etc. would get a silent 4xx with no
+useful diagnostic.
+
+\`\`\`
+{
+  "mode": "really-submit-blocked",
+  "message": "submit_endpoint for tencent is speculative — inferred from JS-bundle recon, not end-to-end verified. Most such endpoints (19 of 22 probed) are wrong and would 4xx. Verify with \`apply 1200791473415778304 --debug-submit-to <your-echo-url>\` first, or set \`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\` if you're knowingly probing."
+}
+\`\`\`
+
+Bypass: \`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\` (mirrors the
+attestation pattern of \`JOB_PRO_I_UNDERSTAND_REAL_SUBMIT\` from 0.9.2).
+
+Safety-gate stack on \`--really-submit\` is now 4 layers:
+1. \`JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes\`
+2. \`staged.ready\` — every required field filled
+3. \`endpoint_verified === true\` OR \`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\`
+4. For non-anon families: captured session.json (and < 30d old, 1.0.21)
+
+Adapters that pass all 4 today without env bypass:
+multipart-anon × 3 — xpeng / weride / hoyoverse.
+
 ## 1.0.35 — auto-log successful \`--really-submit\` to memory
 
 When \`apply --really-submit\` succeeds (\`result.ok === true\`), the

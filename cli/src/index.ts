@@ -810,6 +810,29 @@ async function runCompany(
           compact
         );
       }
+      // Speculative-endpoint gate (4th safety layer). 19 of 22 bespoke
+      // multipart-session endpoints returned 404 on no-auth probe — the
+      // inferred URLs are wrong guesses. Refusing by default prevents
+      // accidental fires against broken endpoints; users who *want* to
+      // shake out what the real endpoint should be opt in via env.
+      const allowSpeculative = process.env.JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT === "yes";
+      if (staged.submit_kind !== "external" && staged.submit_kind !== "multipart-anon" && staged.endpoint_verified !== true && !allowSpeculative) {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            mode: "really-submit-blocked",
+            staged,
+            message:
+              `submit_endpoint for ${company} is speculative — inferred from JS-bundle recon, ` +
+              `not end-to-end verified. Most such endpoints (19 of 22 probed) are wrong and ` +
+              `would 4xx. Verify with \`apply ${postId} --debug-submit-to <your-echo-url>\` first, ` +
+              `or set \`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes\` if you're knowingly probing.`,
+          },
+          compact
+        );
+      }
       // Submission flow selection by submit_kind. Only the generic
       // multipart families are wired to actually fire today; everything
       // else gets a useful refusal message.
