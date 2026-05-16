@@ -4,6 +4,24 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.7 — apply --batch &lt;file|-&gt;
+
+\`job-pro <co> apply --batch /path/to/post-ids.txt\` reads a newline-
+separated list of post_ids (\`#\`-prefix comments allowed), stages each
+against the same profile + session, and emits a JSON array of
+\`{ post_id, ok, ready, submit_kind, message }\`. Passes through
+\`--form-file\` so per-job custom answers apply uniformly across all
+batch entries.
+
+\`--batch\` + \`--really-submit\` is intentionally refused — batch real
+submission is the spam-pattern the safety gates exist to prevent.
+Verify with \`--debug-submit-to https://httpbin.org/post\`, then submit
+each job individually.
+
+\`-\` reads from stdin so workflows like
+\`job-pro xpeng all --compact | jq -r '.positions[].post_id' | \\
+   job-pro xpeng apply --batch -\` are one-liner-able.
+
 ## 1.0.6 — retry-with-backoff extended to family executors
 
 All 4 family executors (executeFeishu3Step / executeMokaApply /

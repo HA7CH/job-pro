@@ -85,7 +85,7 @@ function require_module(): { createRequire: typeof require_createRequire } {
   return { createRequire: require_createRequire };
 }
 
-const VERSION = "1.0.6";
+const VERSION = "1.0.7";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -208,6 +208,7 @@ VERBS (same surface for every company)
                                     --print-form               emit a fillable JSON template
                                     --form-file <path>         merge per-job answers
                                     --interactive              prompt for unanswered fields
+                                    --batch <file|->           apply to many post_ids (one/line)
                                     --debug-submit-to <url>    verify wire format
                                     --really-submit            actually fire (env-gated)
   memory list | get <k> | set k=v | event <kind> [payload] | clear
@@ -477,14 +478,97 @@ async function runCompany(
   }
 
   if (verb === "apply") {
-    const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--print-form | --form-file <path>] [--dry-run | --debug-submit-to <url> | --really-submit]`);
     const reallySubmit = args.includes("--really-submit");
     const printForm = args.includes("--print-form");
     const interactive = args.includes("--interactive");
     const { args: aDebug, value: debugUrl } = popFlagValue(args, "--debug-submit-to");
-    const { args: _aForm, value: formFilePath } = popFlagValue(aDebug, "--form-file");
-    void _aForm;
+    const { args: aForm, value: formFilePath } = popFlagValue(aDebug, "--form-file");
+    const { args: aBatch, value: batchPath } = popFlagValue(aForm, "--batch");
+
+    // Batch mode: read post_ids from a file (or stdin if "-"). Each non-empty,
+    // non-`#`-prefixed line is a post_id. Output is a JSON array of
+    // { post_id, result } so downstream tooling can iterate.
+    if (batchPath) {
+      if (reallySubmit) {
+        die(
+          `--batch + --really-submit is intentionally refused. Submitting to ` +
+            `multiple jobs at once is the exact failure mode this CLI is designed to ` +
+            `prevent. Drop --really-submit and use --debug-submit-to <url> for batch ` +
+            `verification, or run apply one job at a time.`
+        );
+      }
+      let rawLines: string;
+      try {
+        rawLines = batchPath === "-" ? readFileSync(0, "utf8") : readFileSync(batchPath, "utf8");
+      } catch (err) {
+        die(`could not read batch file ${batchPath}: ${err instanceof Error ? err.message : err}`);
+      }
+      const postIds = rawLines
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#"));
+      if (postIds.length === 0) die(`batch file ${batchPath} contains no post_ids`);
+      // We need the schema fetcher / profile / session ONCE, not per-job.
+      const fetchSchema = adapter.fetchApplicationSchema;
+      if (typeof fetchSchema !== "function") {
+        return emit(
+          { ok: false, source: company, message: `apply: not wired for "${company}"` },
+          compact
+        );
+      }
+      const prof = loadProfile();
+      if (!prof.ok) die(prof.message);
+      let effectiveProfile = prof.profile;
+      if (formFilePath) {
+        const merged = applyFormFile(effectiveProfile, formFilePath);
+        if (!merged.ok) die(merged.message);
+        effectiveProfile = merged.profile;
+      }
+      const session = loadSession(company);
+
+      type BatchRow = { post_id: string; ok: boolean; ready?: boolean; message?: string; submit_kind?: string; debug_result?: unknown };
+      const out: BatchRow[] = [];
+      for (const id of postIds) {
+        try {
+          const schemaResult = (await fetchSchema.call(adapter, id)) as { ok?: boolean; schema?: ApplyFormSchema; message?: string };
+          if (!schemaResult.ok || !schemaResult.schema) {
+            out.push({ post_id: id, ok: false, message: schemaResult.message ?? "schema fetch failed" });
+            continue;
+          }
+          const staged = stageApplication(schemaResult.schema, effectiveProfile);
+          if (debugUrl) {
+            const kind = schemaResult.schema.submit_kind ?? "multipart-anon";
+            const debugExecutor =
+              kind === "feishu-3-step" ? executeFeishu3Step :
+              kind === "moka-aes" ? executeMokaApply :
+              kind === "beisen-wecruit" ? executeBeisenWecruit :
+              kind === "beisen-italent" ? executeBeisenITalent :
+              kind === "cdp-real-browser" ? executeCdpRealBrowser :
+              null;
+            const result = debugExecutor
+              ? await debugExecutor(staged, session, { kind: "debug", url: debugUrl })
+              : await submitApplication(staged, { kind: "debug", url: debugUrl });
+            out.push({ post_id: id, ok: result.ok, ready: staged.ready, submit_kind: kind, debug_result: result });
+          } else {
+            out.push({
+              post_id: id,
+              ok: staged.ready,
+              ready: staged.ready,
+              submit_kind: schemaResult.schema.submit_kind,
+              message: staged.ready ? "staged ok" : `${staged.unanswered_required.length} required field(s) unfilled`,
+            });
+          }
+        } catch (err) {
+          out.push({ post_id: id, ok: false, message: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      const okCount = out.filter((r) => r.ok).length;
+      return emit({ mode: debugUrl ? "batch-debug" : "batch-dry-run", company, total: out.length, ok_count: okCount, results: out }, compact);
+    }
+    void aBatch;
+
+    const postId = args[0];
+    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--print-form | --form-file <path> | --interactive | --batch <file>] [--debug-submit-to <url> | --really-submit]`);
 
     const fetchSchema = adapter.fetchApplicationSchema;
     if (typeof fetchSchema !== "function") {
