@@ -574,7 +574,15 @@ async function runCompany(
 
       type BatchRow = { post_id: string; ok: boolean; ready?: boolean; message?: string; submit_kind?: string; debug_result?: unknown };
       const out: BatchRow[] = [];
+      // Progress to stderr (so stdout JSON stays clean for pipes). Only when
+      // not --compact AND not piping stdout (interactive TTY).
+      const showProgress = !compact && process.stderr.isTTY && postIds.length > 1;
+      let progressIdx = 0;
       for (const id of postIds) {
+        progressIdx++;
+        if (showProgress) {
+          process.stderr.write(`\r[${progressIdx}/${postIds.length}] ${id.padEnd(28)}\x1b[K`);
+        }
         try {
           const schemaResult = (await fetchSchema.call(adapter, id)) as { ok?: boolean; schema?: ApplyFormSchema; message?: string };
           if (!schemaResult.ok || !schemaResult.schema) {
@@ -608,6 +616,7 @@ async function runCompany(
           out.push({ post_id: id, ok: false, message: err instanceof Error ? err.message : String(err) });
         }
       }
+      if (showProgress) process.stderr.write(`\r\x1b[K`);
       const okCount = out.filter((r) => r.ok).length;
       return emit({ mode: debugUrl ? "batch-debug" : "batch-dry-run", company, total: out.length, ok_count: okCount, results: out }, compact);
     }

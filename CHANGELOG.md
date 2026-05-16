@@ -4,6 +4,24 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.31 — \`apply --batch\` progress indicator
+
+Long batch runs were silent until the final JSON dump. \`apply --batch\`
+now writes a single live progress line to stderr (so stdout stays
+clean for jq/pipes):
+
+\`\`\`
+[12/40] 8548990002                  
+\`\`\`
+
+Auto-disables when:
+* \`--compact\` is set (programmatic / scripted use)
+* stderr isn't a TTY (CI / piped error stream)
+* batch is just one id
+
+Cleared on completion so the trailing JSON output starts on a fresh
+line.
+
 ## 1.0.30 — \`--debug-submit\` shorthand + README selftest hint
 
 * \`apply <id> --debug-submit\` (no URL needed) defaults to
