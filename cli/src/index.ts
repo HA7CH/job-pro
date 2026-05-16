@@ -914,8 +914,8 @@ async function runCompany(
               submit_kind: kind,
               message:
                 `${kind} submission requires a captured session at ` +
-                `~/.jobpro/${company}.session.json. Install extension/ in Chrome, ` +
-                `log in to the careers site, click Export.`,
+                `~/.jobpro/${company}.session.json. Run \`job-pro extension\` for ` +
+                `the bundled MV3 path + Chrome install walkthrough.`,
             },
             compact
           );
@@ -1244,7 +1244,7 @@ function printStatus(compact: boolean): void {
   // Sessions
   if (r.sessions.length === 0) {
     console.log(`Sessions ✗  no session.json files captured`);
-    console.log(`         install extension/ in Chrome to capture sessions for non-anon adapters.`);
+    console.log(`         run \`job-pro extension\` for the bundled MV3 extension path + Chrome install steps.`);
   } else {
     console.log(`Sessions ✓  ${r.sessions.length} captured`);
     for (const s of r.sessions) {

@@ -890,8 +890,8 @@ export async function executeFeishu3Step(
       posted_to: staged.submit_endpoint,
       message:
         "executeFeishu3Step requires a captured session (~/.jobpro/<adapter>.session.json) " +
-        "— Feishu apply endpoints all gate on candidate-session cookies. Install extension/ " +
-        "in Chrome, log in to the careers site, click Export.",
+        "— Feishu apply endpoints all gate on candidate-session cookies. Run `job-pro extension` " +
+        "for the bundled MV3 path + install walkthrough, log into the careers site, click Export.",
       steps: [],
     };
   }

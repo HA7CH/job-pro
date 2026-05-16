@@ -4,6 +4,20 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.86 — "Install extension/" → "Run \`job-pro extension\`" across CLI
+
+Three more stale-wording fixes. Since 1.0.17 the extension is bundled
+in the npm tarball and \`job-pro extension\` prints the path + walkthrough.
+But the older wording "Install extension/ in Chrome" survived in:
+
+* \`status\` output — fresh-user guidance.
+* \`executeFeishu3Step\`'s no-session error message.
+* The dispatcher's family-executor no-session error message.
+
+All three now say "Run \`job-pro extension\` for the bundled MV3 path +
+Chrome install walkthrough." Consistent with what 1.0.17 actually
+shipped.
+
 ## 1.0.85 — \`job-pro help\` Phase 2 section rewritten
 
 The Phase 2 block in HELP was at the 0.7.x era:
