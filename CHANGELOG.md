@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.63 — bytedance + Beisen Wecruit ✕ 2 verified (40 / 50)
+
+Three more promotions:
+
+**bytedance** — \`jobs.bytedance.com\` is an atsx-throne (Feishu)
+tenant. Same \`/api/v1/user/applications\` endpoint as Feishu family
+(verified in 1.0.62) returns 405 = real REST route. Updated schema
+from speculative \`/api/v1/user_apply\` to \`/api/v1/user/applications\`,
+changed submit_kind from \`multipart-session\` to \`feishu-3-step\`
+(matches the actual Feishu apply protocol). Added to
+SUBMIT_KIND_OVERRIDES.
+
+**sensetime / horizonrobotics** (Beisen Wecruit) — read
+\`hr.sensetime.com/pb/js/vendor.js\` (3.9MB) and found
+\`/delivery/resume/\`, \`/resume/info/add/\`, \`/resume/upload/file/save/\`
+etc. The schema's path was always right; what was wrong was the probe.
+With \`X-Requested-With: XMLHttpRequest\` header, the anon probe of
+\`https://hr.sensetime.com/wecruit/delivery/resume/<SU>\` returns
+\`{type:"error",state:"809",msg:"您尚未登录或登录时间过长，请重新登录!"}\`
+— real auth gate. Without that header, Nginx falls through to SPA HTML.
+
+**Endpoint verified count: 37 → 40 / 50.** 80% threshold crossed.
+
 ## 1.0.62 — Feishu family ✕ 8 verified via SPA chunk extraction
 
 Dug deeper into the atsx-throne SPA chunks. The 4026.f23f1edc.js

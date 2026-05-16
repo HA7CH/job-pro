@@ -847,10 +847,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://jobs.bytedance.com/api/v1/user_apply",
-      submitKind: "multipart-session",
+      submitEndpoint: "https://jobs.bytedance.com/api/v1/user/applications",
+      submitKind: "feishu-3-step",
+      endpointVerified: true,
       submitNotes:
-        "ByteDance — POST /api/v1/user_apply with session cookie. CAPTCHA verification required for first-time applicants. Endpoint inferred; needs validation.",
+        "ByteDance — POST /api/v1/user/applications. jobs.bytedance.com is an atsx-throne (Feishu) tenant, so it uses Feishu's 3-step apply flow: POST /api/v1/attachment/upload/tokens → PUT presigned URL → POST /api/v1/user/applications with { post_id, attachment_id, applicant_info }. Endpoint anon-probed → HTTP 405 (same route as Feishu adapters; verified in 1.0.62). CAPTCHA verification required for first-time applicants; session cookies via extension.",
     }),
   };
 }

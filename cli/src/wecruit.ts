@@ -536,12 +536,16 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
         submit_endpoint: `${SITE_ROOT}/wecruit/delivery/resume/${encodeURIComponent(ch.channelId)}`,
         submit_method: "POST",
         submit_kind: "beisen-wecruit",
+        endpoint_verified: true,
         submit_notes:
           "Beisen Wecruit apply flow: POST /wecruit/resume/upload/file/save/<SU> → " +
           "POST /wecruit/resume/info/add/<SU> → POST /wecruit/delivery/resume/<SU> with " +
-          "{ post_id, resume_attachment_id, channel_id }. Requires candidate session " +
-          "(WeChat OAuth or phone OTP via /pb/<channel>/login.html). Capture via extension/, " +
-          "drop session.json under ~/.jobpro/. Multi-step submitter lands in a future iteration.",
+          "{ post_id, resume_attachment_id, channel_id }. Endpoint verified by reading " +
+          "/pb/js/vendor.js (Beisen Wecruit's vendor bundle) which lists /delivery/resume/, " +
+          "/resume/info/add/, /resume/upload/file/save/ etc as quoted paths. Anon-probe with " +
+          "X-Requested-With:XMLHttpRequest header → HTTP 200 + {type:\"error\",state:\"809\"," +
+          "msg:\"您尚未登录...\"} = real auth gate (without that header, Nginx returns the SPA HTML). " +
+          "Requires candidate session (WeChat OAuth or phone OTP via /pb/<channel>/login.html).",
         questions,
       },
     };

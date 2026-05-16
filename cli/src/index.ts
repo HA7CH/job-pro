@@ -176,8 +176,9 @@ const SUBMIT_KIND_BY_FAMILY: Record<CompanyFamily, string> = {
 };
 // Adapter-level deviations from their family default.
 const SUBMIT_KIND_OVERRIDES: Record<string, string> = {
-  unitree: "external",       // Bespoke family, but WeChat-QR — no API submit.
-  lilith:  "cdp-real-browser", // Feishu tenant, but needs ByteDance _signature bypass.
+  unitree:    "external",          // Bespoke family, but WeChat-QR — no API submit.
+  lilith:     "cdp-real-browser",  // Feishu tenant, but needs ByteDance _signature bypass.
+  bytedance:  "feishu-3-step",     // Bespoke family but jobs.bytedance.com is atsx-throne.
 };
 function submitKindFor(adapterKey: string, family: CompanyFamily): string {
   return SUBMIT_KIND_OVERRIDES[adapterKey] ?? SUBMIT_KIND_BY_FAMILY[family];
@@ -218,6 +219,10 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   // Feishu family: /api/v1/user/applications discovered via SPA chunk 4026
   // (1.0.62). Promotes all 8 Feishu adapters since they share backend.
   "xiaomi", "nio", "minimax", "zhipu", "iqiyi", "agibot", "zerooneai", "baichuan",
+  // bytedance: atsx-throne tenant, same /api/v1/user/applications (1.0.63)
+  "bytedance",
+  // Beisen Wecruit family: anon probe with X-Requested-With (1.0.63)
+  "sensetime", "horizonrobotics",
 ]);
 
 const HELP = `
