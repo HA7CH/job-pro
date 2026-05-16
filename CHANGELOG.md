@@ -4,6 +4,28 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.81 — \`recon\` shows session-presence column (🔐 / 🚫)
+
+\`recon\` output now combines two signals per row:
+
+* **endpoint** — ✓ verified-real probe, ⚠ schema-verified-but-probe-
+  disagrees, ⛔ external, ✗ truly broken.
+* **session** — 🔐 captured (~/.jobpro/<co>.session.json exists),
+  🚫 needs \`job-pro extension\` + browser capture.
+
+multipart-anon (xpeng/weride/hoyoverse) skips the session column —
+they don't need one. External skips it too.
+
+\`\`\`
+$ job-pro recon --companies xpeng,bytedance,unitree
+  ⚠ xpeng        401  html-fallthrough  🟢  HTTP Basic: Access denied.
+  ✓ bytedance 🚫 405  verified-real     🟢
+  ⛔ unitree      —    external               structurally external (Liepin / WeChat)
+\`\`\`
+
+The 🚫 columns are the actionable items: each is one extension
+capture away from being apply-ready.
+
 ## 1.0.80 — \`VERSION\` reads from package.json (was stuck at 1.0.7)
 
 The \`VERSION\` const in \`index.ts\` was hardcoded as \`"1.0.7"\` since

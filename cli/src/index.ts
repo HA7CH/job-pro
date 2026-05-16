@@ -1545,17 +1545,19 @@ async function main() {
     };
     console.log(`\njob-pro recon — endpoint probe across ${results.length} adapters`);
     if (!summary) {
-      console.log(`  (anon POST with {} body; schema-verified adapters tagged 🟢)\n`);
+      console.log(`  (anon POST with {} body; schema-verified ✓ 🟢, session captured 🔐)\n`);
       for (const r of results) {
         const tag = r.status ? `${r.status}` : "—";
         const vTag = r.already_verified ? " 🟢" : "";
-        // If the schema asserts endpoint_verified: true but the anon probe
-        // sees 404/HTML, the framework's response is misleading — schema's
-        // probe round was deeper. Surface a ⚠ icon instead of ✗ to signal
-        // "schema says verified, probe disagrees".
+        // Session presence (~/.jobpro/<co>.session.json). 🔐 means user
+        // already captured; 🚫 means they need to run `job-pro extension`.
+        // multipart-anon adapters don't need a session so no tag.
+        const isAnon = r.submit_kind === "multipart-anon";
+        const isExternal = r.classification === "external";
+        const sessTag = isAnon || isExternal ? "  " : (loadSession(r.company) ? "🔐" : "🚫");
         const probeOK = r.classification === "verified-real" || r.classification === "external";
         const icon = r.already_verified && !probeOK ? "⚠" : ICON[r.classification];
-        console.log(`  ${icon} ${r.company.padEnd(width)}  ${tag.padEnd(4)} ${r.classification.padEnd(17)}${vTag}  ${r.detail}`);
+        console.log(`  ${icon} ${r.company.padEnd(width)} ${sessTag} ${tag.padEnd(4)} ${r.classification.padEnd(17)}${vTag}  ${r.detail}`);
       }
     }
     console.log(`\n  Tally:`);
