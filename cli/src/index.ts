@@ -192,6 +192,9 @@ USAGE
   job-pro list [--compact]            list all 50 companies + source family
   job-pro status [--compact]          survey profile / sessions / memory / chrome
   job-pro selftest [--compact]        end-to-end check: search → schema → echo-submit
+  job-pro recon [--companies a,b,c]   probe every adapter's submit_endpoint
+                                      (classifies as verified-real / 404 /
+                                      html-fallthrough / external)
   job-pro profile init [--interactive] [--force]
                                       write ~/.jobpro/profile.json
                                       --interactive fills it via prompts.
@@ -1377,6 +1380,115 @@ async function main() {
   if (cmd === "status") {
     const compact = args.includes("--compact");
     printStatus(compact);
+    return;
+  }
+  if (cmd === "recon") {
+    // Probe every adapter's submit_endpoint anonymously and classify the
+    // response. Catches upstream URL drift (the path went 404 because
+    // upstream renamed it) and is the same probe routine I used by hand
+    // to populate endpoint_verified for the 15 verified adapters.
+    const compact = args.includes("--compact");
+    const { args: aCompanies, value: companiesStr } = popFlagValue(args, "--companies");
+    void aCompanies;
+    const scope: string[] = companiesStr
+      ? companiesStr.split(",").map((s) => s.trim()).filter(Boolean)
+      : Object.keys(ADAPTERS);
+
+    type ReconResult = {
+      company: string;
+      submit_kind?: string;
+      submit_endpoint?: string;
+      status?: number;
+      classification: "verified-real" | "speculative-404" | "html-fallthrough" | "external" | "no-endpoint" | "probe-error";
+      detail: string;
+      /** Schema-declared verification (already a known-good route). */
+      already_verified?: boolean;
+    };
+    function classify(status: number, body: string, contentType: string): ReconResult["classification"] {
+      const isHTML = contentType.includes("html") || body.trim().startsWith("<");
+      if (status === 404) return isHTML ? "html-fallthrough" : "speculative-404";
+      if (isHTML) return "html-fallthrough";
+      // 401/403/200-with-error-body/405/4xx-with-business-error = real route
+      return "verified-real";
+    }
+
+    const results = await Promise.all(
+      scope.map(async (company): Promise<ReconResult> => {
+        const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[company];
+        if (!adapter) return { company, classification: "probe-error", detail: "unknown adapter" };
+        if (typeof adapter.fetchApplicationSchema !== "function") {
+          return { company, classification: "probe-error", detail: "no fetchApplicationSchema" };
+        }
+        // Use a placeholder post_id so we don't have to search.
+        let schema: ApplyFormSchema | null = null;
+        try {
+          const r = (await adapter.fetchApplicationSchema("recon-probe")) as { ok?: boolean; schema?: ApplyFormSchema };
+          if (r.ok && r.schema) schema = r.schema;
+        } catch {}
+        // Most bespoke adapters return a valid schema even on bogus id,
+        // because they build it from the id alone. The ones that need a
+        // real id (mihoyo etc.) fall through to "fetch a real id".
+        if (!schema) {
+          try {
+            const list = (await adapter.searchPositions({ pageSize: 1 })) as { ok?: boolean; positions?: Array<{ post_id?: string }> };
+            const pid = list.positions?.[0]?.post_id;
+            if (pid) {
+              const r = (await adapter.fetchApplicationSchema(pid)) as { ok?: boolean; schema?: ApplyFormSchema };
+              if (r.ok && r.schema) schema = r.schema;
+            }
+          } catch {}
+        }
+        if (!schema) return { company, classification: "probe-error", detail: "schema unavailable" };
+        if (schema.submit_kind === "external") {
+          return { company, submit_kind: schema.submit_kind, classification: "external", detail: "structurally external (Liepin / WeChat)" };
+        }
+        const url = schema.submit_endpoint ?? "";
+        if (!url) return { company, submit_kind: schema.submit_kind, classification: "no-endpoint", detail: "no submit_endpoint in schema" };
+        try {
+          const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          const body = await r.text();
+          const ct = r.headers.get("content-type") ?? "";
+          return {
+            company,
+            submit_kind: schema.submit_kind,
+            submit_endpoint: url,
+            status: r.status,
+            classification: classify(r.status, body, ct),
+            detail: body.slice(0, 80).replace(/\s+/g, " "),
+            already_verified: schema.endpoint_verified === true,
+          };
+        } catch (err) {
+          return { company, submit_kind: schema.submit_kind, submit_endpoint: url, classification: "probe-error", detail: err instanceof Error ? err.message : String(err) };
+        }
+      })
+    );
+
+    if (compact) {
+      console.log(JSON.stringify({ probed: results.length, results }));
+      return;
+    }
+    const tally = new Map<string, number>();
+    for (const r of results) tally.set(r.classification, (tally.get(r.classification) ?? 0) + 1);
+    const width = Math.max(...results.map((r) => r.company.length));
+    const ICON: Record<ReconResult["classification"], string> = {
+      "verified-real": "✓",
+      "speculative-404": "✗",
+      "html-fallthrough": "✗",
+      "external": "⛔",
+      "no-endpoint": "·",
+      "probe-error": "?",
+    };
+    console.log(`\njob-pro recon — endpoint probe across ${results.length} adapters`);
+    console.log(`  (anon POST with {} body; schema-verified adapters tagged 🟢)\n`);
+    for (const r of results) {
+      const tag = r.status ? `${r.status}` : "—";
+      const vTag = r.already_verified ? " 🟢" : "";
+      console.log(`  ${ICON[r.classification]} ${r.company.padEnd(width)}  ${tag.padEnd(4)} ${r.classification.padEnd(17)}${vTag}  ${r.detail}`);
+    }
+    console.log(`\n  Tally:`);
+    for (const [k, v] of [...tally.entries()].sort()) {
+      console.log(`    ${k.padEnd(20)}  ${v}`);
+    }
     return;
   }
   if (cmd === "selftest") {

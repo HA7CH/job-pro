@@ -4,6 +4,37 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.42 — \`job-pro recon\` — automated endpoint-probe tool
+
+The manual probe I've been running by hand for 1.0.34 / 1.0.38 / 1.0.40
+is now a CLI verb:
+
+\`\`\`
+$ job-pro recon --companies xpeng,tencent,meituan,unitree,moonshot
+  ✗ xpeng     401  html-fallthrough  🟢  HTTP Basic: Access denied.
+  ✗ tencent   404  speculative-404       {"status":404,"error":"Not Found",…
+  ✓ meituan   200  verified-real     🟢  {"data":{"errorCode":401,"message":"未登陆"},…
+  ⛔ unitree   —    external               structurally external (Liepin / WeChat)
+  ✓ moonshot  200  verified-real     🟢  {"data":"lf+lS/3Zcwp1g9hafFdr…",…
+\`\`\`
+
+For each adapter:
+1. Pull the schema (via search → fetchApplicationSchema).
+2. POST \`{}\` to \`schema.submit_endpoint\` anonymously.
+3. Classify the response:
+   * \`verified-real\` — auth gate / business error / encrypted envelope.
+   * \`speculative-404\` — backend says "no such route".
+   * \`html-fallthrough\` — SPA's 404 page (often masks the real probe info).
+   * \`external\` — structurally external (Liepin / WeChat).
+   * \`no-endpoint\` / \`probe-error\` — error cases.
+4. Tag with 🟢 if the schema already declares \`endpoint_verified: true\`
+   (which signals "even if probe looks wrong here, the path is known-good
+   via end-to-end smoke" — happens for multipart-anon, where empty JSON
+   doesn't match the multipart expectation but the URL is correct).
+
+\`--companies\` to scope, \`--compact\` for JSON. Use this on every release
+to catch upstream URL drift.
+
 ## 1.0.41 — docs/auto-apply tally synced (15 verified)
 
 \`docs/auto-apply.md\` tally was last touched in 1.0.37 (3 verified).
