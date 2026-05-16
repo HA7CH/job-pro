@@ -77,10 +77,15 @@ import {
   memoryEvent,
   memoryClear,
 } from "./memory.js";
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { createRequire as require_createRequire } from "node:module";
+function require_module(): { createRequire: typeof require_createRequire } {
+  return { createRequire: require_createRequire };
+}
 
-const VERSION = "1.0.2";
+const VERSION = "1.0.3";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -161,6 +166,7 @@ job-pro — query Chinese big-tech campus recruiting from your terminal
 USAGE
   job-pro <company> <verb> [options]
   job-pro list [--compact]            list all 50 companies + source family
+  job-pro status [--compact]          survey profile / sessions / memory / chrome
   job-pro profile init [--force]      write ~/.jobpro/profile.json template
   job-pro profile show                print the loaded profile
   job-pro --version
@@ -783,6 +789,201 @@ async function runCompany(
   die(`unknown verb: ${verb}. Try \`job-pro help\`.`);
 }
 
+interface StatusReport {
+  profile: {
+    path: string;
+    exists: boolean;
+    filled_standard: string[];
+    missing_standard: string[];
+    custom_keys: number;
+  };
+  sessions: Array<{ adapter: string; path: string; host?: string; captured_at?: string; age_days?: number; cookies?: number; headers?: number }>;
+  memory: {
+    path?: string;
+    field_keys: string[];
+    recent_events: Array<{ ts: string; kind: string; payload: string }>;
+    total_events: number;
+  };
+  chrome: { found: boolean; path?: string; puppeteer_core: boolean };
+  /** Smoke status — populated only when --check is passed (skips heavy network calls otherwise). */
+  smoke?: { read: string; apply: string };
+}
+
+function buildStatusReport(): StatusReport {
+  const homeDir = process.env.JOBPRO_HOME ?? join(homedir(), ".jobpro");
+  const profilePath = process.env.JOB_PRO_PROFILE_PATH ?? join(homeDir, "profile.json");
+  const sessionDir = process.env.JOB_PRO_SESSION_DIR ?? homeDir;
+
+  // Profile state.
+  const filled: string[] = [];
+  const missing: string[] = [];
+  let customKeys = 0;
+  let profileExists = false;
+  if (existsSync(profilePath)) {
+    profileExists = true;
+    try {
+      const p = JSON.parse(readFileSync(profilePath, "utf8")) as Record<string, unknown>;
+      for (const key of ["first_name", "last_name", "email", "phone", "resume_path"]) {
+        const v = p[key];
+        if (typeof v === "string" && v.length > 0) filled.push(key);
+        else missing.push(key);
+      }
+      customKeys = p.custom && typeof p.custom === "object" ? Object.keys(p.custom as object).length : 0;
+    } catch {
+      missing.push("(profile JSON is malformed)");
+    }
+  } else {
+    missing.push("first_name", "last_name", "email", "phone", "resume_path");
+  }
+
+  // Captured sessions in ~/.jobpro/*.session.json
+  const sessions: StatusReport["sessions"] = [];
+  if (existsSync(sessionDir)) {
+    try {
+      for (const f of readdirSync(sessionDir)) {
+        if (!f.endsWith(".session.json")) continue;
+        const adapter = f.slice(0, -".session.json".length);
+        const full = join(sessionDir, f);
+        const stat = statSync(full);
+        const age = (Date.now() - stat.mtimeMs) / (24 * 3600 * 1000);
+        let host: string | undefined;
+        let cookieCount = 0;
+        let headerCount = 0;
+        let capturedAt: string | undefined;
+        try {
+          const j = JSON.parse(readFileSync(full, "utf8")) as { host?: string; cookies?: unknown[]; headers?: Record<string, unknown>; exported_at?: string };
+          host = j.host;
+          cookieCount = Array.isArray(j.cookies) ? j.cookies.length : 0;
+          headerCount = j.headers ? Object.keys(j.headers).length : 0;
+          capturedAt = j.exported_at;
+        } catch {
+          /* malformed — still surface the file */
+        }
+        sessions.push({
+          adapter,
+          path: full,
+          host,
+          captured_at: capturedAt,
+          age_days: Math.round(age * 10) / 10,
+          cookies: cookieCount,
+          headers: headerCount,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Memory snapshot.
+  const memSummary: StatusReport["memory"] = {
+    field_keys: [],
+    recent_events: [],
+    total_events: 0,
+  };
+  try {
+    const memList = memoryList() as { ok?: boolean; path?: string; fields?: Record<string, string>; events?: Array<{ ts: string; kind: string; payload: string }> };
+    if (memList?.path) memSummary.path = memList.path;
+    if (memList?.fields) memSummary.field_keys = Object.keys(memList.fields);
+    if (Array.isArray(memList?.events)) {
+      memSummary.total_events = memList.events.length;
+      memSummary.recent_events = memList.events.slice(-5).reverse();
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Chrome / puppeteer-core availability.
+  const CHROME_CANDIDATES = [
+    process.env.JOB_PRO_CHROME,
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ].filter((p): p is string => typeof p === "string" && p.length > 0);
+  const chromePath = CHROME_CANDIDATES.find((p) => existsSync(p));
+  // puppeteer-core is a runtime dep, but a user could have done --omit=optional
+  // or be running from a fresh checkout. Probe via createRequire because
+  // we're an ESM module without a CJS `require`.
+  let hasPuppeteer = false;
+  try {
+    const { createRequire } = require_module();
+    const req = createRequire(import.meta.url);
+    req.resolve("puppeteer-core");
+    hasPuppeteer = true;
+  } catch {
+    hasPuppeteer = false;
+  }
+
+  return {
+    profile: {
+      path: profilePath,
+      exists: profileExists,
+      filled_standard: filled,
+      missing_standard: missing,
+      custom_keys: customKeys,
+    },
+    sessions,
+    memory: memSummary,
+    chrome: { found: !!chromePath, path: chromePath, puppeteer_core: hasPuppeteer },
+  };
+}
+
+function printStatus(compact: boolean): void {
+  const r = buildStatusReport();
+  if (compact) {
+    console.log(JSON.stringify(r));
+    return;
+  }
+  console.log(`job-pro status (${VERSION})`);
+  console.log();
+  // Profile
+  const filledColor = (r.profile.missing_standard.length === 0 && r.profile.exists) ? "✓" : "✗";
+  console.log(`Profile  ${filledColor}  ${r.profile.path}`);
+  if (!r.profile.exists) {
+    console.log(`         not found — run \`job-pro profile init\``);
+  } else {
+    console.log(`         filled:  ${r.profile.filled_standard.join(", ") || "(none)"}`);
+    if (r.profile.missing_standard.length > 0) {
+      console.log(`         missing: ${r.profile.missing_standard.join(", ")}`);
+    }
+    if (r.profile.custom_keys > 0) {
+      console.log(`         custom:  ${r.profile.custom_keys} keys`);
+    }
+  }
+  console.log();
+  // Sessions
+  if (r.sessions.length === 0) {
+    console.log(`Sessions ✗  no session.json files captured`);
+    console.log(`         install extension/ in Chrome to capture sessions for non-anon adapters.`);
+  } else {
+    console.log(`Sessions ✓  ${r.sessions.length} captured`);
+    for (const s of r.sessions) {
+      const stale = (s.age_days ?? 0) > 30 ? " (STALE — sessions usually expire ~30 days)" : "";
+      console.log(
+        `         ${s.adapter.padEnd(18)} ${s.cookies ?? 0}c+${s.headers ?? 0}h  age=${s.age_days}d${stale}`
+      );
+    }
+  }
+  console.log();
+  // Memory
+  console.log(`Memory   ${r.memory.total_events > 0 ? "✓" : "·"}  ${r.memory.path ?? "(none)"}`);
+  console.log(`         fields=${r.memory.field_keys.length}  events=${r.memory.total_events}`);
+  for (const e of r.memory.recent_events.slice(0, 5)) {
+    console.log(`         ${e.ts}  ${e.kind.padEnd(12)} ${(e.payload ?? "").slice(0, 60)}`);
+  }
+  console.log();
+  // Chrome
+  const ch = r.chrome.found && r.chrome.puppeteer_core ? "✓" : "✗";
+  console.log(`Chrome   ${ch}  ${r.chrome.path ?? "(not found)"}`);
+  console.log(`         puppeteer-core: ${r.chrome.puppeteer_core ? "installed" : "missing"}`);
+  if (!r.chrome.found || !r.chrome.puppeteer_core) {
+    console.log(`         needed for: lilith adapter, --proxy-server geo-bypass (hikvision).`);
+  }
+}
+
 function printCompanyList(compact: boolean): void {
   // Validate the directory still matches the ADAPTERS map. If a company
   // appears in only one place, treat it as a bug.
@@ -848,6 +1049,11 @@ async function main() {
   if (cmd === "list" || cmd === "companies") {
     const compact = args.includes("--compact");
     printCompanyList(compact);
+    return;
+  }
+  if (cmd === "status") {
+    const compact = args.includes("--compact");
+    printStatus(compact);
     return;
   }
   if (cmd === "profile") {
