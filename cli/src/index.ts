@@ -53,6 +53,7 @@ import * as cambricon from "./cambricon.js";
 import type { CompanyAdapter } from "./adapter.js";
 import {
   loadProfile,
+  loadSession,
   profileTemplate,
   stageApplication,
   submitApplication,
@@ -69,7 +70,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.1";
+const VERSION = "0.9.2";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -466,21 +467,10 @@ async function runCompany(
         compact
       );
     }
-    if (reallySubmit) {
-      return emit(
-        {
-          ok: false,
-          source: company,
-          post_id: postId,
-          message:
-            `--really-submit is intentionally disabled until per-ATS submission flows ` +
-            `are validated end-to-end against live boards. Use --debug-submit-to <url> ` +
-            `to verify the multipart wire format against your own echo server (e.g. ` +
-            `https://httpbin.org/post) without spamming the real ATS.`,
-        },
-        compact
-      );
-    }
+    // Note: we DON'T early-return on reallySubmit here — we fall through
+    // to stage the application first, then re-gate before actually posting.
+    // This lets the user verify the staged payload one last time even
+    // when they pass --really-submit by accident.
     const schemaResult = await fetchSchema.call(adapter, postId);
     const sr = schemaResult as { ok?: boolean; schema?: ApplyFormSchema; message?: string };
     if (!sr.ok || !sr.schema) {
@@ -501,28 +491,98 @@ async function runCompany(
       );
     }
     const staged = stageApplication(sr.schema, prof.profile);
+    const session = loadSession(company);
 
-    // Mode selection: --debug-submit-to <url> overrides dry-run.
+    // Mode selection: --debug-submit-to <url> overrides everything.
     if (debugUrl) {
       const result = await submitApplication(staged, { kind: "debug", url: debugUrl });
       return emit({ mode: "debug-submit", staged, result }, compact);
     }
 
+    // --really-submit: actually hit the upstream endpoint. Guarded by both
+    // an env-var attestation and (for non-anon adapters) a session.json.
+    if (reallySubmit) {
+      const understood = process.env.JOB_PRO_I_UNDERSTAND_REAL_SUBMIT === "yes";
+      if (!understood) {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            mode: "really-submit-blocked",
+            staged,
+            message:
+              `--really-submit is gated by an env-var attestation. To unlock, set ` +
+              `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes in your shell. This submission will ` +
+              `POST a real application to ${staged.submit_endpoint}; doing so without a ` +
+              `valid resume / answers is spam against the company's recruiters.`,
+          },
+          compact
+        );
+      }
+      if (!staged.ready) {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            mode: "really-submit-blocked",
+            staged,
+            message: `${staged.unanswered_required.length} required field(s) still unanswered; refusing to submit incomplete application`,
+          },
+          compact
+        );
+      }
+      // Anon adapters (Greenhouse / Lever) don't need session.json.
+      // Bespoke / Beisen / Moka / Feishu adapters do — bail with a hint
+      // pointing at the browser extension.
+      const isAnonFamily =
+        staged.source.startsWith("boards-api.greenhouse.io/") ||
+        staged.source.startsWith("api.lever.co/");
+      if (!isAnonFamily && !session) {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            mode: "really-submit-blocked",
+            staged,
+            message:
+              `no captured session at ~/.jobpro/${company}.session.json. Install the ` +
+              `extension/ directory in Chrome, log into the careers site, click Export, ` +
+              `then mv ~/Downloads/jobpro/${company}.session.json ~/.jobpro/`,
+          },
+          compact
+        );
+      }
+      const result = await submitApplication(staged, { kind: "upstream" }, { session });
+      return emit({ mode: "really-submit", staged, session_used: !!session, result }, compact);
+    }
+
     // Default: dry-run print, no network.
     if (compact) {
-      return emit({ mode: "dry-run", staged }, compact);
+      return emit({ mode: "dry-run", staged, has_session: !!session }, compact);
     }
     console.log(formatStaged(staged));
+    if (session) {
+      console.log(`\nSession captured (~/.jobpro/${company}.session.json): ${session.cookies.length} cookies + ${Object.keys(session.headers).length} auth headers.`);
+    }
     if (!staged.ready) {
       console.log(
         `\nFill the unanswered required fields in ${profileTemplate().path} ` +
           `(profile.custom.<name> for unknown fields), then re-run.`
       );
     } else {
+      const isAnon =
+        staged.source.startsWith("boards-api.greenhouse.io/") ||
+        staged.source.startsWith("api.lever.co/");
       console.log(
-        `\nDry-run complete. Use --debug-submit-to https://httpbin.org/post to ` +
-          `verify the multipart wire format. --really-submit will be enabled per-ATS ` +
-          `once each family's submission flow has been validated end-to-end.`
+        `\nDry-run complete. To actually submit:\n` +
+          `  • --debug-submit-to https://httpbin.org/post  — verify wire format\n` +
+          `  • JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes job-pro ${company} apply ${postId} --really-submit\n` +
+          (isAnon
+            ? `  ${company} is Greenhouse/Lever (anonymous submission, no session needed).\n`
+            : `  ${company} needs ~/.jobpro/${company}.session.json — capture via the browser extension.\n`)
       );
     }
     void aDebug; // silence "unused" — `args` flow goes through popFlagValue

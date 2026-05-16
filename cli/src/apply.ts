@@ -19,6 +19,52 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
 const PROFILE_PATH = process.env.JOB_PRO_PROFILE_PATH ?? join(homedir(), ".jobpro", "profile.json");
+const SESSION_DIR = process.env.JOB_PRO_SESSION_DIR ?? join(homedir(), ".jobpro");
+
+// ---------- session.json (exported by the browser extension) ----------
+
+export interface SessionCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  expiresAt?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: string;
+}
+
+export interface CapturedSession {
+  adapter: string;
+  host: string;
+  exported_at: string;
+  headers: Record<string, string>;
+  cookies: SessionCookie[];
+}
+
+/** Read a captured session for an adapter, or null if none exists. */
+export function loadSession(adapterKey: string): CapturedSession | null {
+  const path = join(SESSION_DIR, `${adapterKey}.session.json`);
+  if (!existsSync(path)) return null;
+  try {
+    const raw = readFileSync(path, "utf8");
+    return JSON.parse(raw) as CapturedSession;
+  } catch {
+    return null;
+  }
+}
+
+/** Convert a CapturedSession into a single Cookie header string. */
+export function serializeCookieHeader(session: CapturedSession, targetHost?: string): string {
+  const cookies = session.cookies.filter((c) => {
+    if (!targetHost) return true;
+    if (!c.domain) return true;
+    // RFC-style domain match: ".example.com" matches any subdomain.
+    const dom = c.domain.startsWith(".") ? c.domain.slice(1) : c.domain;
+    return targetHost === dom || targetHost.endsWith("." + dom);
+  });
+  return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+}
 
 export interface ResumeProfile {
   first_name: string;
@@ -294,9 +340,21 @@ export interface SubmitResult {
   message: string;
 }
 
+export interface SubmitOptions {
+  /**
+   * Captured session from the browser extension. If provided, its cookies
+   * + headers are merged into the request. Mandatory for any adapter
+   * whose submit endpoint requires a logged-in candidate session.
+   */
+  session?: CapturedSession | null;
+  /** Extra headers (e.g. Referer) to append on top of session.headers. */
+  extraHeaders?: Record<string, string>;
+}
+
 export async function submitApplication(
   staged: StagedApplication,
-  target: SubmitTarget
+  target: SubmitTarget,
+  options: SubmitOptions = {}
 ): Promise<SubmitResult> {
   if (!staged.submit_endpoint) {
     return {
@@ -322,17 +380,46 @@ export async function submitApplication(
 
   const url = target.kind === "debug" ? target.url : staged.submit_endpoint;
   const fd = await buildMultipartForm(staged);
+
+  const headers: Record<string, string> = {
+    // Don't set Content-Type — fetch/undici picks the correct
+    // multipart/form-data boundary for the FormData instance.
+    Accept: "application/json, text/plain, */*",
+    "User-Agent": "job-pro/0.9 (https://github.com/HA7CH/job-pro)",
+  };
+
+  // Layer in captured-session headers (Cookie, X-Xsrf-Token, etc.) only
+  // when we're actually hitting the upstream endpoint. Debug echo endpoints
+  // (httpbin) don't need them and might log them, so we strip there.
+  if (target.kind === "upstream" && options.session) {
+    const targetHost = (() => {
+      try {
+        return new URL(url).hostname;
+      } catch {
+        return undefined;
+      }
+    })();
+    const cookieHeader = serializeCookieHeader(options.session, targetHost);
+    if (cookieHeader) headers.Cookie = cookieHeader;
+    for (const [k, v] of Object.entries(options.session.headers ?? {})) {
+      // Skip cookie — already handled. Skip content-type — let undici set
+      // the multipart boundary one. Skip authorization-bearer only if the
+      // upstream's auth model isn't cookie-based.
+      if (k === "cookie" || k === "content-type") continue;
+      // Normalise to canonical casing — fetch's Headers preserves what we set.
+      headers[k] = v;
+    }
+  }
+
+  if (options.extraHeaders) {
+    Object.assign(headers, options.extraHeaders);
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {
       method: staged.submit_method ?? "POST",
-      headers: {
-        // Don't set Content-Type — fetch/undici picks the correct
-        // multipart/form-data boundary for the FormData instance.
-        Accept: "application/json, text/plain, */*",
-        "User-Agent":
-          "job-pro/0.9 (https://github.com/HA7CH/job-pro)",
-      },
+      headers,
       body: fd,
     });
   } catch (err) {
