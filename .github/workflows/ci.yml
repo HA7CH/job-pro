@@ -21,10 +21,11 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - run: npm ci
       - run: npm run build
-      # Smoke tests hit 50 live upstream APIs that are China-hosted;
-      # GitHub Actions runners in the US/EU get geo-blocked on most of them.
-      # tsc is the load-bearing check here — catches type drift on every PR.
-      # Run the smoke test locally before publishing.
+      # Pure unit tests (no network) — saveProfile / applyFormFile / regex
+      # validators. The 3 live-network smoke suites (test, test:apply,
+      # test:debug-submit) hit China-hosted careers APIs that GitHub Actions
+      # runners get geo-blocked on, so they only run locally.
+      - run: npm run test:unit
 
   web-build:
     runs-on: ubuntu-latest

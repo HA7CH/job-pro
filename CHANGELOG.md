@@ -4,6 +4,30 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.26 — \`test:unit\` (no-network) + wired into CI
+
+New \`pnpm test:unit\` exercises everything you can verify without
+hitting an upstream service:
+
+* \`saveProfile\` + \`loadProfileRaw\` round-trip (1.0.10 / 1.0.16).
+* \`applyFormFile\` flat-shape + FormTemplate-shape merge (1.0.1).
+* Missing-file / invalid-JSON refusal paths.
+* \`sessionAgeDays\` math (1.0.21 gate).
+* email / phone regex validators (1.0.16 \`profile lint\`).
+
+**26 pass / 0 fail in ~600ms.** Sub-second + deterministic, so CI
+runs it on every push (the 3 live-network smokes stay local —
+geo-blocked from GH runners).
+
+Test matrix as of 1.0.26:
+
+| Layer | Cmd | Where |
+|-------|-----|-------|
+| Unit (helpers, regexes) | \`pnpm test:unit\` | CI + local |
+| Phase 1 read paths (50) | \`pnpm test\` | local only |
+| Phase 2 schema fetch (50) | \`pnpm test:apply\` | local only |
+| Submit wire format (7) | \`pnpm test:debug-submit\` | local only |
+
 ## 1.0.25 — single source of truth for submit_kind per adapter
 
 Adds \`SUBMIT_KIND_BY_FAMILY\` + \`SUBMIT_KIND_OVERRIDES\` (just unitree
