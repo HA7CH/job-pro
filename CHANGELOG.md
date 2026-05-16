@@ -4,6 +4,29 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.80 — \`VERSION\` reads from package.json (was stuck at 1.0.7)
+
+The \`VERSION\` const in \`index.ts\` was hardcoded as \`"1.0.7"\` since
+the start of this ralph-loop. \`job-pro --version\` and
+\`job-pro status\` both reported the stale string for **all 73 subsequent
+patch releases**.
+
+Fixed: VERSION is now read at module load from the bundled
+\`package.json\` (cli/dist/.. or cli/..). If the resolution fails the
+sentinel \`"unknown"\` is returned. Next \`npm publish\` bumps everywhere.
+
+Verified locally:
+\`\`\`
+$ node dist/index.js --version
+1.0.79
+
+$ node dist/index.js status
+job-pro status (1.0.79)
+\`\`\`
+
+This is the kind of drift bug that hides forever in CLI infrastructure
+— now self-healing via package.json read.
+
 ## 1.0.79 — \`ENDPOINT_VERIFIED\` set locked in CI via unit-smoke
 
 Extracted the static \`ENDPOINT_VERIFIED\` set from \`index.ts\` to a

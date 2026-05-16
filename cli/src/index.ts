@@ -88,7 +88,26 @@ function require_module(): { createRequire: typeof require_createRequire } {
   return { createRequire: require_createRequire };
 }
 
-const VERSION = "1.0.7";
+// Read version from package.json at module load so it can never drift
+// from the publish. Tries the bundled package.json (cli/package.json
+// next to dist/) first, then falls back to a hardcoded sentinel.
+const VERSION = ((): string => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // cli/dist/index.js → cli/package.json is two levels up
+    const candidates = [
+      join(here, "..", "package.json"),
+      join(here, "..", "..", "package.json"),
+    ];
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        const pkg = JSON.parse(readFileSync(p, "utf8")) as { version?: string; name?: string };
+        if (pkg.name === "job-pro" && typeof pkg.version === "string") return pkg.version;
+      }
+    }
+  } catch { /* fall through */ }
+  return "unknown";
+})();
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
