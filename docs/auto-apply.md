@@ -106,14 +106,14 @@ Status legend: `✅` apply schema wired + submit endpoint known + verified end-t
   | Family            | Count | Adapters |
   |-------------------|------:|----------|
   | multipart-anon    |     3 | xpeng, weride, hoyoverse |
-  | multipart-session |    18 | alibaba, pdd, meituan, mihoyo, liauto, sf, netease, didi, pingan, byd, bilibili, xiaohongshu, baidu, tencent, jd, oppo, trip, kuaishou, huawei, antgroup |
-  | feishu-3-step     |     9 | xiaomi, nio, minimax, zhipu, iqiyi, agibot, zerooneai, baichuan, bytedance, lilith (via CDP) |
+  | multipart-session |    20 | alibaba, pdd, meituan, mihoyo, liauto, sf, netease, didi, pingan, byd, bilibili, xiaohongshu, baidu, tencent, jd, oppo, trip, kuaishou, huawei, antgroup |
+  | feishu-3-step     |     9 | xiaomi, nio, minimax, zhipu, iqiyi, agibot, zerooneai, baichuan, bytedance |
   | moka-aes          |     8 | moonshot, megvii, deepseek, galaxyuniversal, stepfun, cambricon, geely, weibo (proxies to Moka) |
   | beisen-italent    |     2 | iflytek, vivo |
   | beisen-wecruit    |     2 | sensetime, horizonrobotics |
+  | cdp-real-browser  |     1 | lilith (uses Feishu's `/user/applications` apply route, but executor drives a puppeteer browser to bypass ByteDance Tengine `_signature` on reads) |
 
-  (Counts don't sum to 45 because lilith is in both feishu-3-step
-  apply path and uses CDP for read.)
+  Sum: 3 + 20 + 9 + 8 + 2 + 2 + 1 = **45**.
 
 * **5 ⛔ external** — Liepin recruiter chat × 4 (hikvision / cicc /
   cainiao / webank), Unitree WeChat QR × 1. Structurally non-API

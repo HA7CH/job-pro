@@ -4,6 +4,21 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.75 — docs/auto-apply tally arithmetic fix (45 verified)
+
+The family-count table in \`docs/auto-apply.md\` had two issues:
+* multipart-session row said 18, but its adapter list had 20 names.
+* lilith was listed under feishu-3-step (so the row count was 9) but
+  also has its own \`cdp-real-browser\` submit_kind — caused the row
+  sums to not equal 45.
+
+Fixed: multipart-session: 18 → 20. Added a dedicated cdp-real-browser
+row (1 = lilith) and removed lilith from the feishu-3-step row.
+Sum now: 3 + 20 + 9 + 8 + 2 + 2 + 1 = **45**. ✓
+
+This matches \`job-pro list --compact | jq -c 'group_by(.submit_kind)
+| map({k: .[0].submit_kind, n: length})'\`.
+
 ## 1.0.74 — \`executeBeisenWecruit\` always sends X-Requested-With
 
 1.0.63 discovered that Beisen Wecruit's Nginx routing falls through
