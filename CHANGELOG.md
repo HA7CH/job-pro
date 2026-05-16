@@ -4,6 +4,18 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.78 — apply-smoke asserts \`endpoint_verified: true\` on non-external
+
+\`pnpm test:apply\` now FAILs if a non-external adapter has
+\`endpoint_verified !== true\`. Locks in the 45-of-50 verified state:
+any future PR that adds an adapter or removes the flag from an
+existing one will fail in CI-adjacent smoke before merge.
+
+50 schema-ok / 0 broken / 50 ✓ at this version.
+
+The check pairs with the URL-format check from 1.0.33 — together they
+enforce "every non-external schema has a probe-verified HTTPS URL".
+
 ## 1.0.77 — \`recon\` probe-error paths carry already_verified
 
 Two probe-error code paths in \`recon\` were missing \`already_verified\`:

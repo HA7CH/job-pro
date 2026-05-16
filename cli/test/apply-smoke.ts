@@ -160,7 +160,7 @@ async function probe(name: string, adapter: Adapter): Promise<Result> {
       reason: `fetchApplicationSchema threw: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const sr = schemaResp as { ok?: boolean; message?: string; schema?: { submit_kind?: string; questions?: unknown[]; submit_endpoint?: string } };
+  const sr = schemaResp as { ok?: boolean; message?: string; schema?: { submit_kind?: string; questions?: unknown[]; submit_endpoint?: string; endpoint_verified?: boolean } };
   // For external / Liepin-backed adapters and placeholder post_ids, an
   // ok:false is acceptable — we just want the right error shape.
   if (sr.ok !== true) {
@@ -193,6 +193,13 @@ async function probe(name: string, adapter: Adapter): Promise<Result> {
       }
     } catch {
       return { name, tag: "FAIL", submit_kind: kind, reason: `submit_endpoint not a valid URL: ${endpoint}` };
+    }
+    // 1.0.78: every non-external adapter must declare endpoint_verified.
+    // This is now true for all 45 (anon-smoked or anon-probed). Catches
+    // accidental regressions if a contributor forgets to set the flag on
+    // a new adapter or removes it from an existing one.
+    if (sr.schema.endpoint_verified !== true) {
+      return { name, tag: "FAIL", submit_kind: kind, reason: "endpoint_verified not set (non-external adapters should be probe-verified)" };
     }
   }
   return {
