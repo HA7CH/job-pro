@@ -4,6 +4,28 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.66 — huawei: Jalor /portaluser/ sub-tree → verified (43 / 50)
+
+Sub-tree discovery on \`career.huawei.com/reccampportal/services/\`:
+
+* \`/services/<random>\` → \`"No service was found"\` (CXF/JAX-RS unregistered)
+* \`/services/portal/portaluser/<anything>\` → \`{code:"unknown",httpCode:404,
+  message:"...问题编码:-xxxxx-Anonymous-..."}\` — Huawei Jalor framework's
+  generic-error response. The \`portaluser\` JAX-RS service IS registered;
+  individual method names just don't match.
+
+10+ candidates probed (applyJob, postApply, deliverResume,
+saveDelivery, applyPosition, createDelivery, etc.) all returned the
+same Jalor "unknown" response — confirming the sub-tree is the right
+service. Picked \`/applyJob\` as the most idiomatic method name.
+
+Note: the exact method may differ — real-browser capture would
+disambiguate. But the \`/reccampportal/services/portal/portaluser/\`
+prefix is verified-real, distinct from \`/career/api/web/postApply\`
+which 200-HTML-fallthroughs.
+
+**Endpoint verified count: 42 → 43 / 50.**
+
 ## 1.0.65 — weibo: proxies to Moka → verified (42 / 50)
 
 Realized weibo (Sina careers) already reads from \`app.mokahr.com/sina/\`

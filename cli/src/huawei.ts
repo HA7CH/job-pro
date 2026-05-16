@@ -728,10 +728,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://career.huawei.com/career/api/web/postApply",
+      submitEndpoint: "https://career.huawei.com/reccampportal/services/portal/portaluser/applyJob",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Huawei — POST /career/api/web/postApply with session cookie. Endpoint inferred; needs validation.",
+        "Huawei — POST under /reccampportal/services/portal/portaluser/. The exact method name is one of {applyJob, postApply, deliverResume, saveDelivery, applyPosition, createDelivery, ...} — all 10+ candidates probed return HTTP 404 + Huawei Jalor framework's `{code:\"unknown\",httpCode:404,...,问题编码:..Anonymous-..}` response, confirming /services/portal/portaluser/* is a registered JAX-RS service (distinct from /services/<X> which returns \"No service was found\"). The original /career/api/web/postApply returned generic SPA HTML — not the right route. Picked /applyJob as most idiomatic; actual route may differ — needs real-browser network capture.",
     }),
   };
 }

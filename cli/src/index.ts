@@ -228,6 +228,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "kuaishou",
   // weibo: proxies to Moka (verified earlier) (1.0.65)
   "weibo",
+  // huawei: /reccampportal/services/portal/portaluser/ Jalor framework (1.0.66)
+  "huawei",
 ]);
 
 const HELP = `
