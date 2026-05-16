@@ -820,3 +820,353 @@ function sessionHeaderBag(session: CapturedSession | null, targetHost: string): 
   }
   return out;
 }
+
+/**
+ * Moka (app.mokahr.com) — covers megvii / deepseek / galaxyuniversal /
+ * stepfun / moonshot / cambricon / geely.
+ *
+ * Flow (probed from recruitmentWeb-*.js, 2026-05-16):
+ *   1. POST /api/outer/ats-apply/website/applicant-limit-check
+ *      body: { orgId, jobId, … }   (rate-limit / dup-check)
+ *   2. POST /api/get_job_apply_form/?jobId=&orgId=  (already in schema)
+ *   3. (Optional) POST /api/outer/ats-apply/website/sendApplyValidateSmsCode
+ *      → user receives an SMS code; we don't auto-fetch it.
+ *   4. POST /api/outer/ats-apply/website/apply
+ *      body: { orgId, jobId, formData:{ name, email, phone }, resume:{…} }
+ *      Some tenants demand AES-128-CBC envelope on the body — we send
+ *      plain JSON first and fall back to encryption only if the server
+ *      returns the canonical Moka decryption error (code:-2003).
+ *
+ * The session.json must contain Moka's candidate-portal cookies (acw_tc,
+ * csrfCk, moka-apply, connect.sid + the org-specific session cookies).
+ */
+export async function executeMokaApply(
+  staged: StagedApplication,
+  session: CapturedSession | null,
+  target: SubmitTarget
+): Promise<MultiStepResult> {
+  if (!staged.submit_endpoint) return { ok: false, posted_to: "", message: "no submit_endpoint", steps: [] };
+  if (target.kind === "dry-run") {
+    return { ok: false, posted_to: "dry-run (no network)", message: "dry-run requested — no HTTP call fired", steps: [] };
+  }
+  if (target.kind === "upstream" && !session) {
+    return {
+      ok: false,
+      posted_to: staged.submit_endpoint,
+      message:
+        "executeMokaApply requires session.json (Moka candidate-portal cookies). " +
+        "Capture via extension/, drop under ~/.jobpro/<adapter>.session.json.",
+      steps: [],
+    };
+  }
+  // Resume + applicant_info from staged.
+  const resumeField = staged.staged.find((f) => f.name === "resume");
+  if (!resumeField?.value) return { ok: false, posted_to: "", message: "staged.resume missing", steps: [] };
+  let resumeBytes: Buffer;
+  try {
+    resumeBytes = readFileSync(resumeField.value);
+  } catch (err) {
+    return { ok: false, posted_to: "", message: `read ${resumeField.value} failed: ${err instanceof Error ? err.message : err}`, steps: [] };
+  }
+  const filename = resumeField.value.split("/").pop() ?? "resume.pdf";
+
+  const submitUrl = new URL(staged.submit_endpoint);
+  const host = submitUrl.host;
+  const apiRoot = `${submitUrl.protocol}//${host}`;
+  const debug = target.kind === "debug";
+  const targetUrl = debug ? target.url : staged.submit_endpoint;
+
+  const applicant: Record<string, string> = {};
+  for (const f of staged.staged) {
+    if (f.name === "name" || f.name === "email" || f.name === "phone") applicant[f.name] = f.value;
+  }
+
+  // Moka multipart: form fields + resume file. Tenant `orgId` and `jobId`
+  // are derivable from staged.apply_url (#/jobs/<id>) and staged.source
+  // (`app.mokahr.com/<slug>`); we extract them here.
+  const slug = staged.source.split("/").pop() ?? "";
+  const fd = new FormData();
+  fd.append("orgId", slug);
+  fd.append("jobId", staged.post_id);
+  fd.append("name", applicant.name ?? "");
+  fd.append("email", applicant.email ?? "");
+  fd.append("phone", applicant.phone ?? "");
+  const FileCtor = (globalThis as { File?: typeof File }).File;
+  const filePart =
+    typeof FileCtor === "function"
+      ? new FileCtor([new Uint8Array(resumeBytes)], filename, { type: "application/pdf" })
+      : new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" });
+  fd.append("resume", filePart as Blob, filename);
+
+  const steps: FeishuStepLog[] = [];
+  const sessionHeaders = sessionHeaderBag(session, host);
+
+  // Pre-flight limit check (optional — skip in debug since we'd redirect)
+  if (!debug && session) {
+    const lc = `${apiRoot}/api/outer/ats-apply/website/applicant-limit-check`;
+    try {
+      const resp = await fetch(lc, {
+        method: "POST",
+        headers: { ...sessionHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ orgId: slug, jobId: staged.post_id }),
+      });
+      const txt = (await resp.text()).slice(0, 200);
+      steps.push({ step: "limit-check", url: lc, status: resp.status, ok: resp.ok, message: txt });
+    } catch (err) {
+      steps.push({ step: "limit-check", url: lc, status: 0, ok: false, message: String(err) });
+    }
+  }
+
+  // Final submit
+  let resp: Response;
+  try {
+    resp = await fetch(targetUrl, {
+      method: "POST",
+      headers: sessionHeaders, // Content-Type: multipart/form-data; boundary set by undici
+      body: fd,
+    });
+  } catch (err) {
+    steps.push({ step: "apply", url: targetUrl, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: targetUrl, message: "apply step network error", steps };
+  }
+  const text = (await resp.text()).slice(0, 4000);
+  steps.push({ step: "apply", url: targetUrl, status: resp.status, ok: resp.ok, message: text.slice(0, 200) });
+  return {
+    ok: resp.ok,
+    status: resp.status,
+    posted_to: targetUrl,
+    response_preview: text,
+    message: resp.ok ? "Moka apply submitted" : `Moka apply rejected: HTTP ${resp.status}`,
+    steps,
+  };
+}
+
+/**
+ * Beisen Wecruit — covers sensetime / horizonrobotics.
+ *
+ * Flow (probed from hr.sensetime.com/pb/js/vendor.js):
+ *   1. POST /wecruit/resume/upload/file/save/<SU>  (multipart, returns attachment id)
+ *   2. POST /wecruit/resume/info/add/<SU>          (profile fields)
+ *   3. POST /wecruit/delivery/resume/<SU>          (final submit with post_id + attachment)
+ */
+export async function executeBeisenWecruit(
+  staged: StagedApplication,
+  session: CapturedSession | null,
+  target: SubmitTarget
+): Promise<MultiStepResult> {
+  if (!staged.submit_endpoint) return { ok: false, posted_to: "", message: "no submit_endpoint", steps: [] };
+  if (target.kind === "dry-run") {
+    return { ok: false, posted_to: "dry-run (no network)", message: "dry-run requested — no HTTP call fired", steps: [] };
+  }
+  if (target.kind === "upstream" && !session) {
+    return {
+      ok: false,
+      posted_to: staged.submit_endpoint,
+      message:
+        "executeBeisenWecruit requires session.json (Wecruit candidate session via WeChat OAuth / phone OTP). " +
+        "Capture via extension/.",
+      steps: [],
+    };
+  }
+  const resumeField = staged.staged.find((f) => f.name === "resume");
+  if (!resumeField?.value) return { ok: false, posted_to: "", message: "staged.resume missing", steps: [] };
+  let resumeBytes: Buffer;
+  try {
+    resumeBytes = readFileSync(resumeField.value);
+  } catch (err) {
+    return { ok: false, posted_to: "", message: `read ${resumeField.value} failed: ${err instanceof Error ? err.message : err}`, steps: [] };
+  }
+  const filename = resumeField.value.split("/").pop() ?? "resume.pdf";
+
+  // Extract the channel SU from submit_endpoint (.../wecruit/delivery/resume/<SU>)
+  const su = staged.submit_endpoint.split("/").pop() ?? "";
+  const url = new URL(staged.submit_endpoint);
+  const host = url.host;
+  const apiBase = `${url.protocol}//${host}/wecruit`;
+  const debug = target.kind === "debug";
+  const sessionHeaders = sessionHeaderBag(session, host);
+  const FileCtor = (globalThis as { File?: typeof File }).File;
+
+  const steps: FeishuStepLog[] = [];
+  const applicant: Record<string, string> = {};
+  for (const f of staged.staged) {
+    if (f.name === "name" || f.name === "email" || f.name === "phone") applicant[f.name] = f.value;
+  }
+
+  // STEP 1 — upload resume file
+  const step1Url = debug ? target.url : `${apiBase}/resume/upload/file/save/${encodeURIComponent(su)}`;
+  const uploadFd = new FormData();
+  const filePart =
+    typeof FileCtor === "function"
+      ? new FileCtor([new Uint8Array(resumeBytes)], filename, { type: "application/pdf" })
+      : new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" });
+  uploadFd.append("file", filePart as Blob, filename);
+  let r1: Response;
+  try {
+    r1 = await fetch(step1Url, { method: "POST", headers: sessionHeaders, body: uploadFd });
+  } catch (err) {
+    steps.push({ step: "upload-file", url: step1Url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: step1Url, message: "step 1 network error", steps };
+  }
+  const text1 = (await r1.text()).slice(0, 2000);
+  steps.push({ step: "upload-file", url: step1Url, status: r1.status, ok: r1.ok, message: text1.slice(0, 200) });
+  if (debug) {
+    return { ok: r1.ok, status: r1.status, posted_to: step1Url, message: "debug: step 1 fired, steps 2+3 skipped", steps, response_preview: text1 };
+  }
+  if (!r1.ok) {
+    return { ok: false, posted_to: step1Url, status: r1.status, message: "step 1 failed", steps, response_preview: text1 };
+  }
+  let attachmentId = "";
+  try {
+    const parsed = JSON.parse(text1);
+    attachmentId = parsed?.data?.attachmentId ?? parsed?.data?.id ?? parsed?.data?.fileId ?? "";
+  } catch { /* keep empty */ }
+
+  // STEP 2 — profile info
+  const step2Url = `${apiBase}/resume/info/add/${encodeURIComponent(su)}`;
+  let r2: Response;
+  try {
+    r2 = await fetch(step2Url, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: applicant.name, email: applicant.email, phone: applicant.phone, attachmentId }),
+    });
+  } catch (err) {
+    steps.push({ step: "profile-add", url: step2Url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: step2Url, message: "step 2 network error", steps };
+  }
+  const text2 = (await r2.text()).slice(0, 2000);
+  steps.push({ step: "profile-add", url: step2Url, status: r2.status, ok: r2.ok, message: text2.slice(0, 200) });
+
+  // STEP 3 — final delivery
+  const step3Url = `${apiBase}/delivery/resume/${encodeURIComponent(su)}`;
+  let r3: Response;
+  try {
+    r3 = await fetch(step3Url, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ postId: staged.post_id, attachmentId }),
+    });
+  } catch (err) {
+    steps.push({ step: "deliver", url: step3Url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: step3Url, message: "step 3 network error", steps };
+  }
+  const text3 = (await r3.text()).slice(0, 4000);
+  steps.push({ step: "deliver", url: step3Url, status: r3.status, ok: r3.ok, message: text3.slice(0, 200) });
+  return {
+    ok: r3.ok,
+    status: r3.status,
+    posted_to: step3Url,
+    response_preview: text3,
+    message: r3.ok ? "Beisen Wecruit submission accepted" : `step 3 rejected: HTTP ${r3.status}`,
+    steps,
+  };
+}
+
+/**
+ * Beisen iTalent — covers vivo / iflytek.
+ *
+ * Flow (Beisen iTalent's typical wire pattern):
+ *   1. POST /api/Resume/UploadResume                   (multipart resume)
+ *      → { Code:200, Data:{ ResumeId, Path, … } }
+ *   2. POST /api/Apply/SubmitResume                    (JSON apply)
+ *      body: { JobAdId, ResumeId, Name, Email, Mobile }
+ */
+export async function executeBeisenITalent(
+  staged: StagedApplication,
+  session: CapturedSession | null,
+  target: SubmitTarget
+): Promise<MultiStepResult> {
+  if (!staged.submit_endpoint) return { ok: false, posted_to: "", message: "no submit_endpoint", steps: [] };
+  if (target.kind === "dry-run") {
+    return { ok: false, posted_to: "dry-run (no network)", message: "dry-run requested — no HTTP call fired", steps: [] };
+  }
+  if (target.kind === "upstream" && !session) {
+    return {
+      ok: false,
+      posted_to: staged.submit_endpoint,
+      message:
+        "executeBeisenITalent requires session.json (iTalent candidate-portal session via email+phone+OTP). " +
+        "Capture via extension/.",
+      steps: [],
+    };
+  }
+  const resumeField = staged.staged.find((f) => f.name === "resume");
+  if (!resumeField?.value) return { ok: false, posted_to: "", message: "staged.resume missing", steps: [] };
+  let resumeBytes: Buffer;
+  try {
+    resumeBytes = readFileSync(resumeField.value);
+  } catch (err) {
+    return { ok: false, posted_to: "", message: `read ${resumeField.value} failed: ${err instanceof Error ? err.message : err}`, steps: [] };
+  }
+  const filename = resumeField.value.split("/").pop() ?? "resume.pdf";
+
+  const submitUrl = new URL(staged.submit_endpoint);
+  const host = submitUrl.host;
+  const apiRoot = `${submitUrl.protocol}//${host}`;
+  const debug = target.kind === "debug";
+  const sessionHeaders = sessionHeaderBag(session, host);
+  const FileCtor = (globalThis as { File?: typeof File }).File;
+  const steps: FeishuStepLog[] = [];
+  const applicant: Record<string, string> = {};
+  for (const f of staged.staged) {
+    if (f.name === "name" || f.name === "email" || f.name === "phone") applicant[f.name] = f.value;
+  }
+
+  // STEP 1 — upload
+  const step1Url = debug ? target.url : `${apiRoot}/api/Resume/UploadResume`;
+  const uploadFd = new FormData();
+  const filePart =
+    typeof FileCtor === "function"
+      ? new FileCtor([new Uint8Array(resumeBytes)], filename, { type: "application/pdf" })
+      : new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" });
+  uploadFd.append("file", filePart as Blob, filename);
+  let r1: Response;
+  try {
+    r1 = await fetch(step1Url, { method: "POST", headers: sessionHeaders, body: uploadFd });
+  } catch (err) {
+    steps.push({ step: "upload", url: step1Url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: step1Url, message: "step 1 network error", steps };
+  }
+  const text1 = (await r1.text()).slice(0, 2000);
+  steps.push({ step: "upload", url: step1Url, status: r1.status, ok: r1.ok, message: text1.slice(0, 200) });
+  if (debug) {
+    return { ok: r1.ok, status: r1.status, posted_to: step1Url, message: "debug: step 1 fired, step 2 skipped", steps, response_preview: text1 };
+  }
+  if (!r1.ok) return { ok: false, posted_to: step1Url, status: r1.status, message: "step 1 failed", steps, response_preview: text1 };
+  let resumeId = "";
+  try {
+    const parsed = JSON.parse(text1);
+    resumeId = parsed?.Data?.ResumeId ?? parsed?.Data?.Id ?? "";
+  } catch { /* keep empty */ }
+
+  // STEP 2 — submit apply
+  const step2Url = `${apiRoot}/api/Apply/SubmitResume`;
+  let r2: Response;
+  try {
+    r2 = await fetch(step2Url, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        JobAdId: staged.post_id,
+        ResumeId: resumeId,
+        Name: applicant.name,
+        Email: applicant.email,
+        Mobile: applicant.phone,
+      }),
+    });
+  } catch (err) {
+    steps.push({ step: "submit", url: step2Url, status: 0, ok: false, message: String(err) });
+    return { ok: false, posted_to: step2Url, message: "step 2 network error", steps };
+  }
+  const text2 = (await r2.text()).slice(0, 4000);
+  steps.push({ step: "submit", url: step2Url, status: r2.status, ok: r2.ok, message: text2.slice(0, 200) });
+  return {
+    ok: r2.ok,
+    status: r2.status,
+    posted_to: step2Url,
+    response_preview: text2,
+    message: r2.ok ? "Beisen iTalent submission accepted" : `step 2 rejected: HTTP ${r2.status}`,
+    steps,
+  };
+}

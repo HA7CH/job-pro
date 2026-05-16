@@ -58,6 +58,9 @@ import {
   stageApplication,
   submitApplication,
   executeFeishu3Step,
+  executeMokaApply,
+  executeBeisenWecruit,
+  executeBeisenITalent,
   formatStaged,
   type ApplyFormSchema,
 } from "./apply.js";
@@ -71,7 +74,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.6";
+const VERSION = "0.9.7";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -510,8 +513,14 @@ async function runCompany(
       // Route through the family-specific executor where appropriate so the
       // user can verify each step's wire format against their echo server.
       const kindForDebug = sr.schema.submit_kind ?? "multipart-anon";
-      if (kindForDebug === "feishu-3-step") {
-        const result = await executeFeishu3Step(staged, session, { kind: "debug", url: debugUrl });
+      const debugExecutor =
+        kindForDebug === "feishu-3-step" ? executeFeishu3Step :
+        kindForDebug === "moka-aes" ? executeMokaApply :
+        kindForDebug === "beisen-wecruit" ? executeBeisenWecruit :
+        kindForDebug === "beisen-italent" ? executeBeisenITalent :
+        null;
+      if (debugExecutor) {
+        const result = await debugExecutor(staged, session, { kind: "debug", url: debugUrl });
         return emit({ mode: "debug-submit", staged, submit_kind: kindForDebug, result }, compact);
       }
       const result = await submitApplication(staged, { kind: "debug", url: debugUrl });
@@ -578,7 +587,15 @@ async function runCompany(
           compact
         );
       }
-      if (kind === "feishu-3-step") {
+      // Family executors: each takes (staged, session, target) and returns
+      // a MultiStepResult. All gate on session.json existing.
+      const familyExecutor =
+        kind === "feishu-3-step" ? executeFeishu3Step :
+        kind === "moka-aes" ? executeMokaApply :
+        kind === "beisen-wecruit" ? executeBeisenWecruit :
+        kind === "beisen-italent" ? executeBeisenITalent :
+        null;
+      if (familyExecutor) {
         if (!session) {
           return emit(
             {
@@ -587,15 +604,16 @@ async function runCompany(
               post_id: postId,
               mode: "really-submit-blocked",
               staged,
+              submit_kind: kind,
               message:
-                `Feishu 3-step submission requires a captured session at ` +
+                `${kind} submission requires a captured session at ` +
                 `~/.jobpro/${company}.session.json. Install extension/ in Chrome, ` +
                 `log in to the careers site, click Export.`,
             },
             compact
           );
         }
-        const result = await executeFeishu3Step(staged, session, { kind: "upstream" });
+        const result = await familyExecutor(staged, session, { kind: "upstream" });
         return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: true, result }, compact);
       }
       if (!isGenericMultipart) {
