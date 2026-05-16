@@ -4,6 +4,31 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.29 — \`job-pro selftest\` end-to-end check
+
+\`pnpm test\` / \`test:apply\` / \`test:debug-submit\` need the source
+tree; \`npm i -g job-pro\` users don't have it. New \`job-pro selftest\`
+exposes the same end-to-end check as a user-facing verb:
+
+\`\`\`
+$ job-pro selftest
+
+job-pro selftest — using xpeng (anon Greenhouse board)
+
+  ✓ search xpeng         819ms
+  ✓ fetch schema         577ms
+  ✓ debug-submit echo    1361ms
+
+  3 pass / 0 fail / 3 total — sampled "AI Agent Data Pipeline Intern"
+
+  Setup looks good. Run \`job-pro find "<keyword>"\` to scan all 50 companies.
+\`\`\`
+
+Runs the canonical three-stage round-trip against xpeng (anon, no
+session required): search → fetchApplicationSchema → submit via
+\`--debug-submit-to httpbin.org/post\`. Sub-3s. Exit 1 on any failure
+so it's scriptable.
+
 ## 1.0.28 — 4xx error-message hints
 
 \`fetchWithRetry\` returned bare \`HTTP 401: \` on auth failures — the

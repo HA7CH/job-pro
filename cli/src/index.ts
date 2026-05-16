@@ -79,10 +79,10 @@ import {
   memoryEvent,
   memoryClear,
 } from "./memory.js";
-import { writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createRequire as require_createRequire } from "node:module";
 function require_module(): { createRequire: typeof require_createRequire } {
   return { createRequire: require_createRequire };
@@ -191,6 +191,7 @@ USAGE
   job-pro <company> <verb> [options]
   job-pro list [--compact]            list all 50 companies + source family
   job-pro status [--compact]          survey profile / sessions / memory / chrome
+  job-pro selftest [--compact]        end-to-end check: search → schema → echo-submit
   job-pro profile init [--interactive] [--force]
                                       write ~/.jobpro/profile.json
                                       --interactive fills it via prompts.
@@ -1332,6 +1333,104 @@ async function main() {
   if (cmd === "status") {
     const compact = args.includes("--compact");
     printStatus(compact);
+    return;
+  }
+  if (cmd === "selftest") {
+    // Three end-to-end checks against the easiest adapter (xpeng, anon-submit):
+    // 1. searchPositions returns >0 hits
+    // 2. fetchApplicationSchema for the first hit returns ok:true with questions
+    // 3. submitApplication(staged, {kind:"debug", url:httpbin}) returns 200
+    // Total ~3-5s. No profile / no session needed. Useful right after install
+    // to confirm the CLI can actually round-trip end-to-end.
+    const compact = args.includes("--compact");
+    const xpengAdapter = (ADAPTERS as Record<string, CompanyAdapter>).xpeng;
+    type CheckResult = { name: string; ok: boolean; detail: string; ms: number };
+    const checks: CheckResult[] = [];
+    async function run<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
+      const t0 = Date.now();
+      try {
+        const r = await fn();
+        checks.push({ name, ok: true, detail: "", ms: Date.now() - t0 });
+        return r;
+      } catch (err) {
+        checks.push({ name, ok: false, detail: err instanceof Error ? err.message : String(err), ms: Date.now() - t0 });
+        return null;
+      }
+    }
+
+    // Step 1
+    const list = await run("search xpeng", async () => {
+      const r = (await xpengAdapter.searchPositions({ pageSize: 1 })) as { ok?: boolean; positions?: Array<{ post_id?: string; title?: string }>; total?: number };
+      if (!r.ok || !r.positions?.[0]?.post_id) throw new Error("no positions returned");
+      return r;
+    });
+    let postId: string | null = null;
+    let title = "";
+    if (list && list.positions?.[0]) {
+      postId = String(list.positions[0].post_id ?? "");
+      title = String(list.positions[0].title ?? "").trim();
+    }
+
+    // Step 2
+    let schema: ApplyFormSchema | null = null;
+    if (postId && typeof xpengAdapter.fetchApplicationSchema === "function") {
+      schema = await run("fetch schema", async () => {
+        const r = (await xpengAdapter.fetchApplicationSchema!(postId!)) as { ok?: boolean; schema?: ApplyFormSchema; message?: string };
+        if (!r.ok || !r.schema) throw new Error(r.message ?? "schema fetch failed");
+        return r.schema;
+      });
+    } else if (!postId) {
+      checks.push({ name: "fetch schema", ok: false, detail: "skipped — no post_id from search", ms: 0 });
+    }
+
+    // Step 3
+    if (schema) {
+      const tmp = mkdtempSync(join(tmpdir(), "jobpro-selftest-"));
+      const resumePath = join(tmp, "resume.pdf");
+      writeFileSync(resumePath, "%PDF\n");
+      const profile: ResumeProfile = {
+        first_name: "Self", last_name: "Test", email: "selftest@example.com",
+        phone: "+86 13800138000", resume_path: resumePath, cover_letter_text: "",
+        custom: {},
+      };
+      // Auto-fill required: first allowed value for selects, "N/A" for text.
+      for (const q of schema.questions) {
+        if (!q.required) continue;
+        const f = q.fields[0];
+        if (!f) continue;
+        if (["input_text", "textarea"].includes(f.type)) profile.custom![f.name] = "N/A (selftest)";
+        else if (f.type.includes("select")) {
+          const first = f.values?.[0];
+          if (first && typeof first.value !== "undefined") profile.custom![f.name] = String(first.value);
+        }
+      }
+      const staged = stageApplication(schema, profile);
+      if (!staged.ready) {
+        checks.push({ name: "debug-submit echo", ok: false, detail: `staged not ready: ${staged.unanswered_required.slice(0, 3).join(", ")}`, ms: 0 });
+      } else {
+        await run("debug-submit echo", async () => {
+          const r = (await submitApplication(staged, { kind: "debug", url: "https://httpbin.org/post" })) as { ok?: boolean; status?: number; message?: string };
+          if (r.ok !== true || r.status !== 200) throw new Error(`echo failed: ok=${r.ok} status=${r.status} msg=${r.message}`);
+          return r;
+        });
+      }
+      rmSync(tmp, { recursive: true, force: true });
+    }
+
+    const fails = checks.filter((c) => !c.ok).length;
+    if (compact) {
+      console.log(JSON.stringify({ ok: fails === 0, checks }));
+    } else {
+      console.log(`\njob-pro selftest — using xpeng (anon Greenhouse board)\n`);
+      for (const c of checks) {
+        const icon = c.ok ? "✓" : "✗";
+        const detail = c.detail ? `  ${c.detail}` : "";
+        console.log(`  ${icon} ${c.name.padEnd(20)} ${c.ms}ms${detail}`);
+      }
+      console.log(`\n  ${checks.length - fails} pass / ${fails} fail / ${checks.length} total${title ? ` — sampled "${title}"` : ""}`);
+      if (fails === 0) console.log(`\n  Setup looks good. Run \`job-pro find "<keyword>"\` to scan all 50 companies.`);
+    }
+    if (fails > 0) process.exit(1);
     return;
   }
   if (cmd === "extension") {
