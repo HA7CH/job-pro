@@ -170,6 +170,59 @@ button {
   overflow: hidden;
 }
 
+.phase2-card {
+  margin-top: 2.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.25rem 1rem;
+  background: var(--background);
+}
+
+.phase2-title {
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.01em;
+}
+
+.phase2-lede {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  margin: 0 0 0.75rem;
+}
+
+.phase2-snippet {
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 0.875rem 1rem;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  margin: 0 0 0.75rem;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.phase2-detail {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+.phase2-detail code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.875em;
+  background: var(--muted);
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+}
+.phase2-detail a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .prompt-head {
   display: flex;
   align-items: center;

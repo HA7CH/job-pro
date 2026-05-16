@@ -1,0 +1,3 @@
+{
+  "_about": "Per-job answers for a NIO (nio.jobs.feishu.cn) posting. Feishu's standard apply form has only 4 fields (name / email / phone / resume) — all resolved from profile.json — so this file is mostly empty. Custom keys may appear if NIO adds tenant-specific questions; surface them with `job-pro nio apply <postId> --print-form`."
+}

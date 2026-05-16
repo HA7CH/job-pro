@@ -1,0 +1,12 @@
+{
+  "first_name": "Jian",
+  "last_name": "Zhang",
+  "email": "jian.zhang@example.com",
+  "phone": "+86 13800138000",
+  "resume_path": "/Users/jian/Documents/resume.pdf",
+  "cover_letter_text": "",
+  "custom": {
+    "linkedin_url": "https://www.linkedin.com/in/jian-zhang",
+    "_comment": "Per-question answers go here, keyed by the field 'name' from the schema. Run `job-pro <co> apply <id> --print-form` to see which keys a specific job needs."
+  }
+}

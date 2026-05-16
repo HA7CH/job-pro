@@ -453,6 +453,42 @@ export default function Home() {
         ))}
       </section>
 
+      <section className="phase2-card" aria-labelledby="phase2-title">
+        <h2 id="phase2-title" className="phase2-title">Phase 2 — submit, not just search</h2>
+        <p className="phase2-lede">
+          50 / 50 companies expose an application schema. 45 of them have a
+          submitter wired today (3 Greenhouse/Lever fire anonymously; the
+          rest need a captured browser session). 5 are intentionally
+          external — Liepin recruiter chat / WeChat mini-program.
+        </p>
+        <pre className="phase2-snippet">{`# one-time setup
+job-pro profile init
+$EDITOR ~/.jobpro/profile.json          # fill name/email/phone/resume_path
+
+# day-to-day
+job-pro status                          # what's set up
+job-pro xpeng search "intern"           # find a job
+job-pro xpeng apply <id> --interactive  # fill the form in the terminal
+
+# actually submit (3-layer safety gate)
+JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
+  job-pro xpeng apply <id> --really-submit`}</pre>
+        <p className="phase2-detail">
+          For non-Greenhouse adapters (Feishu / Moka / Beisen / bespoke),
+          capture a session in your own browser via the{" "}
+          <a href="https://github.com/HA7CH/job-pro/tree/main/extension" target="_blank" rel="noopener noreferrer">
+            <code>extension/</code>
+          </a>{" "}
+          MV3 add-on, then drop <code>~/Downloads/jobpro/&lt;adapter&gt;.session.json</code>{" "}
+          under <code>~/.jobpro/</code>.
+          See{" "}
+          <a href="https://github.com/HA7CH/job-pro/blob/main/docs/auto-apply.md" target="_blank" rel="noopener noreferrer">
+            docs/auto-apply.md
+          </a>{" "}
+          for the 50-row submission-flow matrix.
+        </p>
+      </section>
+
       <p className="link-row">
         <a
           href="https://github.com/HA7CH/job-pro"

@@ -4,6 +4,42 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.4 — examples/ + web Phase 2 panel
+
+Web landing page (`job.ha7ch.com`) now has a dedicated "Phase 2 —
+submit, not just search" panel showing the apply workflow + safety
+gates. New `examples/` directory ships a fully-filled
+`profile.example.json`, per-job form templates for the Greenhouse +
+Feishu families, and an end-to-end `walkthrough.md` from `profile init`
+through `--really-submit`.
+
+## 1.0.3 — \`job-pro status\` diagnostic survey
+
+Single command summarises Phase 2 setup state:
+* **Profile** — which of name/email/phone/resume_path are filled, plus
+  custom-key count.
+* **Sessions** — every `~/.jobpro/*.session.json` from the extension,
+  with cookie/header count and age in days. Flags STALE for >30d.
+* **Memory** — field count + last 5 events.
+* **Chrome** — puppeteer-core resolvability + Chrome binary path.
+
+Also fixed an ESM-vs-CJS bug where `require.resolve("puppeteer-core")`
+was a no-op; the resolver now uses `createRequire(import.meta.url)`.
+
+## 1.0.2 — \`apply --interactive\`
+
+Walks the unanswered required fields and prompts inline. *_select
+kinds present allowed values as a numbered list. Required fields
+re-prompt on empty input; `skip` / `q` break out gracefully.
+
+## 1.0.1 — \`apply --print-form\` + \`apply --form-file <path>\`
+
+`--print-form` emits a JSON template specific to that job's schema
+(label, type, allowed values, currently-resolved value). `--form-file`
+loads per-job overrides without polluting `~/.jobpro/profile.json`.
+When `staged.ready` is false, the dry-run output now prints a
+copy-pasteable JSON snippet of only the unanswered required fields.
+
 ## 1.0.0 — Phase 2 executor coverage at 45 / 50
 
 Marks the completion of the original two-phase scope: read every

@@ -85,7 +85,7 @@ function require_module(): { createRequire: typeof require_createRequire } {
   return { createRequire: require_createRequire };
 }
 
-const VERSION = "1.0.3";
+const VERSION = "1.0.4";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;

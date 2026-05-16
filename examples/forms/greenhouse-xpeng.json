@@ -1,0 +1,12 @@
+{
+  "_about": "Per-job answers for an XPeng (xpengmotors) Greenhouse posting. Pass via `job-pro xpeng apply <postId> --form-file examples/forms/greenhouse-xpeng.json`. The CLI merges these into profile.custom for this one call without touching ~/.jobpro/profile.json. Keys correspond to the `name` field of each question in the schema (run --print-form to see them).",
+  "question_36528765002": "https://www.linkedin.com/in/your-handle",
+  "question_36528766002": "https://github.com/your-handle",
+  "question_36528767002": "1",
+  "question_36528768002": "0",
+  "question_36528769002": "1",
+  "question_36528770002": "Looking forward to contributing to XPeng's autonomous-driving stack.",
+  "question_36528771002": "0",
+  "question_36528772002": "Decline to identify",
+  "question_36528773002": "Decline to identify"
+}
