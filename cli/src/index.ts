@@ -1412,29 +1412,50 @@ async function main() {
       return "verified-real";
     }
 
+    function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+      return Promise.race([
+        p,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+      ]);
+    }
+
     const results = await Promise.all(
       scope.map(async (company): Promise<ReconResult> => {
+        // lilith uses CDP (puppeteer launches Chrome) — its withTimeout
+        // returns but the browser handle keeps the event loop alive, so
+        // the process never exits. Skip it explicitly; users who want to
+        // recon lilith can scope --companies=lilith and accept the hang.
+        if (company === "lilith") {
+          return { company, classification: "probe-error", detail: "skipped — CDP adapter (puppeteer); pass --companies=lilith explicitly to probe" };
+        }
         const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[company];
         if (!adapter) return { company, classification: "probe-error", detail: "unknown adapter" };
         if (typeof adapter.fetchApplicationSchema !== "function") {
           return { company, classification: "probe-error", detail: "no fetchApplicationSchema" };
         }
         // Use a placeholder post_id so we don't have to search.
+        // Per-step timeout protects against slow / hung adapters.
         let schema: ApplyFormSchema | null = null;
         try {
-          const r = (await adapter.fetchApplicationSchema("recon-probe")) as { ok?: boolean; schema?: ApplyFormSchema };
-          if (r.ok && r.schema) schema = r.schema;
+          const r = await withTimeout(
+            adapter.fetchApplicationSchema("recon-probe") as Promise<{ ok?: boolean; schema?: ApplyFormSchema }>,
+            10000
+          );
+          if (r?.ok && r.schema) schema = r.schema;
         } catch {}
-        // Most bespoke adapters return a valid schema even on bogus id,
-        // because they build it from the id alone. The ones that need a
-        // real id (mihoyo etc.) fall through to "fetch a real id".
         if (!schema) {
           try {
-            const list = (await adapter.searchPositions({ pageSize: 1 })) as { ok?: boolean; positions?: Array<{ post_id?: string }> };
-            const pid = list.positions?.[0]?.post_id;
+            const list = await withTimeout(
+              adapter.searchPositions({ pageSize: 1 }) as Promise<{ ok?: boolean; positions?: Array<{ post_id?: string }> }>,
+              10000
+            );
+            const pid = list?.positions?.[0]?.post_id;
             if (pid) {
-              const r = (await adapter.fetchApplicationSchema(pid)) as { ok?: boolean; schema?: ApplyFormSchema };
-              if (r.ok && r.schema) schema = r.schema;
+              const r = await withTimeout(
+                adapter.fetchApplicationSchema(pid) as Promise<{ ok?: boolean; schema?: ApplyFormSchema }>,
+                10000
+              );
+              if (r?.ok && r.schema) schema = r.schema;
             }
           } catch {}
         }
@@ -1489,7 +1510,9 @@ async function main() {
     for (const [k, v] of [...tally.entries()].sort()) {
       console.log(`    ${k.padEnd(20)}  ${v}`);
     }
-    return;
+    // Some adapters (cdp/lilith via puppeteer) keep the event loop alive
+    // after their probe resolves. Explicit exit guarantees the CLI returns.
+    process.exit(0);
   }
   if (cmd === "selftest") {
     // Three end-to-end checks against the easiest adapter (xpeng, anon-submit):

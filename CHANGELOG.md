@@ -4,6 +4,40 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.43 — \`recon\` per-step timeouts + lilith skip + explicit exit
+
+1.0.42's \`recon\` against all 50 adapters hung indefinitely because:
+
+1. **lilith** uses puppeteer-core; even after the schema-probe resolves,
+   the launched Chrome instance keeps the event loop alive.
+2. Some adapters' \`fetchApplicationSchema\` has no internal timeout and
+   can wait minutes on a flaky upstream.
+
+Fixed:
+
+* 10-second per-step timeout (Promise.race with sentinel \`null\`) on
+  both schema-fetch and search fallback.
+* \`lilith\` explicitly skipped unless \`--companies=lilith\` is passed
+  (then the user knowingly accepts the puppeteer hang).
+* Explicit \`process.exit(0)\` at end of \`recon\` to release lingering
+  handles (puppeteer / undici sockets).
+
+Now \`job-pro recon\` (no scope) completes in ~30s and reports:
+
+\`\`\`
+Tally:
+  external              5
+  html-fallthrough     16
+  probe-error           2  ← lilith + occasional Lever 400
+  speculative-404      15
+  verified-real        12
+\`\`\`
+
+15 schema-declared \`endpoint_verified: true\` adapters — 12 also probe
+as verified-real; the other 3 (xpeng / weride / hoyoverse) probe as
+html-fallthrough because Greenhouse/Lever expect multipart, not JSON
+\`{}\` — that's why the 🟢 tag exists.
+
 ## 1.0.42 — \`job-pro recon\` — automated endpoint-probe tool
 
 The manual probe I've been running by hand for 1.0.34 / 1.0.38 / 1.0.40
