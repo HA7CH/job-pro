@@ -343,6 +343,50 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
+// ---------- bespoke schema helper ----------
+//
+// Most adapter families share the same 4-question contact-info form
+// (name / email / phone / resume) — what differs is the upstream
+// submit endpoint and which auth flow gates it. This helper exists so
+// each bespoke adapter can wire `fetchApplicationSchema` with a single
+// import + 5-line call, instead of duplicating the 4-question array.
+//
+// For the structural-block adapters (Liepin / WeChat-only / DNS-walled),
+// pass `submit_kind: "external"` — the dispatcher will refuse
+// --really-submit with a pointer to apply_url instead of complaining
+// about a missing executor.
+
+export interface BespokeApplySchemaConfig {
+  source: string;
+  postId: string;
+  jobTitle: string;
+  applyUrl: string;
+  submitEndpoint?: string;
+  submitKind?: SubmitKind;
+  submitNotes?: string;
+  extraQuestions?: ApplyQuestion[];
+}
+
+export function buildBespokeApplySchema(cfg: BespokeApplySchemaConfig): ApplyFormSchema {
+  const standard: ApplyQuestion[] = [
+    { label: "Name",   required: true, fields: [{ name: "name",   type: "input_text" }] },
+    { label: "Email",  required: true, fields: [{ name: "email",  type: "input_text" }] },
+    { label: "Phone",  required: true, fields: [{ name: "phone",  type: "input_text" }] },
+    { label: "Resume", required: true, fields: [{ name: "resume", type: "input_file" }] },
+  ];
+  return {
+    source: cfg.source,
+    post_id: cfg.postId,
+    job_title: cfg.jobTitle,
+    apply_url: cfg.applyUrl,
+    submit_endpoint: cfg.submitEndpoint,
+    submit_method: cfg.submitEndpoint ? "POST" : undefined,
+    submit_kind: cfg.submitKind ?? "multipart-session",
+    submit_notes: cfg.submitNotes,
+    questions: [...standard, ...(cfg.extraQuestions ?? [])],
+  };
+}
+
 // ---------- submission ----------
 //
 // Greenhouse and Lever both accept `multipart/form-data` POSTs whose

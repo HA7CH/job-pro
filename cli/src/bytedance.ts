@@ -818,3 +818,39 @@ export async function matchResume(
       "The only authority on selection is HR.",
   };
 }
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_bytedance } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_bytedance } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_bytedance } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "jobs.bytedance.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://jobs.bytedance.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "jobs.bytedance.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_bytedance({
+      source: "jobs.bytedance.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://jobs.bytedance.com/api/v1/user_apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "ByteDance — POST /api/v1/user_apply with session cookie. CAPTCHA verification required for first-time applicants. Endpoint inferred; needs validation.",
+    }),
+  };
+}

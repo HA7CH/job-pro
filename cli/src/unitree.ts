@@ -495,3 +495,39 @@ export async function matchResume(
 
 export { extractResumeSignals, scoreOverlap };
 export type { SearchOptions as UnitreeSearchOptions };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_unitree } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_unitree } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_unitree } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "unitree.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://unitree.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "unitree.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_unitree({
+      source: "unitree.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: undefined,
+      submitKind: "external",
+      submitNotes:
+        "Unitree — recruiting funnel runs through a WeChat mini-program; no public submit API. Open apply_url in browser to scan the WeChat QR.",
+    }),
+  };
+}

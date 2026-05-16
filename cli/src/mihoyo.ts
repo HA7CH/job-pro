@@ -424,3 +424,39 @@ export async function matchResume(
     matches: scored,
   };
 }
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_mihoyo } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_mihoyo } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_mihoyo } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "ats.openout.mihoyo.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://ats.openout.mihoyo.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "ats.openout.mihoyo.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_mihoyo({
+      source: "ats.openout.mihoyo.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://ats.openout.mihoyo.com/ats-portal/v1/application/create",
+      submitKind: "multipart-session",
+      submitNotes:
+        "miHoYo — POST /ats-portal/v1/application/create with session cookie. Endpoint inferred from ats.openout.mihoyo.com SPA; needs validation.",
+    }),
+  };
+}

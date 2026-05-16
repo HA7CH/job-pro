@@ -29,3 +29,39 @@ export const getNotice = adapter.getNotice;
 export const findNoticesByQuestion = adapter.findNoticesByQuestion;
 export const matchResume = adapter.matchResume;
 export const checkResume = adapter.checkResume;
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_hikvision } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_hikvision } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_hikvision } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "hikvision.com (via api-c.liepin.com)", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://hikvision.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "hikvision.com (via api-c.liepin.com)", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_hikvision({
+      source: "hikvision.com (via api-c.liepin.com)",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: undefined,
+      submitKind: "external",
+      submitNotes:
+        "Hikvision (Liepin-backed) — submission is recruiter-IM-mediated through Liepin. Open the apply_url to start the chat.",
+    }),
+  };
+}

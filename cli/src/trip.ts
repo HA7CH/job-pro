@@ -484,3 +484,39 @@ export async function matchResume(
 
 // Export helpers so other modules can import them from trip.js
 export { extractResumeSignals, scoreOverlap };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_trip } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_trip } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_trip } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "careers.ctrip.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://careers.ctrip.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "careers.ctrip.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_trip({
+      source: "careers.ctrip.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://careers.ctrip.com/api/jobs/apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "Trip.com — POST /api/jobs/apply with session cookie. Endpoint inferred; needs validation.",
+    }),
+  };
+}

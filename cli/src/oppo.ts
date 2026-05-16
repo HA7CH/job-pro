@@ -330,3 +330,39 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
 }
 
 export { extractResumeSignals, scoreOverlap };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_oppo } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_oppo } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_oppo } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "careers.oppo.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://careers.oppo.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "careers.oppo.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_oppo({
+      source: "careers.oppo.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://careers.oppo.com/openapi/position/apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "OPPO — POST /openapi/position/apply with session cookie. Endpoint inferred from /openapi/position/pageNew read pattern; needs validation.",
+    }),
+  };
+}

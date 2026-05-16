@@ -346,3 +346,39 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
 }
 
 export { extractResumeSignals, scoreOverlap };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_sf } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_sf } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_sf } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "campus.sf-express.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://campus.sf-express.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "campus.sf-express.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_sf({
+      source: "campus.sf-express.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://campus.sf-express.com/api/web/position/apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "SF Express — POST /api/web/position/apply with cr-service header + GeeTest captcha + session cookie. Endpoint inferred; needs validation.",
+    }),
+  };
+}

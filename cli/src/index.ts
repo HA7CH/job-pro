@@ -70,7 +70,7 @@ import {
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-const VERSION = "0.9.4";
+const VERSION = "0.9.5";
 
 // COMPANY_DIRECTORY drives both `job-pro list` output and the company table
 // that used to be inlined in HELP. Each entry is `{ key, family, source, label }`;
@@ -160,13 +160,22 @@ USAGE
 by ATS family (Bespoke / Feishu / Beisen Wecruit / Beisen iTalent / Moka
 / Greenhouse-Lever / Liepin). Coverage summary at job.ha7ch.com.
 
-PHASE 2 (auto-apply) is in early access. \`job-pro <co> apply <postId>\`
-prints the staged POST in dry-run mode. 23 / 50 adapters expose the
-application schema today: 3 ✅ Greenhouse/Lever (auto-submit ready),
-9 🟡 Feishu, 7 🟡 Moka, 2 🟡 Beisen Wecruit, 2 🟡 Beisen iTalent (all
-🟡 need a captured session.json + the family-specific multi-step
-submitter). The remaining 27 fall back to a "Phase 2 not yet wired"
-note. See docs/auto-apply.md.
+PHASE 2 (auto-apply) — schema coverage is now 50/50:
+  ✅ 3   Greenhouse / Lever  (xpeng / hoyoverse / weride — auto-submit
+                              ready, no session needed)
+  🟡 22  bespoke session     (tencent, bytedance, alibaba, …)
+  🟡 9   Feishu               (xiaomi, nio, minimax, moonshot, zhipu,
+                              iqiyi, agibot, lilith, zerooneai, baichuan)
+  🟡 7   Moka                 (megvii, deepseek, galaxyuniversal,
+                              stepfun, cambricon, geely, moonshot)
+  🟡 2   Beisen Wecruit       (sensetime, horizonrobotics)
+  🟡 2   Beisen iTalent       (vivo, iflytek)
+  ⛔ 5   external             (unitree WeChat, hikvision/cicc/cainiao/
+                              webank — Liepin IM-mediated)
+\`apply <postId>\` dry-runs the staged POST for any of them. The 🟡
+families need a session.json (extension/) + a family-specific
+multi-step submitter; --really-submit currently fires only for ✅.
+See docs/auto-apply.md.
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -543,6 +552,24 @@ async function runCompany(
       const isSessionMultipart = kind === "multipart-session";
       const isGenericMultipart = isAnonMultipart || isSessionMultipart;
 
+      if (kind === "external") {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            mode: "really-submit-external",
+            staged,
+            submit_kind: kind,
+            apply_url: staged.apply_url,
+            message:
+              `${company} has no programmatic submit API — recruiting is mediated ` +
+              `via WeChat mini-program / Liepin recruiter chat / other IM channel. ` +
+              `Open apply_url in your browser to start the actual application flow.`,
+          },
+          compact
+        );
+      }
       if (!isGenericMultipart) {
         return emit(
           {

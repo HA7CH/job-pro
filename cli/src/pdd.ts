@@ -700,3 +700,39 @@ export async function matchResume(
 }
 
 export { extractResumeSignals, scoreOverlap };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_pdd } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_pdd } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_pdd } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "careers.pinduoduo.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://careers.pinduoduo.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "careers.pinduoduo.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_pdd({
+      source: "careers.pinduoduo.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://careers.pinduoduo.com/api/recruit/v1/position/apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "PDD — POST /api/recruit/v1/position/apply with session cookie. Endpoint inferred; needs validation.",
+    }),
+  };
+}

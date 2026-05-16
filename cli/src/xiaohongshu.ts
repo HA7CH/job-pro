@@ -594,3 +594,39 @@ export async function matchResume(
       "The only authority on selection is HR.",
   };
 }
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_xiaohongshu } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_xiaohongshu } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_xiaohongshu } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "job.xiaohongshu.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://job.xiaohongshu.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "job.xiaohongshu.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_xiaohongshu({
+      source: "job.xiaohongshu.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://job.xiaohongshu.com/api/recruit/apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "Xiaohongshu — POST /api/recruit/apply with session cookie. Endpoint inferred; needs validation.",
+    }),
+  };
+}

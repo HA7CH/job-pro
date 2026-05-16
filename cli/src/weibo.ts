@@ -405,3 +405,39 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
 }
 
 export { extractResumeSignals, scoreOverlap };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_weibo } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_weibo } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_weibo } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "career.sina.com.cn", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://career.sina.com.cn";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "career.sina.com.cn", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_weibo({
+      source: "career.sina.com.cn",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://career.sina.com.cn/post/apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "Weibo (Sina careers) — POST /post/apply with session cookie. Endpoint inferred; needs validation.",
+    }),
+  };
+}

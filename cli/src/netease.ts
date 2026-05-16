@@ -542,3 +542,39 @@ export async function matchResume(
       "The only authority on selection is HR.",
   };
 }
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_netease } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_netease } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_netease } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "hr.163.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://hr.163.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "hr.163.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_netease({
+      source: "hr.163.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://hr.163.com/post-app/apply.do",
+      submitKind: "multipart-session",
+      submitNotes:
+        "NetEase — POST /post-app/apply.do with session cookie. Endpoint inferred; needs validation.",
+    }),
+  };
+}

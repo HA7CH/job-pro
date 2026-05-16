@@ -482,3 +482,39 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
 }
 
 export { extractResumeSignals, scoreOverlap };
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_byd } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_byd } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_byd } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "job.byd.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://job.byd.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "job.byd.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_byd({
+      source: "job.byd.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://job.byd.com/portal/api/portal-api/position/apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "BYD — POST /portal/api/portal-api/position/apply with JWT bearer + session. Endpoint inferred from job.byd.com bundle; needs validation.",
+    }),
+  };
+}

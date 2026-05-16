@@ -762,3 +762,39 @@ export async function matchResume(
       "The only authority on selection is HR.",
   };
 }
+
+
+// ---------- Phase 2: fetchApplicationSchema ----------
+
+import type { ApplyFormSchema as _ApplyFormSchema_meituan } from "./apply.js";
+import { buildBespokeApplySchema as _buildBespokeApplySchema_meituan } from "./apply.js";
+
+export async function fetchApplicationSchema(postId: string): Promise<
+  { ok: true; schema: _ApplyFormSchema_meituan } | { ok: false; source: string; message: string }
+> {
+  const id = (postId ?? "").trim();
+  if (!id) return { ok: false, source: "zhaopin.meituan.com", message: "post_id is required" };
+  let title = "";
+  let applyUrl = "https://zhaopin.meituan.com";
+  try {
+    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
+    if (detail?.ok === false) {
+      return { ok: false, source: "zhaopin.meituan.com", message: detail.message ?? "post not found" };
+    }
+    title = detail?.title ?? "";
+    if (detail?.apply_url) applyUrl = detail.apply_url;
+  } catch {}
+  return {
+    ok: true,
+    schema: _buildBespokeApplySchema_meituan({
+      source: "zhaopin.meituan.com",
+      postId: id,
+      jobTitle: title,
+      applyUrl,
+      submitEndpoint: "https://zhaopin.meituan.com/api/job-apply",
+      submitKind: "multipart-session",
+      submitNotes:
+        "Meituan — POST /api/job-apply with session cookie. Endpoint inferred; needs validation.",
+    }),
+  };
+}
