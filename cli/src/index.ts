@@ -785,8 +785,11 @@ async function runCompany(
     if (debugUrl) {
       // Route through the family-specific executor where appropriate so the
       // user can verify each step's wire format against their echo server.
+      // --via-cdp forces the puppeteer DOM path even in debug mode (CDP's
+      // debug mode just navigates the apply_url and pauses for 3s without
+      // submitting — useful to verify the SPA loads correctly).
       const kindForDebug = sr.schema.submit_kind ?? "multipart-anon";
-      const debugExecutor =
+      const debugExecutor = viaCdp ? executeCdpRealBrowser :
         kindForDebug === "feishu-3-step" ? executeFeishu3Step :
         kindForDebug === "moka-aes" ? executeMokaApply :
         kindForDebug === "beisen-wecruit" ? executeBeisenWecruit :
@@ -795,7 +798,7 @@ async function runCompany(
         null;
       if (debugExecutor) {
         const result = await debugExecutor(staged, session, { kind: "debug", url: debugUrl });
-        return emit({ mode: "debug-submit", staged, submit_kind: kindForDebug, result }, compact);
+        return emit({ mode: "debug-submit", staged, submit_kind: kindForDebug, via_cdp: viaCdp, result }, compact);
       }
       const result = await submitApplication(staged, { kind: "debug", url: debugUrl });
       return emit({ mode: "debug-submit", staged, submit_kind: kindForDebug, result }, compact);

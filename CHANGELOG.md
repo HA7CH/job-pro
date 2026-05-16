@@ -4,6 +4,32 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.90 — \`--via-cdp\` also honored in \`--debug-submit-to\` path
+
+1.0.88's \`--via-cdp\` flag only routed the puppeteer DOM path in
+\`--really-submit\` mode. The \`--debug-submit-to\` branch had a
+separate executor-selection block that didn't check \`viaCdp\` —
+so \`apply X --via-cdp --debug-submit-to <echo>\` silently fell back
+to the regular family executor for the URL family.
+
+Fixed: the debug branch now also routes through \`executeCdpRealBrowser\`
+when \`--via-cdp\` is set. CDP's debug mode just navigates the apply_url
+in puppeteer + pauses for 3s — useful for "did the SPA load correctly
+at all?" diagnostics without firing a real submit.
+
+Output now includes \`via_cdp: true\` to confirm the path taken.
+
+\`\`\`
+$ JOB_PRO_PROFILE_PATH=… job-pro tencent apply <id> \\
+    --via-cdp --debug-submit-to http://noop  # noop URL is ignored by CDP
+{
+  "mode": "debug-submit",
+  "submit_kind": "multipart-session",
+  "via_cdp": true,
+  "result": { "ok": true, "steps": [{ "step": "navigate", "url": "…", "status": 200 }] }
+}
+\`\`\`
+
 ## 1.0.89 — \`--via-cdp\` button selectors broadened for real-world labels
 
 The CDP executor's apply/submit button regexes were too strict:
