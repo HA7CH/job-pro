@@ -496,10 +496,11 @@ export async function fetchApplicationSchema(postId: string): Promise<
       postId: id,
       jobTitle: title,
       applyUrl,
-      submitEndpoint: "https://hrcareersweb.antgroup.com/api/social/position/apply",
+      submitEndpoint: "https://hrcareersweb.antgroup.com/api/social/application/apply",
       submitKind: "multipart-session",
+      endpointVerified: true,
       submitNotes:
-        "Ant Group — POST /api/social/position/apply (also campus variant). Alipay OAuth session required. Endpoint inferred from parallel read-side path; needs validation.",
+        "Ant Group — POST /api/social/application/apply (or /api/campus/application/apply for campus). Endpoint extracted from talent.antgroup.com's Yuyan/Alipay umi bundle 180020010001257966/umi.6f081e74.js (3.9MB). Anon-probed → HTTP 200 + {success:false, errorMsg:\"登录过期\", errorCode:\"LOGIN_EXPIRED\"} = real auth-gated route. The original /api/social/position/apply was wrong path (position → application). Alipay OAuth session required.",
     }),
   };
 }

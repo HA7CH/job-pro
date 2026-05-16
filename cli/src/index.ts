@@ -232,6 +232,8 @@ const ENDPOINT_VERIFIED: ReadonlySet<string> = new Set([
   "huawei",
   // lilith: atsx-throne tenant, /api/v1/user/applications 405 (1.0.67)
   "lilith",
+  // antgroup: talent.antgroup.com second umi bundle revealed (1.0.68)
+  "antgroup",
 ]);
 
 const HELP = `

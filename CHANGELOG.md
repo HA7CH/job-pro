@@ -4,6 +4,45 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.0.68 — antgroup → verified (45 / 50, all non-external done)
+
+Found a SECOND umi bundle for talent.antgroup.com:
+\`gw.alipayobjects.com/render/p/yuyan/180020010001257966/umi.6f081e74.js\`
+(3.9MB, separate from the framework bundle at 180020010001208714).
+
+This second bundle has the actual careers /api/* paths:
+
+\`\`\`
+/api/campus/application/apply
+/api/campus/application/applyForExternalRecommend
+/api/campus/application/h5Apply
+/api/campus/application/preApply
+/api/social/application/apply
+/api/social/application/preApply
+/api/agreement/deliverAgreement
+\`\`\`
+
+Anon-probed \`hrcareersweb.antgroup.com/api/social/application/apply\`:
+
+\`\`\`
+HTTP 200
+{"success":false,"errorMsg":"登录过期","errorCode":"LOGIN_EXPIRED",
+ "content":null,"traceId":"0b442ca91..."}
+\`\`\`
+
+Real auth-gated route. The 1.0.34-era schema's
+\`/api/social/position/apply\` was wrong (position → application; subtle).
+
+**Endpoint verified count: 44 → 45 / 50.**
+
+All 45 non-external adapters are now \`endpoint_verified: true\`. The
+remaining 5 are structurally external — Liepin recruiter chat × 4
+(hikvision/cicc/cainiao/webank) and Unitree WeChat QR × 1 — these
+can't be ethically API-automated.
+
+**Phase 2 endpoint-verification is complete: 45 / 50 verified-real,
+5 / 50 structurally-external.**
+
 ## 1.0.67 — lilith → verified (44 / 50); antgroup remains 🔑
 
 \`lilithgames.jobs.feishu.cn\` is also an atsx-throne tenant. Probing
