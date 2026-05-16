@@ -6,9 +6,12 @@ Query Chinese big-tech campus recruiting from your terminal — [job.ha7ch.com](
 npx job-pro@latest tencent search "后台开发"
 ```
 
-No signup, no token, no proxy server. The CLI talks straight to each company's
-public API (e.g. `join.qq.com` for Tencent) and prints JSON. Pipe it into `jq`,
-Claude Code, anything.
+No signup, no token, no proxy server. **50 companies, all live.** The CLI talks
+straight to each company's public API (e.g. `join.qq.com` for Tencent) and
+prints JSON. Pipe it into `jq`, Claude Code, anything.
+
+Run `job-pro help` for the full company list, or see the roadmap matrix at
+[job.ha7ch.com](https://job.ha7ch.com).
 
 ## Demo: hand it to Claude Code
 
@@ -67,24 +70,61 @@ Add `--compact` to any command for a single-line JSON output (pipe-friendly).
 
 ## Roadmap
 
-| Company    | Get jobs | Auto-apply | Source                                                             |
-|------------|----------|------------|--------------------------------------------------------------------|
-| Tencent    | ✅       | ⏳         | [`join.qq.com`](https://join.qq.com)                                |
-| ByteDance  | ✅       | ⏳         | [`jobs.bytedance.com`](https://jobs.bytedance.com/campus/position) |
-| Alibaba    | ✅       | ⏳         | [`campus-talent.alibaba.com`](https://campus-talent.alibaba.com/campus/position) |
-| Meituan    | ✅       | ⏳         | [`zhaopin.meituan.com`](https://zhaopin.meituan.com/job-list)      |
-| Xiaohongshu| ✅       | ⏳         | [`job.xiaohongshu.com`](https://job.xiaohongshu.com/)              |
+**Phase 1 — Read jobs:** 50 / 50 companies, all live. See the full live matrix
+with per-company status icons at [job.ha7ch.com](https://job.ha7ch.com), or run
+`job-pro help` for the canonical list.
 
-`Auto-apply` is phase 2 — it needs login cookies / OAuth, not just the public
-search endpoints. See [docs/auto-apply.md](./docs/auto-apply.md) for the plan.
+Coverage by source family:
+
+| Source family            | Companies | Notes                                                              |
+|--------------------------|-----------|--------------------------------------------------------------------|
+| Bespoke per-company API  | 23        | Tencent, ByteDance, Alibaba, Meituan, Xiaohongshu, JD, …            |
+| Feishu Recruiting (ATSX) | 7         | NIO, MiniMax, Moonshot, Zhipu, iQIYI, Agibot, Lilith *via CDP*     |
+| Beisen Wecruit           | 2         | SenseTime, Horizon Robotics                                        |
+| Beisen iTalent (zhiye)   | 3         | vivo, iFlytek, (more on the way)                                   |
+| Moka (app.mokahr.com)    | 6         | Megvii, DeepSeek, Galaxy Universal, StepFun, Moonshot, Cambricon, Geely |
+| Greenhouse / Lever       | 3         | XPeng, WeRide, HoYoverse — these are international/US arms          |
+| Liepin third-party feed  | 4         | Hikvision, CICC, Cainiao, WeBank (no canonical public feed exists) |
+
+`Phase 2 — Auto-apply` needs login cookies / OAuth, not just the public search
+endpoints. See [docs/auto-apply.md](./docs/auto-apply.md) for the plan.
+
+### Notes on coverage edge cases
+
+* **Greenhouse / Lever boards** (XPeng / WeRide / HoYoverse) only carry the
+  *international* arm's postings (US AI center, Singapore game-dev, etc.).
+  The China-side campus boards for these companies aren't publicly reachable
+  from outside their networks; when they become accessible a sibling adapter
+  will land.
+* **Lilith** uses a Feishu tenant gated by a ByteDance Tengine `_signature`
+  anti-bot token. The CLI cracks it via `puppeteer-core` driving the user's
+  local Chrome. If Chrome isn't installed, this one adapter returns a
+  helpful `ok:false` with the install hint — the other 49 are unaffected.
+* **Hikvision / CICC / Cainiao / WeBank** have no canonical anonymous public
+  feed (the first three are geo-fenced or DNS-internal; WeBank is WeChat-
+  mini-program-only). For these four the CLI surfaces real currently-open
+  positions through [Liepin](https://www.liepin.com) and clearly labels the
+  result with `source: "api-c.liepin.com"` and `attribution: "via Liepin
+  (third-party aggregator) — official portal not publicly accessible"`.
+  See [docs/stub-unblock.md](./docs/stub-unblock.md) for the reasoning.
 
 ## How it's built
 
-- `cli/` — the npm package (TypeScript, zero runtime deps, Node 18+).
+- `cli/` — the npm package (TypeScript, Node 18+). Single runtime dep:
+  `puppeteer-core` (used only by the `lilith` adapter, see above).
+- `cli/src/<company>.ts` — one thin adapter per company.
+- `cli/src/{feishu,greenhouse,lever,moka,wecruit,liepin}.ts` — generic SaaS-ATS
+  factories. Adding a new tenant on an existing ATS is a ~30-line wrapper.
+- `cli/src/cdp.ts` — singleton headless-Chrome helper for anti-bot upstreams.
+  Reads `$JOB_PRO_HTTPS_PROXY` for a CN-egress proxy when needed.
+- `cli/src/adapter.ts` — the explicit `CompanyAdapter` contract every adapter
+  must satisfy.
+- `cli/test/smoke.ts` — strict gate: any live adapter regressing to `ok:false`
+  FAILs the suite. `KNOWN_LIMITED` is currently the empty set.
 - `src/` — the [job.ha7ch.com](https://job.ha7ch.com) landing page (Next.js).
-- `python-reference/` — the original Python port. Same endpoints, more
-  comments. Useful if you want to read the code top-to-bottom.
-- `docs/` — endpoint inventories per company.
+- `python-reference/` — the original Python port for `join.qq.com`.
+- `docs/` — endpoint inventories per company, plus `stub-unblock.md` with
+  the full recon history.
 
 ## Why "local-direct" instead of a hosted backend
 
@@ -103,12 +143,22 @@ heuristics. No prompt copy, no documentation copy, no skill body is reused.
 ## Contributing
 
 Adding a new company is mechanical:
-1. Find its public listing/detail API (DevTools → Network on the careers
-   site).
-2. Add a `cli/src/<company>.ts` mirroring `tencent.ts`.
-3. Wire it into `cli/src/index.ts`.
-4. Add a row to the roadmap above.
-5. Open a PR.
+1. Find its public listing/detail API. DevTools → Network on the careers
+   site is the fast path, but for SPAs with anti-bot challenges
+   (Tengine `_signature`, EdgeOne JS cookies, etc.) you may need
+   `cli/probe/<company>-network.ts` running puppeteer-core to intercept
+   the real XHR — see existing probes for templates.
+2. Identify the SaaS ATS family. If it's already supported
+   (`feishu` / `greenhouse` / `lever` / `moka` / `wecruit` / `liepin`),
+   add a ~30-line wrapper that calls `createAdapter({ … })`. Otherwise
+   write a bespoke adapter mirroring `tencent.ts`.
+3. Wire it into `cli/src/index.ts` `ADAPTERS` and `cli/test/smoke.ts`.
+   The `satisfies CompanyAdapter` clause will refuse to compile if
+   any of the 9 required verbs is missing.
+4. Add an entry to `src/app/page.tsx`'s `COMPANIES` array.
+5. Run `pnpm test`. The smoke gate runs every adapter in parallel and
+   FAILs on `ok:false` for non-`KNOWN_LIMITED` adapters.
+6. Open a PR.
 
 The auto-apply phase needs more thought — see the roadmap doc.
 
