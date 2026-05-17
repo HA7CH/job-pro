@@ -27,33 +27,37 @@ export async function readResumeFromPath(path: string): Promise<ParsedResume> {
   }
 
   if (ext === ".pdf") {
-    // Try pdf-parse first — pure JS, works for most PDFs.
-    try {
-      const pdfMod: { default: (b: Buffer) => Promise<{ text: string }> } =
-        await import("pdf-parse");
-      const pdfParse = pdfMod.default;
-      const buf = readFileSync(path);
-      const result = await pdfParse(buf);
-      if (result.text && result.text.trim().length > 0) {
-        return { text: result.text, source: "pdf", path };
-      }
-      // Empty text — fall through to poppler.
-    } catch {
-      // pdf-parse chokes on PDFs with corrupt XRef tables, linearized
-      // structure, or certain Word-export quirks. Fall through to poppler.
+    // Real-world PDFs come from Word/Pages/online tools and exhibit many
+    // failure modes: corrupt XRef tables, fillable AcroForm fields,
+    // linearization, embedded fonts, etc. Different extractors handle
+    // different subsets. Running both in parallel and picking whichever
+    // yielded more substantive text is the most reliable strategy short
+    // of OCR.
+    //
+    // Observed: pdf-parse silently returns only section headers (~500
+    // chars of whitespace + "PERSONAL SUMMARY") on a Word-exported PDF
+    // where pdftotext extracts the full content (~3KB). Length-based
+    // selection catches that.
+    const [pdfParseText, popplerText] = await Promise.all([
+      tryPdfParse(path),
+      Promise.resolve(tryPdftotext(path)),
+    ]);
+    const a = (pdfParseText ?? "").trim();
+    const b = (popplerText ?? "").trim();
+    if (!a && !b) {
+      throw new Error(
+        `failed to extract any text from ${path}. pdf-parse couldn't read ` +
+          `the PDF (often a malformed XRef table or unusual structure), and ` +
+          `pdftotext from poppler-utils is either not installed or also ` +
+          `failed. Install poppler (\`brew install poppler\` on macOS, ` +
+          `\`apt install poppler-utils\` on Linux) for better PDF support, ` +
+          `or re-export the resume from Word/Pages as a standard PDF.`
+      );
     }
-    const popplerText = tryPdftotext(path);
-    if (popplerText !== null) {
-      return { text: popplerText, source: "pdf", path };
-    }
-    throw new Error(
-      `failed to extract text from ${path}. pdf-parse couldn't read the ` +
-        `PDF (often a malformed XRef table or unusual structure), and ` +
-        `pdftotext from poppler-utils is not installed. Either install ` +
-        `poppler (\`brew install poppler\` on macOS, \`apt install ` +
-        `poppler-utils\` on Linux), or re-export the resume from Word/Pages ` +
-        `as a standard PDF.`
-    );
+    // Pick the more substantive extraction. Ties go to poppler (industry
+    // standard, generally better quality on edge cases).
+    const winner = b.length >= a.length ? b : a;
+    return { text: winner, source: "pdf", path };
   }
 
   if (ext === ".json") {
@@ -163,10 +167,9 @@ function flattenJsonResume(raw: string): string {
   return parts.join("\n");
 }
 
-// Shell out to poppler's pdftotext as a fallback when pdf-parse fails.
-// Returns null if pdftotext isn't on PATH or fails for any other reason.
-// poppler is the de-facto industry-standard PDF text extractor; it
-// auto-reconstructs malformed XRef tables that pdf-parse rejects.
+// Shell out to poppler's pdftotext. Returns null if pdftotext isn't on PATH
+// or fails for any other reason. poppler auto-reconstructs malformed XRef
+// tables and handles fillable form fields that pdf-parse misses.
 function tryPdftotext(path: string): string | null {
   try {
     const out = execFileSync("pdftotext", [path, "-"], {
@@ -175,6 +178,19 @@ function tryPdftotext(path: string): string | null {
       stdio: ["ignore", "pipe", "ignore"],
     });
     return out && out.trim().length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+// pdf-parse extractor wrapped to return null on any failure (so the caller
+// can race it with poppler without try/catch noise).
+async function tryPdfParse(path: string): Promise<string | null> {
+  try {
+    const pdfMod: { default: (b: Buffer) => Promise<{ text: string }> } =
+      await import("pdf-parse");
+    const result = await pdfMod.default(readFileSync(path));
+    return result.text && result.text.trim().length > 0 ? result.text : null;
   } catch {
     return null;
   }
