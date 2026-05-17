@@ -35,6 +35,13 @@ export interface AdapterAllOptions extends AdapterSearchOptions {
 export interface AdapterMatchOptions {
   topN?: number;
   candidates?: number;
+  /**
+   * Candidate's highest degree. When set, matchResume sorts qualifying jobs
+   * first and annotates each match with `degree_required` +
+   * `meets_degree_requirement`. Currently honored by the Tencent adapter;
+   * other adapters accept the option but don't yet act on it.
+   */
+  userDegree?: "bachelor" | "master" | "phd";
 }
 
 export interface AdapterFlowOptions {

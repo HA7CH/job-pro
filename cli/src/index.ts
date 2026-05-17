@@ -589,10 +589,20 @@ async function runCompany(
       resumePathFlag: resumePath,
       allowProfileFallback: true,
     });
+    // Pull degree from profile (no flag override yet — keeps things simple).
+    // Anything not in {bachelor, master, phd} is silently dropped, so a typo
+    // never breaks the call.
+    const profRaw = loadProfileRaw();
+    const rawDegree = profRaw.ok ? profRaw.profile?.degree : undefined;
+    const userDegree =
+      rawDegree === "bachelor" || rawDegree === "master" || rawDegree === "phd"
+        ? rawDegree
+        : undefined;
     return emit(
       await adapter.matchResume(text, {
         topN: topN ? Number(topN) : undefined,
         candidates: candidates ? Number(candidates) : undefined,
+        userDegree,
       }),
       compact
     );
@@ -1990,6 +2000,28 @@ Or copy the path to clipboard (macOS):
         if (!/\.(pdf|docx?|md|txt|rtf)$/i.test(lower))
           findings.push({ level: "WARN", check: "resume_path", message: `unusual extension: ${rp} (most ATS expect .pdf or .docx)` });
         else findings.push({ level: "PASS", check: "resume_path", message: rp });
+      }
+      // degree (optional — only validate when present)
+      if (p.degree !== undefined) {
+        const allowed = ["bachelor", "master", "phd"];
+        if (!allowed.includes(p.degree))
+          findings.push({
+            level: "FAIL",
+            check: "degree",
+            message: `"${p.degree}" not one of: ${allowed.join(" / ")}`,
+          });
+        else findings.push({ level: "PASS", check: "degree", message: p.degree });
+      }
+      // graduation_year (optional — basic sanity)
+      if (p.graduation_year !== undefined) {
+        const y = Number(p.graduation_year);
+        if (!Number.isInteger(y) || y < 1950 || y > 2100)
+          findings.push({
+            level: "FAIL",
+            check: "graduation_year",
+            message: `"${p.graduation_year}" not a plausible year (1950–2100)`,
+          });
+        else findings.push({ level: "PASS", check: "graduation_year", message: String(y) });
       }
       // custom
       const customCount = Object.keys(p.custom ?? {}).length;

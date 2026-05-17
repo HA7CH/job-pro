@@ -67,6 +67,8 @@ export function serializeCookieHeader(session: CapturedSession, targetHost?: str
   return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
 }
 
+export type DegreeLevel = "bachelor" | "master" | "phd";
+
 export interface ResumeProfile {
   first_name: string;
   last_name: string;
@@ -75,6 +77,14 @@ export interface ResumeProfile {
   /** Absolute path to a PDF or DOCX resume on disk. */
   resume_path?: string;
   cover_letter_text?: string;
+  /**
+   * Highest completed (or in-progress) degree. Used by `match` to flag jobs
+   * that require a higher level than the candidate holds (青云计划-博士 etc.).
+   * Not used for the apply path — staged answers still come from `custom`.
+   */
+  degree?: DegreeLevel;
+  /** e.g. 2023 — year the highest degree was/will be conferred. Optional context. */
+  graduation_year?: number;
   /** Free-form passthroughs — keys are matched against per-question `name` fields. */
   custom?: Record<string, string>;
 }
@@ -86,6 +96,8 @@ const TEMPLATE: ResumeProfile = {
   phone: "",
   resume_path: "",
   cover_letter_text: "",
+  // degree: "bachelor",        // "bachelor" | "master" | "phd" — surfaces ⚠ on matches that exceed your level
+  // graduation_year: 2023,     // optional context
   custom: {
     // Common Greenhouse / Lever questions:
     // question_<n>: "answer"
