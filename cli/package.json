@@ -41,13 +41,17 @@
     "test:apply": "tsx test/apply-smoke.ts",
     "test:debug-submit": "tsx test/debug-submit-smoke.ts",
     "test:unit": "tsx test/unit-smoke.ts",
+    "test:match": "tsx test/match-smoke.ts",
     "prepublishOnly": "npm run build && rm -rf extension && cp -R ../extension extension"
   },
   "dependencies": {
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1",
     "puppeteer-core": "^25.0.2"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pdf-parse": "^1.1.4",
     "tsx": "^4",
     "typescript": "^5"
   },

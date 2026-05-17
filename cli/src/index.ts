@@ -270,9 +270,12 @@ VERBS (same surface for every company)
   notices                           list official announcements (where supported)
   notice <id>                       show one announcement's content (tencent only)
   flow <question>                   answer using best-matching notices (tencent only)
-  match <resume-text-or-->          rank jobs by overlap with resume text
+  match [resume-text-or-]           rank jobs by overlap with resume text
+                                    --resume <path>            read .docx / .pdf / .json / .txt
                                     pass "-" to read resume from stdin
-  resume-check <resume-text-or-->   structural sanity check on a resume
+                                    omit args to use profile.resume_path
+  resume-check [resume-text-or-]    structural sanity check on a resume
+                                    --resume <path>            same format support as match
   apply <post_id>                   stage an application (Phase 2 dry-run)
                                     --schema                   dump raw schema (no profile needed)
                                     --print-form               emit a fillable JSON template
@@ -302,6 +305,8 @@ EXAMPLES
   job-pro tencent notices
   job-pro tencent flow "腾讯2026实习什么时候开始投递" --question-time 2026-05-13
   cat my-resume.md | job-pro tencent match -
+  job-pro tencent match --resume ~/cv.docx --top-n 10
+  job-pro tencent match --resume ~/resume.json --top-n 10
   job-pro tencent memory set "stack=Go,Python" "target_city=深圳"
   job-pro bytedance memory event applied "ByteDance 前端 7638940721068099893"
 
@@ -394,8 +399,15 @@ function emit(value: unknown, compact: boolean) {
   }
 }
 
-function readResumeArg(arg: string | undefined): string {
-  if (!arg) die("expected resume text or '-' for stdin");
+async function readResumeArg(
+  arg: string | undefined,
+  opts: { resumePathFlag?: string; allowProfileFallback?: boolean } = {}
+): Promise<string> {
+  // 1. --resume <path> flag (highest priority)
+  if (opts.resumePathFlag) {
+    return await readResumeByPath(opts.resumePathFlag);
+  }
+  // 2. positional "-" → stdin
   if (arg === "-") {
     try {
       return readFileSync(0, "utf8");
@@ -403,12 +415,42 @@ function readResumeArg(arg: string | undefined): string {
       die("could not read resume text from stdin");
     }
   }
-  // if it looks like a file path that exists, read it; otherwise treat as
-  // the resume text itself
+  // 3. positional path that exists → parse by extension
+  if (arg) {
+    try {
+      statSync(arg);
+      return await readResumeByPath(arg);
+    } catch {
+      return arg; // not a file → treat as literal resume text
+    }
+  }
+  // 4. fallback: profile.resume_path
+  if (opts.allowProfileFallback) {
+    const prof = loadProfileRaw();
+    if (prof.ok && prof.profile?.resume_path) {
+      return await readResumeByPath(prof.profile.resume_path);
+    }
+  }
+  die(
+    "expected resume input. Pass --resume <path-to-cv.docx|pdf|json|txt> " +
+      "or pipe text via '-', or set profile.resume_path."
+  );
+}
+
+async function readResumeByPath(path: string): Promise<string> {
   try {
-    return readFileSync(arg, "utf8");
-  } catch {
-    return arg;
+    const { readResumeFromPath } = await import("./resume.js");
+    const parsed = await readResumeFromPath(path);
+    if (!parsed.text || parsed.text.trim().length < 20) {
+      die(
+        `parsed ${parsed.source} resume at ${path} is empty or too short ` +
+          `(${parsed.text?.length ?? 0} chars). Confirm the file is a valid resume.`
+      );
+    }
+    return parsed.text;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    die(`failed to read resume from ${path}: ${msg}`);
   }
 }
 
@@ -542,7 +584,11 @@ async function runCompany(
   if (verb === "match") {
     const { args: a, value: topN } = popFlagValue(args, "--top-n");
     const { args: a2, value: candidates } = popFlagValue(a, "--candidates");
-    const text = readResumeArg(a2[0]);
+    const { args: a3, value: resumePath } = popFlagValue(a2, "--resume");
+    const text = await readResumeArg(a3[0], {
+      resumePathFlag: resumePath,
+      allowProfileFallback: true,
+    });
     return emit(
       await adapter.matchResume(text, {
         topN: topN ? Number(topN) : undefined,
@@ -553,7 +599,11 @@ async function runCompany(
   }
 
   if (verb === "resume-check") {
-    const text = readResumeArg(args[0]);
+    const { args: a, value: resumePath } = popFlagValue(args, "--resume");
+    const text = await readResumeArg(a[0], {
+      resumePathFlag: resumePath,
+      allowProfileFallback: true,
+    });
     return emit(adapter.checkResume(text), compact);
   }
 

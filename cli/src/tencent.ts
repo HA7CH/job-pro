@@ -622,12 +622,16 @@ const CITY_VOCAB = new Set([
   "西安", "合肥", "天津", "厦门", "香港", "remote", "远程",
 ]);
 
-// Match a short vocab term against haystack with word-style boundaries when
-// the term is 1-2 chars long, so "c" matches "C++" / "C language" but NOT the
-// "c" inside "TypeScript". Longer terms keep the original substring match,
-// which is forgiving across camelCase / kebab-case variations like "FastAPI".
+// Match a vocab term against haystack with word-style boundaries for Latin
+// terms (e.g. "rust" must not fire on "Trustworthy", "lua" must not fire on
+// "evaluation"). CJK terms keep substring matching since Chinese has no
+// inter-character boundary concept and false-positive risk is much lower.
 function termMatches(haystack: string, term: string): boolean {
-  if (term.length >= 3) return haystack.includes(term);
+  // Any CJK character → substring (Chinese vocab like "大模型", "多模态")
+  if (/[一-鿿]/.test(term)) return haystack.includes(term);
+  // Latin / digits / punctuation → enforce word boundary on both sides.
+  // Allows "c++" to match "C++ developer" but not "TypeScript", and "rust"
+  // to NOT match "Trustworthy" / "Robustness".
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(^|[^a-z0-9])${escaped}(?![a-z0-9])`, "i").test(haystack);
 }
@@ -680,6 +684,27 @@ export function scoreOverlap(haystack: string, terms: string[], cities: string[]
   return { score, reasons };
 }
 
+// Terms too common to be useful as search queries — appear on most engineering
+// resumes and would just dilute fan-out with off-topic candidates. We keep
+// them for scoring (so a "Python" hit in a JD still counts), but skip them
+// when picking which keywords to fire as API queries.
+const GENERIC_SEARCH_TERMS = new Set([
+  "python", "java", "c", "c++", "cpp", "javascript", "typescript", "go", "golang",
+  "docker", "kubernetes", "k8s", "linux", "aws", "gcp", "azure", "nginx",
+  "mysql", "postgresql", "postgres", "redis", "mongodb",
+  "ai", "ml", "cv", "nlp", "算法",
+]);
+
+function pickDistinctiveTerms(terms: string[], max: number): string[] {
+  const picked: string[] = [];
+  for (const t of terms) {
+    if (picked.length >= max) break;
+    if (GENERIC_SEARCH_TERMS.has(t.toLowerCase())) continue;
+    picked.push(t);
+  }
+  return picked;
+}
+
 export async function matchResume(
   text: string,
   opts: { topN?: number; candidates?: number } = {}
@@ -696,13 +721,37 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100 });
-  if (!list.ok) return { ok: false, message: list.message, positions: [] };
+  // Multi-query fan-out: prior versions ANDed the top-3 terms into a single
+  // keyword (e.g. "python rust lua") which gave 0–2 hits because few jobs
+  // mention all three. Now we fire one search per distinctive term in
+  // parallel and dedupe the union by post_id.
+  const queries = pickDistinctiveTerms(terms, 5);
+  if (queries.length === 0) queries.push(...terms.slice(0, 3));
+
+  const lists = await Promise.all(
+    queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100 }))
+  );
+  const seen = new Set<string>();
+  const merged: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of lists) {
+    if (!l.ok) {
+      lastErr = l.message;
+      continue;
+    }
+    for (const p of l.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      merged.push(p);
+    }
+  }
+  if (merged.length === 0) {
+    return { ok: false, message: lastErr ?? "no positions returned across any query", positions: [] };
+  }
 
   type Pre = { score: number; position: PositionSummary; reasons: string[] };
   const pre: Pre[] = [];
-  for (const p of list.positions) {
+  for (const p of merged) {
     const blob = [p.title, p.project, p.recruit_label, p.bgs, p.work_cities].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
     if (score > 0) pre.push({ score, position: p, reasons });
@@ -711,7 +760,7 @@ export async function matchResume(
 
   let shortlist = pre.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = merged.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],
