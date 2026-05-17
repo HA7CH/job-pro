@@ -7,6 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
+import { execFileSync } from "node:child_process";
 
 export type ResumeSource = "docx" | "pdf" | "json" | "text";
 
@@ -26,13 +27,33 @@ export async function readResumeFromPath(path: string): Promise<ParsedResume> {
   }
 
   if (ext === ".pdf") {
-    // pdf-parse is CJS-only; import default export and call with Buffer.
-    const pdfMod: { default: (b: Buffer) => Promise<{ text: string }> } =
-      await import("pdf-parse");
-    const pdfParse = pdfMod.default;
-    const buf = readFileSync(path);
-    const result = await pdfParse(buf);
-    return { text: result.text, source: "pdf", path };
+    // Try pdf-parse first — pure JS, works for most PDFs.
+    try {
+      const pdfMod: { default: (b: Buffer) => Promise<{ text: string }> } =
+        await import("pdf-parse");
+      const pdfParse = pdfMod.default;
+      const buf = readFileSync(path);
+      const result = await pdfParse(buf);
+      if (result.text && result.text.trim().length > 0) {
+        return { text: result.text, source: "pdf", path };
+      }
+      // Empty text — fall through to poppler.
+    } catch {
+      // pdf-parse chokes on PDFs with corrupt XRef tables, linearized
+      // structure, or certain Word-export quirks. Fall through to poppler.
+    }
+    const popplerText = tryPdftotext(path);
+    if (popplerText !== null) {
+      return { text: popplerText, source: "pdf", path };
+    }
+    throw new Error(
+      `failed to extract text from ${path}. pdf-parse couldn't read the ` +
+        `PDF (often a malformed XRef table or unusual structure), and ` +
+        `pdftotext from poppler-utils is not installed. Either install ` +
+        `poppler (\`brew install poppler\` on macOS, \`apt install ` +
+        `poppler-utils\` on Linux), or re-export the resume from Word/Pages ` +
+        `as a standard PDF.`
+    );
   }
 
   if (ext === ".json") {
@@ -140,6 +161,23 @@ function flattenJsonResume(raw: string): string {
   }
 
   return parts.join("\n");
+}
+
+// Shell out to poppler's pdftotext as a fallback when pdf-parse fails.
+// Returns null if pdftotext isn't on PATH or fails for any other reason.
+// poppler is the de-facto industry-standard PDF text extractor; it
+// auto-reconstructs malformed XRef tables that pdf-parse rejects.
+function tryPdftotext(path: string): string | null {
+  try {
+    const out = execFileSync("pdftotext", [path, "-"], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out && out.trim().length > 0 ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 function walkStrings(node: unknown, out: string[]): void {
