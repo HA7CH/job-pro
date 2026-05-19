@@ -13,10 +13,11 @@ applications) is partially shipped as of `0.9.1`:
 * **Session bridge** (`extension/`) — manifest-v3 Chrome extension that
   captures Cookie + CSRF/XSRF headers from any of the 50 careers sites
   the user logs into, and exports them as `~/.jobpro/<adapter>.session.json`.
-* **`--really-submit`** is gated behind `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes`
-  AND (for non-anon adapters) requires `~/.jobpro/<co>.session.json` to
-  exist. Both gates can be cleared with explicit user action; we never
-  fire a submission without them.
+* **`--confirm-submit`** is the human-in-the-loop submit path: stage the
+  form, show the final payload, ask once, then fire the right official-site
+  submitter. **`--really-submit`** remains for scripts and is gated behind
+  `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes`. Non-anon adapters still require
+  `~/.jobpro/<co>.session.json`.
 
 ## Quickstart
 
@@ -27,14 +28,17 @@ $EDITOR ~/.jobpro/profile.json # fill first_name / last_name / email / phone / r
 # Greenhouse / Lever (anonymous submission)
 job-pro xpeng apply 8548990002                                  # dry-run
 job-pro xpeng apply 8548990002 --debug-submit-to https://httpbin.org/post
+job-pro xpeng apply 8548990002 --confirm-submit                 # preview → confirm → submit
+
+# Non-interactive script mode:
 JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
-  job-pro xpeng apply 8548990002 --really-submit                # actually fires
+  job-pro xpeng apply 8548990002 --really-submit
 
 # Adapters needing session.json (Beisen / Moka / Feishu / bespoke):
 # 1. job-pro extension  (prints path + 6-step Chrome install walkthrough)
 # 2. Log into the careers site in your normal browser
 # 3. Click extension → Export → mv ~/Downloads/jobpro/<co>.session.json ~/.jobpro/
-# 4. job-pro <co> apply <postId> --really-submit (with the env-var set)
+# 4. job-pro <co> apply <postId> --confirm-submit
 ```
 
 ## Rollout matrix (50 / 50)
@@ -170,11 +174,11 @@ Run `job-pro recon` for the live matrix any time.
 
 **Next: real-session validation.** All 45 verified endpoints have a
 real route at the right URL. The body shape might still differ from
-what the real upstream expects. To fully ship a `--really-submit`,
+what the real upstream expects. To fully validate a real submitter,
 each adapter needs:
 
 1. A captured candidate session (browser extension).
-2. A real `--really-submit` fire to confirm the upstream accepts the
+2. A real `--confirm-submit` fire to confirm the upstream accepts the
    multipart body we construct.
 3. If 4xx, inspect the network tab for the actual body shape, patch
    the buildMultipartForm path for that adapter family.
@@ -221,9 +225,8 @@ For each 🔑 unblock, the workflow:
 3. mv ~/Downloads/jobpro/<co>.session.json ~/.jobpro/
 4. job-pro <co> apply <id> --debug-submit-to <your-echo>
    # inspect the multipart body shape going out
-5. JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
-   JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes \
-   job-pro <co> apply <id> --really-submit
+5. JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes \
+   job-pro <co> apply <id> --confirm-submit
    # 200 OK = success; 4xx = the specific path is wrong, network-tab
    # XHR shows real path → patch adapter
 6. Set endpoint_verified: true in the adapter + add to ENDPOINT_VERIFIED
@@ -234,21 +237,23 @@ For each 🔑 unblock, the workflow:
    is recruiter-IM-mediated; `apply_url` opens the chat in browser
    (already the right UX).
 
-## Why we don't auto-submit yet
+## Why auto-submit still asks once
 
-A real `--really-submit` from a bug-ridden first version to a real
-Greenhouse board sends a real application to a real recruiter. That's
-worse than a read-side bug. Hence the layered safety:
+Submitting from a bug-ridden first version to a real Greenhouse board
+sends a real application to a real recruiter. That's worse than a
+read-side bug. Hence the layered safety:
 
 1. Default verb is dry-run (no network).
 2. `--debug-submit-to <url>` requires an explicit echo URL.
-3. `--really-submit` requires `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes`.
+3. `--confirm-submit` requires a final interactive confirmation after
+   showing the staged resume / answers; `--really-submit` requires
+   `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` for scripts.
 4. Non-anon adapters additionally require `~/.jobpro/<co>.session.json`
    to exist (i.e. you've explicitly captured a session via the
    extension).
 
 Together these mean a submission only fires when the user has explicitly:
 - captured their session in the browser,
-- attested to the env-var prompt,
-- run a verb that says "really submit",
+- confirmed the final staged payload or opted into script mode,
+- run a verb that says "submit",
 - and have a complete profile + resume on disk.

@@ -50,7 +50,7 @@
 //   apply_url     — https://agirobot.jobs.feishu.cn/socialrecruitment/position/{id}/detail
 // ============================================================
 
-import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 export { checkResume };
 
 const SOURCE = "agirobot.jobs.feishu.cn";
