@@ -695,7 +695,7 @@ const GENERIC_SEARCH_TERMS = new Set([
   "ai", "ml", "cv", "nlp", "算法",
 ]);
 
-function pickDistinctiveTerms(terms: string[], max: number): string[] {
+export function pickDistinctiveTerms(terms: string[], max: number): string[] {
   const picked: string[] = [];
   for (const t of terms) {
     if (picked.length >= max) break;
