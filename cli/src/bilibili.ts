@@ -108,7 +108,7 @@
 // The CSRF token is fresh per request; cache it for the process lifetime to
 // avoid double-fetching on repeated searchPositions calls.
 
-import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
 export { checkResume };
 
 const API_ROOT = "https://jobs.bilibili.com";
@@ -449,10 +449,26 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100 });
-  if (!list.ok) {
-    return { ok: false, source: "jobs.bilibili.com", message: list.message, positions: [] };
+  const queries = pickDistinctiveTerms(terms, 3);
+  if (!queries.length) queries.push(terms[0] ?? "");
+  const posLists = await Promise.all(
+    queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100 }))
+  );
+  const seen = new Set<string>();
+  const pool: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of posLists) {
+    if (!l.ok) { lastErr = l.message; continue; }
+    for (const p of l.positions) {
+      if (!seen.has(p.post_id)) { seen.add(p.post_id); pool.push(p); }
+    }
+  }
+  if (!pool.length) {
+    const broad = await searchPositions({ page: 1, pageSize: 100 });
+    if (broad.ok) pool.push(...broad.positions);
+  }
+  if (!pool.length) {
+    return { ok: false, source: "jobs.bilibili.com", message: lastErr ?? "no positions returned", positions: [] };
   }
 
   type Scored = {
@@ -463,7 +479,7 @@ export async function matchResume(
   };
   const scored: Scored[] = [];
 
-  for (const p of list.positions) {
+  for (const p of pool) {
     const blob = [p.title, p.project, p.recruit_label, p.work_cities].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
     if (score > 0) {
@@ -474,7 +490,7 @@ export async function matchResume(
 
   let shortlist = scored.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = pool.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],

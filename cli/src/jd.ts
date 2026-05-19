@@ -66,7 +66,7 @@
 //   work_cities   ← unique workCity values from requirementVoList joined with " / "
 //   apply_url     ← https://campus.jd.com/#/newDetails?publishId=<id>
 
-import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
 export { checkResume };
 
 const API_ROOT = "https://campus.jd.com";
@@ -634,24 +634,32 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-
-  // Fetch up to 200 positions so we have a good candidate pool
-  const list = await searchPositions({ keyword, page: 1, pageSize: 200, recruitType });
-  if (!list.ok) {
+  const queries = pickDistinctiveTerms(terms, 3);
+  if (!queries.length) queries.push(terms[0] ?? "");
+  const lists = await Promise.all(
+    queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 20, recruitType }))
+  );
+  const seenIds = new Set<string>();
+  const pool: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of lists) {
+    if (!l.ok) { lastErr = l.message; continue; }
+    for (const p of l.positions) {
+      if (!seenIds.has(p.post_id)) { seenIds.add(p.post_id); pool.push(p); }
+    }
+  }
+  if (!pool.length) {
+    const broad = await searchPositions({ page: 1, pageSize: 20, recruitType });
+    if (broad.ok) pool.push(...broad.positions);
+  }
+  if (!pool.length) {
     return {
       ok: false as const,
       source: "campus.jd.com",
-      message: list.message,
+      message: lastErr ?? "no positions returned",
       positions: [] as PositionSummary[],
     };
   }
-
-  // If keyword search returns few results, fall back to full list
-  const pool =
-    list.positions.length < 10
-      ? (await searchPositions({ page: 1, pageSize: 200, recruitType })).positions
-      : list.positions;
 
   type Scored = {
     score: number;

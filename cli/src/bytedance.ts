@@ -152,7 +152,7 @@
 //   work_cities   ← item.city_info.name + city_list joined with " / " for multi-city posts
 //   apply_url     ← https://jobs.bytedance.com/campus/position/${id}/detail
 
-import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
 export { extractResumeSignals, scoreOverlap, checkResume };
 
 const API_ROOT = "https://jobs.bytedance.com/api/v1";
@@ -725,24 +725,32 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100 });
-  if (!list.ok) {
-    return { ok: false, source: "jobs.bytedance.com", message: list.message, positions: [] };
+  const queries = pickDistinctiveTerms(terms, 3);
+  if (!queries.length) queries.push(terms[0] ?? "");
+  const [posLists, rawResults] = await Promise.all([
+    Promise.all(queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100 }))),
+    Promise.all(queries.map((q) => call<RawSearchData>("/search/job/posts", {
+      keyword: q, limit: 100, offset: 0, portal_type: 3, portal_entrance: 1, language: "zh",
+      recruitment_id_list: ["201"],
+    }))),
+  ]);
+  const seen = new Set<string>();
+  const pool: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of posLists) {
+    if (!l.ok) { lastErr = l.message; continue; }
+    for (const p of l.positions) {
+      if (!seen.has(p.post_id)) { seen.add(p.post_id); pool.push(p); }
+    }
   }
-
-  // Re-fetch raw posts to access description + requirement fields
-  const payload = {
-    keyword,
-    limit: 100,
-    offset: 0,
-    portal_type: 3,
-    portal_entrance: 1,
-    language: "zh",
-    recruitment_id_list: ["201"],
-  };
-  const raw = await call<RawSearchData>("/search/job/posts", payload);
-  const rawPosts: RawJobPost[] = raw.ok ? (raw.data?.job_post_list ?? []) : [];
+  if (!pool.length) {
+    const broad = await searchPositions({ page: 1, pageSize: 100 });
+    if (broad.ok) pool.push(...broad.positions);
+  }
+  if (!pool.length) {
+    return { ok: false, source: "jobs.bytedance.com", message: lastErr ?? "no positions returned", positions: [] };
+  }
+  const rawPosts: RawJobPost[] = rawResults.flatMap((r) => r.ok ? (r.data?.job_post_list ?? []) : []);
 
   // Build a lookup from id → raw post for blob scoring
   const rawById = new Map<string, RawJobPost>();
@@ -759,7 +767,7 @@ export async function matchResume(
   };
   const scored: Scored[] = [];
 
-  for (const p of list.positions) {
+  for (const p of pool) {
     const rp = rawById.get(p.post_id);
     const blob = [
       p.title,
@@ -785,7 +793,7 @@ export async function matchResume(
   let shortlist = scored.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
     // Fall back: return first N positions with score 0
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = pool.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],

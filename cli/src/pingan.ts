@@ -538,8 +538,9 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, pageSize: 100 });
+  // Pingan rejects English keywords — skip keyword search and do a broad no-keyword
+  // fetch, then score locally against extracted terms.
+  const list = await searchPositions({ pageSize: 100 });
   if (!list.ok) {
     return { ok: false, source: "campus.pingan.com", message: list.message, positions: [] };
   }
@@ -550,7 +551,7 @@ export async function matchResume(
   if (wecruitId) {
     const raw = await call<RawPositionListData>(
       "/candidate/position/campus/positionSearch/queryPositionPage",
-      { wecruitId, pageNo: 1, pageSize: 100, keyWord: keyword }
+      { wecruitId, pageNo: 1, pageSize: 100 }
     );
     if (raw.ok && raw.data?.list) {
       rawPosts.push(...raw.data.list);
