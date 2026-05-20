@@ -321,8 +321,8 @@ EXAMPLES
   job-pro bytedance memory event applied "ByteDance 前端 7638940721068099893"
 
 COMPANION
-  Pairs with cv.ha7ch.com — draft the resume you pipe into \`match\` /
-  \`resume-check\` and paste into \`apply --interactive\`.
+  cv.ha7ch.com — spin up a tailored resume for each company in seconds,
+  then feed it straight into \`match\` / \`resume-check\` / \`apply\`.
 
 DOCS
   https://job.ha7ch.com

@@ -399,10 +399,8 @@ const COMPANIES: Company[] = [
 const PROMPT = `Run \`npx job-pro@latest help\` to discover the CLI, then use it to find
 Chinese big-tech campus jobs that fit my background.
 
-My resume: <paste path or text>
-
-Match roles to my resume, draft tailored bullets, and prep me for interviews.
-Always reply to me in Chinese.`;
+Ask me for my resume when you need it. Match roles to it, draft tailored
+bullets, and prep me for interviews. Always reply to me in Chinese.`;
 
 /**
  * Material Symbols Rounded (filled). Path data sourced from
@@ -506,7 +504,7 @@ export default function Home() {
           <a href="https://cv.ha7ch.com" target="_blank" rel="noopener noreferrer">
             cv.ha7ch.com
           </a>
-          {" "}— draft the resume you paste above.
+          {" "}— spin up a tailored resume for each company in seconds.
         </span>
         <button
           type="button"
