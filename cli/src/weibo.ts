@@ -46,7 +46,10 @@ import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
-export const supportedScopes: ReadonlyArray<PositionScope> = ["campus", "social", "all"] as const;
+// Weibo's campus siteId 43534 returns "未找到对应的官网" — campus channel
+// is dark. Only siteId 43535 (social) is live. Declare social/all so the
+// dispatcher refuses `--scope campus` instead of returning a confusing error.
+export const supportedScopes: ReadonlyArray<PositionScope> = ["social", "all"] as const;
 
 const SOURCE = "app.mokahr.com/sina";
 const API_ROOT = "https://app.mokahr.com";
@@ -219,7 +222,9 @@ function summarize(
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const channel = opts.channel ?? channelFromScope(opts.scope) ?? "campus";
+  // Default channel is social because campus siteId 43534 is permanently
+  // dark ("未找到对应的官网"). scope=campus is refused by the dispatcher.
+  const channel = opts.channel ?? channelFromScope(opts.scope) ?? "social";
   const siteId = channel === "social" ? SOCIAL_SITE_ID : CAMPUS_SITE_ID;
   const refererPage = channel === "social" ? SOCIAL_PAGE : CAMPUS_PAGE;
 

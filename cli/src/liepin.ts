@@ -455,6 +455,10 @@ export function createAdapter(cfg: LiepinAdapterConfig) {
   }
 
   return {
+    // Liepin is a social-hire aggregator — the 4 Tier-3 companies routed
+    // through this factory (hikvision/cicc/cainiao/webank) have no
+    // campus/intern channel here; dispatcher refuses those scopes.
+    supportedScopes: ["social", "all"] as const,
     searchPositions,
     fetchAllPositions,
     fetchPositionDetail,

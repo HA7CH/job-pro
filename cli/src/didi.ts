@@ -88,8 +88,9 @@ export const supportedScopes = ["social", "campus", "intern", "all"] as const sa
 function jdNoMatchesScope(jdNo: string | undefined, s: PositionScope | undefined): boolean {
   if (!s || s === "all") return true;
   const n = jdNo ?? "";
-  if (s === "campus" || s === "intern") return n.startsWith("JR-");
-  if (s === "social") return n.startsWith("J-") && !n.startsWith("JR-");
+  // jdNo values have no hyphen: campus → "JR2026051100V", social → "J251211006".
+  if (s === "campus" || s === "intern") return n.startsWith("JR");
+  if (s === "social") return n.startsWith("J") && !n.startsWith("JR");
   return true;
 }
 

@@ -67,7 +67,13 @@
 //   apply_url     ← https://campus.jd.com/#/newDetails?publishId=<id>
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+// campus.jd.com is a campus-only portal — there is no social-hire endpoint
+// on this domain. JD's 社招 listings live on a separate site that we don't
+// scrape. Declaring this lets the dispatcher fail fast on `--scope social`.
+export const supportedScopes: ReadonlyArray<PositionScope> = ["campus", "intern", "all"] as const;
 
 const API_ROOT = "https://campus.jd.com";
 const CAMPUS_PAGE = "https://campus.jd.com/";
@@ -274,8 +280,9 @@ export interface SearchOptions {
   page?: number;
   /** Page size. Default: 20. Max: 200 (server returns all if huge). */
   pageSize?: number;
-  /** Recruit type tab: "present" (应届生, default), "internship" (实习生), "talent" (TGT专项).
-   *  Corresponds to projectList[].code from getProjectList. */
+  /** Recruit type tab: "present" (应届生), "internship" (实习生), "talent" (TGT专项).
+   *  Corresponds to projectList[].code from getProjectList. When omitted, the
+   *  adapter fans out across all three and merges by publishId. */
   recruitType?: "present" | "internship" | "talent";
   /** Filter by plan IDs from getProjectList (planMapList[].id).
    *  e.g. [45] = JD YOUNG实习生计划, [47] = TGT-顶尖青年技术天才计划. */
@@ -286,17 +293,29 @@ export interface SearchOptions {
   /** Filter by city codes from requirementVoList[].workCityCode.
    *  e.g. ["00001"] = 北京市, ["00196"] = 广东省-广州市. */
   workCityCodeList?: string[];
+  /** Canonical CLI scope (1.1.0+). When set, picks the upstream recruitType
+   *  bucket(s). When omitted, the adapter fans out across all three. */
+  scope?: PositionScope;
 }
 
 // ---------- searchPositions ----------
 
-export async function searchPositions(opts: SearchOptions = {}) {
-  const pageSize = Math.max(1, Math.min(200, opts.pageSize ?? 20));
-  const page = Math.max(1, opts.page ?? 1);
-  const recruitType = opts.recruitType ?? "present";
-  const recruitLabel = TYPE_LABELS[recruitType] ?? recruitType;
-  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+// Scope → recruitType buckets. JD has three buckets and the legacy default
+// ("present" alone) returns totalNumber>0 with empty items[] for most
+// keywords, so fanning out + dedupe by publishId gives users honest data.
+function bucketsForScope(scope: PositionScope | undefined): Array<"present" | "internship" | "talent"> {
+  if (scope === "intern") return ["internship"];
+  if (scope === "campus") return ["present", "talent"];
+  return ["present", "internship", "talent"];
+}
 
+async function searchOneBucket(
+  recruitType: "present" | "internship" | "talent",
+  opts: SearchOptions,
+  page: number,
+  pageSize: number,
+) {
+  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
   const payload = {
     pageSize,
     pageIndex: page,
@@ -308,16 +327,32 @@ export async function searchPositions(opts: SearchOptions = {}) {
       workCityCodeList: opts.workCityCodeList ?? [],
     },
   };
-
   const url = `${API_ROOT}/api/wx/position/page?type=${encodeURIComponent(recruitType)}`;
   const resp = await postJson<RawPageResponse>(url, payload);
+  return { recruitType, resp, payload };
+}
 
-  if (!resp.ok || !resp.data) {
+export async function searchPositions(opts: SearchOptions = {}) {
+  const pageSize = Math.max(1, Math.min(200, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+
+  // Explicit recruitType wins; otherwise derive from scope (or fan out).
+  const buckets = opts.recruitType ? [opts.recruitType] : bucketsForScope(opts.scope);
+
+  const results = await Promise.all(
+    buckets.map((b) => searchOneBucket(b, opts, page, pageSize)),
+  );
+
+  // If every bucket errored at transport / envelope level, surface the first error.
+  const allFailed = results.every(({ resp }) => !resp.ok || !resp.data || !resp.data.success);
+  if (allFailed) {
+    const first = results[0];
     return {
       ok: false as const,
       source: "campus.jd.com",
-      message: resp.message,
-      query: payload,
+      message:
+        first.resp.data?.errorMessage ?? first.resp.message ?? "upstream returned success=false",
+      query: first.payload,
       page,
       page_size: pageSize,
       total: 0,
@@ -325,29 +360,32 @@ export async function searchPositions(opts: SearchOptions = {}) {
     };
   }
 
-  const d = resp.data;
-  if (!d.success) {
-    return {
-      ok: false as const,
-      source: "campus.jd.com",
-      message: d.errorMessage ?? "upstream returned success=false",
-      query: payload,
-      page,
-      page_size: pageSize,
-      total: 0,
-      positions: [] as PositionSummary[],
-    };
+  // Merge by publishId across buckets; label by the bucket each row came from.
+  const seen = new Set<string>();
+  const positions: PositionSummary[] = [];
+  let total = 0;
+  for (const { recruitType, resp } of results) {
+    if (!resp.ok || !resp.data || !resp.data.success) continue;
+    const recruitLabel = TYPE_LABELS[recruitType] ?? recruitType;
+    const items = resp.data.body?.items ?? [];
+    total += resp.data.body?.totalNumber ?? items.length;
+    for (const item of items) {
+      const id = String(item.publishId ?? "");
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      positions.push(summarizePosition(item, recruitLabel));
+    }
   }
 
-  const items = d.body?.items ?? [];
   return {
     ok: true as const,
     source: "campus.jd.com",
-    query: payload,
+    query: results[0].payload,
     page,
     page_size: pageSize,
-    total: d.body?.totalNumber ?? items.length,
-    positions: items.map((item) => summarizePosition(item, recruitLabel)),
+    buckets,
+    total,
+    positions,
   };
 }
 

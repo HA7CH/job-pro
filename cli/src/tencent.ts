@@ -142,6 +142,13 @@ async function call<T>(
  *  data.count is unreliable when projectIdList is the sole filter
  *  (always returns 695 regardless of which projects are listed).
  */
+import type { PositionScope } from "./adapter.js";
+
+// join.qq.com is campus-only (see file header). Social-hire lives at
+// careers.tencent.com which we don't scrape; declare campus/intern/all so
+// dispatcher fails fast on `--scope social`.
+export const supportedScopes: ReadonlyArray<PositionScope> = ["campus", "intern", "all"] as const;
+
 export async function fetchDictionaries() {
   const [projects, families, workCities, recruitCities, shared] = await Promise.all([
     call<unknown[]>("GET", "/position/getAllProject"),

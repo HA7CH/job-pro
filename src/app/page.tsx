@@ -68,7 +68,7 @@ const COMPANIES: Company[] = [
   {
     name: "JD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/jd.ts",
-    campus: "building",
+    campus: "live",
     social: "building",
     autoApply: "live",
   },
@@ -103,8 +103,8 @@ const COMPANIES: Company[] = [
   {
     name: "Didi",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/didi.ts",
-    campus: "building",
-    social: "building",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
@@ -236,8 +236,8 @@ const COMPANIES: Company[] = [
   {
     name: "Megvii",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/megvii.ts",
-    campus: "building",
-    social: "building",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {

@@ -47,7 +47,13 @@
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+// Unitree exposes a single mixed listing (social + campus interleaved).
+// Cannot server-side filter by scope; declare all four so dispatcher
+// accepts the flag and the adapter returns the same union regardless.
+export const supportedScopes: ReadonlyArray<PositionScope> = ["social", "campus", "intern", "all"] as const;
 
 const SOURCE = "unitree.com";
 const POSITION_PAGE = "https://www.unitree.com/position/";
