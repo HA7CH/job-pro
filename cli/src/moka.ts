@@ -23,7 +23,9 @@
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import { createDecipheriv } from "node:crypto";
 import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+export type { PositionScope };
 
 // ---------- adapter config ----------
 
@@ -43,8 +45,21 @@ export interface MokaAdapterConfig {
   label: string;
   /** Public portals to merge into the unified job feed. */
   channels: MokaChannel[];
-  /** Default channel kind for matchResume / dictionaries when caller omits one. */
+  /**
+   * Default channel kind for matchResume / dictionaries when caller omits one.
+   *
+   * @deprecated Prefer `defaultScope` (the canonical CLI axis). Still honored
+   * for 1.0.93 callers that pass `defaultRecruitType: "social" | "campus" |
+   * "referral"`. When both are set, `defaultScope` wins.
+   */
   defaultRecruitType?: "campus" | "social" | "referral";
+  /**
+   * Caller-side canonical scope used when no scope is supplied at call time.
+   * One of `"social" | "campus" | "intern" | "all"`. Translated to a channel
+   * via `pickChannelForScope`. If omitted, falls back to `defaultRecruitType`
+   * (legacy) and finally to the first channel.
+   */
+  defaultScope?: PositionScope;
 }
 
 // ---------- raw Moka shapes ----------
@@ -98,6 +113,12 @@ export interface SearchOptions {
   /** "campus" / "social" / "referral" → routes to the matching channel.
    *  Omit to use the adapter's defaultRecruitType. */
   recruitType?: "campus" | "social" | "referral";
+  /**
+   * Canonical CLI scope axis. Overrides `recruitType` when set.
+   * `"all"` triggers a parallel fetch across every configured channel and
+   * merges the results (de-duplicated by `post_id`).
+   */
+  scope?: PositionScope;
 }
 
 // ---------- shared headers ----------
@@ -297,6 +318,53 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     return cfg.channels.find((c) => c.recruitType === want) ?? cfg.channels[0];
   }
 
+  /**
+   * Translate a CLI-canonical `PositionScope` to the Moka channel that
+   * fulfils it. `"social"` and `"campus"` map directly to a `recruitType`
+   * value; `"intern"` has no native Moka channel (Moka folds interns into
+   * the campus portal in every tenant we've seen), so we route it through
+   * the campus channel and let the consumer filter by `hireMode === 2` if
+   * needed. `"all"` is a sentinel handled by the caller (parallel merge
+   * across every channel); for any callers that hand it here directly we
+   * fall back to the first channel.
+   *
+   * Returns the first matching channel, or — if none matches — the default
+   * channel (per `defaultScope` / `defaultRecruitType` / first entry).
+   */
+  function pickChannelForScope(s: PositionScope): MokaChannel {
+    if (s === "social")
+      return cfg.channels.find((c) => c.recruitType === "social") ?? defaultChannel();
+    if (s === "campus" || s === "intern")
+      return cfg.channels.find((c) => c.recruitType === "campus") ?? defaultChannel();
+    // s === "all" — caller is expected to fan out; return default as a fallback.
+    return defaultChannel();
+  }
+
+  function defaultChannel(): MokaChannel {
+    if (cfg.defaultScope && cfg.defaultScope !== "all") {
+      const want = cfg.defaultScope === "intern" ? "campus" : cfg.defaultScope;
+      const hit = cfg.channels.find((c) => c.recruitType === want);
+      if (hit) return hit;
+    }
+    if (cfg.defaultRecruitType) {
+      const hit = cfg.channels.find((c) => c.recruitType === cfg.defaultRecruitType);
+      if (hit) return hit;
+    }
+    return cfg.channels[0];
+  }
+
+  /**
+   * Resolve the channel to query for a given options bag. `opts.scope` (CLI
+   * canonical) wins over `opts.recruitType` (legacy per-adapter field). When
+   * neither is set, falls back to the adapter's defaultScope /
+   * defaultRecruitType / first channel — same precedence as `defaultChannel`.
+   */
+  function resolveChannel(opts: SearchOptions): MokaChannel {
+    if (opts.scope && opts.scope !== "all") return pickChannelForScope(opts.scope);
+    if (opts.recruitType) return pickChannel(opts.recruitType);
+    return defaultChannel();
+  }
+
   function summarize(job: MokaJob, cityMap: Record<number, string>, ch: MokaChannel): PositionSummary {
     return {
       post_id: String(job.id),
@@ -309,8 +377,7 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     };
   }
 
-  async function searchPositions(opts: SearchOptions = {}) {
-    const ch = pickChannel(opts.recruitType);
+  async function searchOneChannel(ch: MokaChannel, opts: SearchOptions = {}) {
     const url = portalUrl(ch);
     const pageSize = opts.pageSize ?? 20;
     const page = opts.page ?? 1;
@@ -378,8 +445,61 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     };
   }
 
-  async function fetchAllPositions(opts: SearchOptions & { maxPages?: number } = {}) {
-    const ch = pickChannel(opts.recruitType);
+  async function searchPositions(opts: SearchOptions = {}) {
+    // scope === "all" + multiple channels → parallel fetch + merge, deduped
+    // on post_id (Moka tenants sometimes mirror referral jobs into both
+    // campus + social portals).
+    if (opts.scope === "all" && cfg.channels.length > 1) {
+      const pageSize = opts.pageSize ?? 20;
+      const page = opts.page ?? 1;
+      const keyword = opts.keyword ?? "";
+      const results = await Promise.all(
+        cfg.channels.map((ch) => searchOneChannel(ch, opts))
+      );
+      const merged: PositionSummary[] = [];
+      const seen = new Set<string>();
+      let totalSum = 0;
+      const errors: string[] = [];
+      for (const r of results) {
+        if (!r.ok) {
+          errors.push(`${r.query.recruitType}: ${r.message}`);
+          continue;
+        }
+        totalSum += r.total ?? 0;
+        for (const p of r.positions) {
+          if (seen.has(p.post_id)) continue;
+          seen.add(p.post_id);
+          merged.push(p);
+        }
+      }
+      // All channels failed → return failure that surfaces the per-channel reasons.
+      if (merged.length === 0 && errors.length === results.length) {
+        return {
+          ok: false as const,
+          source: SOURCE,
+          message: `all channels failed: ${errors.join("; ")}`,
+          query: { recruitType: "all", keyword, page, pageSize },
+          positions: [] as PositionSummary[],
+          total: 0,
+        };
+      }
+      return {
+        ok: true as const,
+        source: SOURCE,
+        query: { recruitType: "all", keyword, page, pageSize },
+        page,
+        page_size: pageSize,
+        total: totalSum,
+        positions: merged.slice(0, pageSize),
+      };
+    }
+    return searchOneChannel(resolveChannel(opts), opts);
+  }
+
+  async function fetchAllOneChannel(
+    ch: MokaChannel,
+    opts: SearchOptions & { maxPages?: number } = {}
+  ) {
     const url = portalUrl(ch);
     const pageSize = opts.pageSize ?? 20;
     const maxPages = Math.max(1, opts.maxPages ?? 50);
@@ -434,6 +554,50 @@ export function createAdapter(cfg: MokaAdapterConfig) {
       fetched: filtered.length,
       positions: filtered.map((j) => summarize(j, cityMap, ch)),
     };
+  }
+
+  async function fetchAllPositions(opts: SearchOptions & { maxPages?: number } = {}) {
+    // scope === "all" + multiple channels → parallel fan-out, then merge +
+    // dedupe by post_id. Mirrors the searchPositions branch.
+    if (opts.scope === "all" && cfg.channels.length > 1) {
+      const results = await Promise.all(
+        cfg.channels.map((ch) => fetchAllOneChannel(ch, opts))
+      );
+      const merged: PositionSummary[] = [];
+      const seen = new Set<string>();
+      let totalSum = 0;
+      const errors: string[] = [];
+      for (const r of results) {
+        if (!r.ok) {
+          errors.push(r.message);
+          continue;
+        }
+        totalSum += r.total ?? 0;
+        for (const p of r.positions) {
+          if (seen.has(p.post_id)) continue;
+          seen.add(p.post_id);
+          merged.push(p);
+        }
+      }
+      if (merged.length === 0 && errors.length === results.length) {
+        return {
+          ok: false as const,
+          source: SOURCE,
+          message: `all channels failed: ${errors.join("; ")}`,
+          total: 0,
+          fetched: 0,
+          positions: [] as PositionSummary[],
+        };
+      }
+      return {
+        ok: true as const,
+        source: SOURCE,
+        total: totalSum,
+        fetched: merged.length,
+        positions: merged,
+      };
+    }
+    return fetchAllOneChannel(resolveChannel(opts), opts);
   }
 
   async function fetchPositionDetail(postId: string) {

@@ -4,6 +4,13 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.1.0 — Social-hire rollout
+
+### Adapters
+<!-- WORKTREE-C:MOKA -->
+- Moka factory: scope→channel mapping; scope=all triggers parallel multi-channel merge
+<!-- /WORKTREE-C:MOKA -->
+
 ## 1.0.92 — CDP walker handles native \`<select>\` + reports missed fields
 
 Greenhouse boards have many \`multi_value_single_select\` questions
