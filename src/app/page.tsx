@@ -550,44 +550,6 @@ export default function Home() {
         ))}
       </section>
 
-      <section className="phase2-card" aria-labelledby="phase2-title">
-        <h2 id="phase2-title" className="phase2-title">Phase 2 — submit, not just search</h2>
-        <p className="phase2-lede">
-          50 / 50 companies expose an application schema. <strong>45 / 50 have
-          end-to-end-verified apply endpoints</strong> (3 Greenhouse/Lever
-          fire anonymously; 42 need a captured browser session). 5 are
-          intentionally external — Liepin recruiter chat / WeChat mini-program,
-          structurally non-API.
-        </p>
-        <pre className="phase2-snippet">{`# one-time setup
-job-pro profile init --interactive      # prompts 5 essential fields
-job-pro profile lint                    # validate format (email/phone/resume)
-
-# scan the whole market
-job-pro find "intern" --apply-ready --text   # only show buckets you can fire today
-
-# inspect + stage a job
-job-pro xpeng apply <id> --schema                  # peek at the form
-job-pro xpeng apply <id> --interactive --remember  # fill in terminal; persist answers
-
-# actually submit (4-layer safety gate: env attest + staged.ready
-# + endpoint_verified + session.json <30d)
-JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
-  job-pro xpeng apply <id> --really-submit`}</pre>
-        <p className="phase2-detail">
-          For non-Greenhouse adapters (Feishu / Moka / Beisen / bespoke),
-          run <code>job-pro extension</code> for the bundled MV3 add-on
-          path + a 6-step Chrome install walkthrough, then drop{" "}
-          <code>~/Downloads/jobpro/&lt;adapter&gt;.session.json</code>{" "}
-          under <code>~/.jobpro/</code>.
-          See{" "}
-          <a href="https://github.com/HA7CH/job-pro/blob/main/docs/auto-apply.md" target="_blank" rel="noopener noreferrer">
-            docs/auto-apply.md
-          </a>{" "}
-          for the 50-row submission-flow matrix.
-        </p>
-      </section>
-
       <p className="link-row">
         <a
           href="https://github.com/HA7CH/job-pro"
