@@ -24,7 +24,25 @@
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import { withPage } from "./cdp.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Lilith Games supports all four scopes (1.1.0+).
+ *
+ * `lilithgames.jobs.feishu.cn` is a single-portal mixed Feishu tenant —
+ * one `/career/` URL serves both 社招 and 校招/实习 posts side-by-side
+ * (no separate `portal-channel` value to swap). The mixed feed cannot be
+ * server-side filtered without the runtime-minted `_signature` token, so
+ * the scope flag does not change the upstream call — the adapter returns
+ * the same mixed feed regardless. Callers can filter the result client-
+ * side on `recruit_label` if needed.
+ *
+ * Per the design doc's "single-portal mixed" recipe (§5 row 11): declare
+ * all four scopes so the dispatcher does not reject any call; merge/filter
+ * is the caller's responsibility.
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const SOURCE = "lilithgames.jobs.feishu.cn";
 const HOST = "https://lilithgames.jobs.feishu.cn";

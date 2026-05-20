@@ -1,6 +1,28 @@
 // Thin client for 拼多多 (PDD / Pinduoduo) campus-recruiting portal at careers.pinduoduo.com.
 //
 // ============================================================
+// SCOPE SUPPORT (1.1.0+) — campus + intern + all ONLY. NO social.
+//
+// Re-probed 2026-05 for a public social-hire path; outcome:
+//   1. careers.pddglobalhr.com → 302 redirects to /campus/ (same SPA bundle
+//      "_recruit-campus-web" served from pfile.pddpic.com/ei-pub).
+//   2. careers.pinduoduo-inc.com → DNS / SSL handshake fails (not in use).
+//   3. careers-social.pinduoduo.com → 302 → www.pinduoduo.com (no API).
+//   4. /api/careers/api/recruit/position/list with recruitType:"social" →
+//      success:true total:0 (the field is silently ignored, the upstream
+//      always returns the campus pool; 30 posts, all 管培生/技术专场/云弧计划).
+//   5. /api/careers/api/recruit/{social,society,position/social,…}/list →
+//      HTTP 403 errorCode:40003 (real routes don't exist).
+//   6. /api/careers/api/recruit/position/queryPosition (rich search) →
+//      HTTP 401 NO_LOGIN (login-gated; the campus path with same intent
+//      works anonymously via /position/list, but rich filters never do).
+//
+// PDD's social-hire system is operated separately and has no public anonymous
+// list endpoint reachable from the open web. The adapter declares
+// `supportedScopes` WITHOUT "social" so `--scope social` fails fast with a
+// useful message instead of returning an empty list.
+//
+// ============================================================
 // API discovery (re-probed 2026-05; bundles under pfile.pddpic.com/ei-pub):
 //
 // The frontend is a Next.js SPA hosted at careers.pinduoduo.com/campus/.
@@ -80,7 +102,24 @@
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * PDD supports campus + intern + all (1.1.0+). NOT social.
+ *
+ * PDD's social-hire pipeline has no public anonymous endpoint reachable from
+ * the open web (probed 2026-05 — see header for the full enumeration). The
+ * dispatcher fails `--scope social` fast for pdd; callers wanting PDD social
+ * positions should use the Liepin third-party fallback or the WeChat HR path.
+ *
+ * Scope translation to upstream endpoint:
+ *   campus → /api/recruit/position/list                   (grad track, ~30 posts)
+ *   intern → /api/recruit/position/train/list             (intern track, ~7 posts)
+ *   all    → both endpoints merged
+ *   undefined → /api/recruit/position/list                (historical default, preserves 1.0.93)
+ */
+export const supportedScopes = ["campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const API_ROOT = "https://careers.pinduoduo.com/api/careers";
 const CAMPUS_PAGE = "https://careers.pinduoduo.com/campus";
@@ -176,6 +215,17 @@ export interface SearchOptions {
    *  "yunhu_plan" (云弧计划 — LLM elite program), "intern" (实习生).
    *  Default: undefined (all types). */
   recruitType?: string;
+  /** CLI `--scope` echo (1.1.0+). When set without explicit `recruitType`,
+   *  scope picks the upstream track ("intern" → train/list, otherwise grad).
+   *  `social` is rejected by the dispatcher (see supportedScopes header). */
+  scope?: PositionScope;
+}
+
+function effectiveRecruitTypeForScope(opts: SearchOptions): string | undefined {
+  if (opts.recruitType !== undefined) return opts.recruitType;
+  if (opts.scope === "intern") return "intern";
+  // campus / all / undefined → keep undefined (default grad endpoint).
+  return undefined;
 }
 
 // ---------- raw position shape (verified 2026-05) ----------
@@ -237,7 +287,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60).toLowerCase();
-  const includeIntern = opts.recruitType === "intern";
+  const effectiveRecruitType = effectiveRecruitTypeForScope(opts);
+  const includeIntern = effectiveRecruitType === "intern";
+  const fanOutAll = opts.scope === "all" && opts.recruitType === undefined;
 
   // Walk upstream until we have enough filtered rows to satisfy the requested page.
   const collected: RawPosition[] = [];
@@ -245,9 +297,11 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const need = page * pageSize;
   const maxUpstreamPages = 10; // safety cap (10 pages × 10 = 100 positions)
 
-  const endpoints = includeIntern
-    ? ["/api/recruit/position/train/list"]
-    : ["/api/recruit/position/list"];
+  const endpoints = fanOutAll
+    ? ["/api/recruit/position/list", "/api/recruit/position/train/list"]
+    : includeIntern
+      ? ["/api/recruit/position/train/list"]
+      : ["/api/recruit/position/list"];
 
   for (const path of endpoints) {
     for (let p = 1; p <= maxUpstreamPages; p++) {
@@ -261,7 +315,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
           return {
             ok: false as const,
             source: "careers.pinduoduo.com",
-            query: { pageSize, page, keyword: keyword || undefined, recruitType: opts.recruitType },
+            query: { pageSize, page, keyword: keyword || undefined, recruitType: opts.recruitType, scope: opts.scope },
             page,
             page_size: pageSize,
             total: 0,
@@ -295,7 +349,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
   return {
     ok: true as const,
     source: "careers.pinduoduo.com",
-    query: { pageSize, page, keyword: keyword || undefined, recruitType: opts.recruitType },
+    query: { pageSize, page, keyword: keyword || undefined, recruitType: effectiveRecruitType, scope: opts.scope },
     page,
     page_size: pageSize,
     total: keyword ? collected.length : upstreamTotal || collected.length,
@@ -313,12 +367,24 @@ export async function fetchAllPositions(
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60).toLowerCase();
+  const effectiveRecruitType = effectiveRecruitTypeForScope(opts);
+
+  // Pick paths based on scope: campus → grad only; intern → train only;
+  // all / undefined → both (preserves 1.0.93 default behaviour).
+  let paths: string[];
+  if (effectiveRecruitType === "intern") {
+    paths = ["/api/recruit/position/train/list"];
+  } else if (opts.scope === "campus") {
+    paths = ["/api/recruit/position/list"];
+  } else {
+    paths = ["/api/recruit/position/list", "/api/recruit/position/train/list"];
+  }
 
   const bucket: RawPosition[] = [];
   const seen = new Set<string>();
   let total = 0;
 
-  for (const path of ["/api/recruit/position/list", "/api/recruit/position/train/list"]) {
+  for (const path of paths) {
     let pathTotal = 0;
     for (let p = 1; p <= maxPages; p++) {
       const response = await call<RawPositionList>(path, {

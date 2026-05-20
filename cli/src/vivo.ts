@@ -35,7 +35,18 @@
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Beisen iTalent Category-axis mapping for the vivo tenant (612022).
+ *
+ * `--scope social` → `Category: ["4"]` (员工社招)
+ * `--scope campus` → `Category: ["5"]` (员工校招)
+ * `--scope intern` → `Category: ["3"]` (实习生)
+ * `--scope all` / undefined → no Category filter (vivo's historical default)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const;
 
 const SOURCE = "vivo.zhiye.com";
 const API_ROOT = "https://vivo.zhiye.com";
@@ -140,8 +151,17 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /** "social" → 员工社招 ; "campus" → 员工校招 ; "intern" → 实习生 ; omit = all */
-  recruitType?: "social" | "campus" | "intern" | "all";
+  /**
+   * Canonical CLI-side scope flag (1.1.0+). Mapped via `categoryFromScope`
+   * to the Beisen Category axis: `social`=4, `campus`=5, `intern`=3,
+   * `all`/undefined = no filter (vivo's historical default).
+   */
+  scope?: PositionScope;
+  /**
+   * @deprecated kept for backward compatibility with 1.0.93 callers — use
+   * `scope` instead. Same string-value space as `scope`.
+   */
+  recruitType?: PositionScope;
 }
 
 interface RawJobAd {
@@ -175,8 +195,8 @@ function summarize(item: RawJobAd): PositionSummary {
   };
 }
 
-function categoryFromRecruitType(t?: string): string[] | undefined {
-  switch (t) {
+function categoryFromScope(s?: PositionScope): string[] | undefined {
+  switch (s) {
     case "social":
       return ["4"];
     case "campus":
@@ -203,7 +223,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
     PortalId: "",
     DisplayFields: ["Category", "Kind", "LocId", "Org", "HeadCount", "PostDate", "Salary"],
   };
-  const category = categoryFromRecruitType(opts.recruitType);
+  const category = categoryFromScope(opts.scope ?? opts.recruitType);
   if (category) body.Category = category;
 
   const r = await post<RawJobAd[]>("/api/Jobad/GetJobAdPageList", body);
@@ -231,7 +251,14 @@ export async function searchPositions(opts: SearchOptions = {}) {
 // ---------- fetchAllPositions ----------
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; recruitType?: SearchOptions["recruitType"] } = {}
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    scope?: PositionScope;
+    /** @deprecated use `scope` */
+    recruitType?: PositionScope;
+  } = {}
 ) {
   const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 30));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
@@ -244,7 +271,7 @@ export async function fetchAllPositions(
       keyword: opts.keyword,
       page,
       pageSize,
-      recruitType: opts.recruitType,
+      scope: opts.scope ?? opts.recruitType,
     });
     if (!r.ok) {
       return {

@@ -36,6 +36,7 @@
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
 // ---------- adapter config ----------
@@ -117,6 +118,10 @@ export interface SearchOptions {
   departments?: string[];
   /** Office/location substring to filter by (case-insensitive). */
   cities?: string[];
+  /** Caller-requested recruit scope. Greenhouse boards are 100% experienced-
+   *  hire by convention, so we accept the flag and echo it back in the
+   *  response, but do not translate it to any upstream query parameter. */
+  scope?: PositionScope;
 }
 
 // ---------- createAdapter ----------
@@ -236,6 +241,7 @@ export function createAdapter(cfg: GreenhouseAdapterConfig) {
     return {
       ok: true as const,
       source: SOURCE,
+      scope: opts.scope,
       query: opts,
       page,
       page_size: pageSize,
@@ -260,6 +266,7 @@ export function createAdapter(cfg: GreenhouseAdapterConfig) {
     return {
       ok: true as const,
       source: SOURCE,
+      scope: opts.scope,
       total: filtered.length,
       fetched: filtered.length,
       positions: filtered.map(summarize),

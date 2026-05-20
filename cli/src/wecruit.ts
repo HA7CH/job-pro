@@ -36,6 +36,7 @@
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
 // ---------- adapter config ----------
@@ -128,6 +129,13 @@ export interface SearchOptions {
   pageSize?: number;
   /** "campus" → recruitType=1 ; "social" → recruitType=2 ; omit = all. */
   recruitType?: "campus" | "social" | "all";
+  /**
+   * Unified CLI scope flag (`--scope`). Translated into `recruitType` by the
+   * factory: `social`/`campus`/`all` map 1:1; `intern` is treated as `campus`
+   * since Wecruit's recruitType=1 covers 校园 / 应届 / 实习. If both `scope`
+   * and `recruitType` are present, `scope` wins.
+   */
+  scope?: PositionScope;
 }
 
 // ---------- factory ----------
@@ -219,11 +227,43 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     return cfg.channels.filter((c) => c.recruitType === t);
   }
 
+  /**
+   * Translate the unified CLI `--scope` flag to this factory's `recruitType`
+   * key. `intern` collapses to `campus` because Wecruit's recruitType=1
+   * channel covers 校园 / 应届 / 实习 in one bucket. `social`, `campus`, and
+   * `all` map 1:1 onto the existing recruitType domain.
+   */
+  function recruitTypeForScope(s: PositionScope | undefined): SearchOptions["recruitType"] {
+    if (s === undefined) return undefined;
+    if (s === "intern") return "campus";
+    return s;
+  }
+
+  /** Resolve effective recruitType, with `scope` winning over legacy `recruitType`. */
+  function effectiveRecruitType(opts: SearchOptions): SearchOptions["recruitType"] {
+    if (opts.scope !== undefined) return recruitTypeForScope(opts.scope);
+    return opts.recruitType;
+  }
+
+  /**
+   * Scopes this adapter can actually serve, derived from the configured
+   * channels' `recruitType` values. `all` is always supported.
+   */
+  const supportedScopes: ReadonlyArray<PositionScope> = (() => {
+    const set = new Set<PositionScope>();
+    for (const ch of cfg.channels) {
+      if (ch.recruitType === "social") set.add("social");
+      if (ch.recruitType === "campus") set.add("campus");
+    }
+    set.add("all");
+    return Object.freeze([...set]);
+  })();
+
   async function searchPositions(opts: SearchOptions = {}) {
     const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 15));
     const page = Math.max(1, opts.page ?? 1);
     const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-    const channels = channelsForType(opts.recruitType);
+    const channels = channelsForType(effectiveRecruitType(opts));
     if (!channels.length) {
       return {
         ok: false as const,
@@ -275,7 +315,7 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 15));
     const maxPages = Math.max(1, opts.maxPages ?? 30);
     const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-    const channels = channelsForType(opts.recruitType);
+    const channels = channelsForType(effectiveRecruitType(opts));
     const bucket: PositionSummary[] = [];
     let total = 0;
     let lastMsg = "ok";
@@ -552,6 +592,7 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
   }
 
   return {
+    supportedScopes,
     searchPositions,
     fetchAllPositions,
     fetchPositionDetail,

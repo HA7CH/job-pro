@@ -70,7 +70,38 @@
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Huawei supports campus / intern / all only (1.1.0+).
+ *
+ * career.huawei.com/reccampportal is structurally campus-only. Probed
+ * 2026-05-20:
+ *   - `jobType=SOCIAL` → HTTP 405 Jalor framework "Anonymous" error.
+ *   - `jobType=EXPERIENCED` → 200 OK but silently treated as `jobType=3`
+ *     (all-campus-types), returns the IDENTICAL 4076-row payload as
+ *     `jobType=3`. Identifier is not recognised as a real social channel.
+ * No /social/ subroute exists on the portal. Huawei recruits social hires
+ * externally (招聘.huawei.com / hrlink — separate stack), so the
+ * dispatcher must fail fast for `--scope social`.
+ *
+ * Scope translation to `recruitType`:
+ *   campus    → "newgrad"   (jobType=0, jobTypes=2)  ← historical default
+ *   intern    → "intern"    (jobType=0, jobTypes=0)
+ *   all       → "all"       (jobType=3)
+ *   undefined → unchanged   (preserves 1.0.93 behaviour)
+ */
+export const supportedScopes = ["campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function recruitTypeForScope(
+  s: PositionScope | undefined
+): "newgrad" | "intern" | "all" | undefined {
+  if (s === "campus") return "newgrad";
+  if (s === "intern") return "intern";
+  if (s === "all") return "all";
+  return undefined;
+}
 
 const PORTAL_ROOT = "https://career.huawei.com/reccampportal";
 const API_ROOT = `${PORTAL_ROOT}/services/portal/portalpub`;
@@ -284,6 +315,10 @@ export interface SearchOptions {
   jobFamClsCode?: string;
   /** Filter by city code (e.g. cityCode from previous results). */
   cityCode?: string;
+  /** Canonical CLI scope axis (1.1.0+). When set and `recruitType` is
+   *  omitted, scope picks the upstream recruitType. Social is not
+   *  supported (portal is structurally campus-only — see supportedScopes). */
+  scope?: PositionScope;
 }
 
 type JobTypeParams = {
@@ -309,7 +344,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 15));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-  const { jobType, jobTypes, label } = resolveJobTypeParams(opts.recruitType);
+  // scope (1.1.0+) wins over recruitType only when explicit recruitType is absent.
+  const effectiveRecruitType = opts.recruitType ?? recruitTypeForScope(opts.scope);
+  const { jobType, jobTypes, label } = resolveJobTypeParams(effectiveRecruitType);
 
   const params: Record<string, string | number | undefined> = {
     jobType,

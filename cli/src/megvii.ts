@@ -7,6 +7,7 @@
 // See cli/src/moka.ts for the shared factory.
 
 import { createAdapter } from "./moka.js";
+import type { PositionScope } from "./adapter.js";
 
 const adapter = createAdapter({
   orgSlug: "megviihr",
@@ -17,6 +18,8 @@ const adapter = createAdapter({
   ],
   defaultRecruitType: "social",
 });
+
+export const supportedScopes: ReadonlyArray<PositionScope> = ["campus", "social", "all"] as const;
 
 export const searchPositions = adapter.searchPositions;
 export const fetchAllPositions = adapter.fetchAllPositions;

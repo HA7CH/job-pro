@@ -96,7 +96,42 @@
 //   apply_url      ← https://campus.pingan.com/positionDetail?positionId=<id>
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { extractResumeSignals, scoreOverlap, checkResume };
+
+/**
+ * Ping An supports campus / intern / all only (1.1.0+).
+ *
+ * campus.pingan.com is structurally a campus portal. Probed 2026-05-20:
+ *   - `selectGroupOfficial` with `recruitType:"2"` (社招推断) returns
+ *     the SAME wecruitId as `recruitType:"3"` (campus) — the wecruitId
+ *     is not scope-bound on this portal.
+ *   - `queryPositionPage` with `recruitType:"2"` on the campus wecruitId
+ *     returns the IDENTICAL 815-post feed as the default call (param
+ *     silently ignored; every row's positionType is "全职" / "实习").
+ *   - `positionType:"社招"` returns `{data:null}` (filter recognised but
+ *     matches nothing — no 社招 rows exist).
+ *   - `/candidate/position/social/positionSearch/queryPositionPage` 404s
+ *     ("The requested resource could not be found" — no /social/ subroute
+ *     on the talent-webserver).
+ *
+ * Ping An's social-hire feed lives on a different stack (career.pingan.com,
+ * separate ATS). Dispatcher should fail fast for `--scope social`.
+ *
+ * Scope translation:
+ *   campus    → positionType:"全职"   (787 posts)
+ *   intern    → positionType:"实习"   (62 posts)
+ *   all       → no positionType filter (815 posts)
+ *   undefined → no positionType filter (preserves 1.0.93 default — all types)
+ */
+export const supportedScopes = ["campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function positionTypeForScope(s: PositionScope | undefined): string | undefined {
+  if (s === "campus") return "全职";
+  if (s === "intern") return "实习";
+  // "all" + undefined → no filter (return undefined; payload omits positionType)
+  return undefined;
+}
 
 const API_ROOT = "https://campus.pingan.com/zztj-recruit-talent-webserver/rctt";
 const CAMPUS_PAGE = "https://campus.pingan.com";
@@ -270,6 +305,10 @@ export interface SearchOptions {
   /** Recruit type: "全职" = new-grad full-time (default), "实习" = intern.
    *  Pass undefined / "" to get all. */
   positionType?: string;
+  /** Canonical CLI scope axis (1.1.0+). When set and `positionType` is
+   *  omitted, scope picks the upstream positionType filter. Social is not
+   *  supported on campus.pingan.com (see supportedScopes comment). */
+  scope?: PositionScope;
 }
 
 // ---------- searchPositions ----------
@@ -299,8 +338,11 @@ export async function searchPositions(opts: SearchOptions = {}) {
   if (opts.interviewCity) payload["interviewCity"] = opts.interviewCity.trim();
   if (opts.businessUnitId) payload["businessUnitId"] = opts.businessUnitId.trim();
   if (opts.positionCategoryId) payload["positionCategoryId"] = opts.positionCategoryId.trim();
-  // positionType: only inject when explicitly provided (undefined = all types)
-  if (opts.positionType !== undefined) payload["positionType"] = opts.positionType;
+  // positionType: explicit positionType wins; otherwise derive from scope (1.1.0+).
+  // undefined positionType + undefined/all scope = all types (no filter).
+  const positionType =
+    opts.positionType !== undefined ? opts.positionType : positionTypeForScope(opts.scope);
+  if (positionType !== undefined) payload["positionType"] = positionType;
 
   const response = await call<RawPositionListData>(
     "/candidate/position/campus/positionSearch/queryPositionPage",

@@ -1,4 +1,4 @@
-// Thin client for Bilibili's campus-recruiting API at jobs.bilibili.com.
+// Thin client for Bilibili's recruiting APIs at jobs.bilibili.com.
 //
 // AUTH MODEL  — Two-step stateless handshake (no login required):
 //   1. GET /api/auth/v1/csrf/token
@@ -6,14 +6,25 @@
 //        Response: { code:0, data:"<uuid>" }
 //        Side-effect: sets cookie X-CSRF=<uuid> on domain bilibili.co
 //                     (note: curl won't auto-save it due to domain mismatch with jobs.bilibili.com)
-//   2. POST /api/campus/position/positionList
+//   2. POST /api/campus/position/positionList   (校招 — campus + intern)
+//      POST /api/srs/position/positionList      (社招 — social hire, 1.1.0+)
 //        Pass the token both as:
 //          header  X-CSRF: <token>
 //          cookie  X-CSRF=<token>
 //        Without both, the server returns code:-3 ("csrf不能为空").
 //
-// The /api/campus/* endpoints require NO Bilibili account session (ajSessionId).
-// A fresh CSRF token from step 1 is sufficient for public position browsing.
+// SCOPE SUPPORT (1.1.0+)  — Two endpoints, same auth shape, fully anonymous:
+//   - /api/campus/position/positionList  → 校招 (campus + intern), ~356 posts
+//   - /api/srs/position/positionList     → 社招 (social hire / SRS), ~470 posts
+//
+// The Tier-2 design doc hypothesised SRS was login-gated; re-probing (2026-05)
+// showed the SRS list endpoint accepts the same anonymous CSRF handshake the
+// campus path uses. Only SRS sub-routes that touch user state
+// (/api/srs/post/list — code:-403, /api/srs/.../apply, etc.) remain account-gated.
+//
+// Both campus and SRS list endpoints require NO Bilibili account session
+// (ajSessionId). A fresh CSRF token from step 1 is sufficient for public
+// position browsing on either feed.
 //
 // ============================================================
 // Endpoint inventory (probed 2026-05, JS bundle app.3a48ef6c.js + position.846fe539.js):
@@ -102,19 +113,38 @@
 //   GET/POST /api/campus/position/cityList
 //   GET/POST /api/campus/position/postCodeList
 //   GET/POST /api/campus/position/detail/<id>
-//   GET/POST /api/srs/*   (social recruit system — requires full login)
-//   GET/POST /api/rts/*   (internal system — 403 or 500)
+//   GET/POST /api/srs/post/list           (user-state subroute, code:-403)
+//   GET/POST /api/rts/*                   (internal system — 403 or 500)
+// Public anonymous (verified 2026-05 with CSRF only):
+//   POST /api/srs/position/positionList   (社招 list, ~470 posts)
+//   GET  /api/srs/dict/post               (社招 job taxonomy)
 //
 // The CSRF token is fresh per request; cache it for the process lifetime to
 // avoid double-fetching on repeated searchPositions calls.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Bilibili supports social + campus + intern + all (1.1.0+).
+ *
+ * Scope translation to upstream list endpoint:
+ *   social  → /api/srs/position/positionList            (~470 posts)
+ *   campus  → /api/campus/position/positionList         (~356 posts, mixed campus + intern)
+ *   intern  → /api/campus/position/positionList + positionTypeList:["实习"]
+ *   all     → both endpoints fanned out and merged
+ *   undefined → /api/campus/position/positionList       (historical default, preserves 1.0.93)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const API_ROOT = "https://jobs.bilibili.com";
 const CAMPUS_PAGE = "https://jobs.bilibili.com/campus/positions";
-const DETAIL_PAGE = (id: string) =>
-  `https://jobs.bilibili.com/campus/positions/${encodeURIComponent(id)}`;
+const SOCIAL_PAGE = "https://jobs.bilibili.com/social/positions";
+const DETAIL_PAGE = (id: string, channel: "campus" | "social" = "campus") =>
+  channel === "social"
+    ? `https://jobs.bilibili.com/social/positions/${encodeURIComponent(id)}`
+    : `https://jobs.bilibili.com/campus/positions/${encodeURIComponent(id)}`;
 
 const DEFAULT_HEADERS: Record<string, string> = {
   "User-Agent":
@@ -178,7 +208,8 @@ interface BiliEnvelope<T> {
 }
 
 async function call<T>(
-  body: unknown
+  body: unknown,
+  path: string = "/api/campus/position/positionList"
 ): Promise<{ ok: boolean; data?: T; message: string }> {
   const csrfResult = await fetchCsrfToken();
   if (!csrfResult.ok) {
@@ -186,7 +217,7 @@ async function call<T>(
   }
   const token = csrfResult.token;
 
-  const url = `${API_ROOT}/api/campus/position/positionList`;
+  const url = `${API_ROOT}${path}`;
   let response: Response;
   try {
     response = await fetch(url, {
@@ -261,16 +292,19 @@ export interface PositionSummary {
   apply_url: string;
 }
 
-function summarizePosition(item: RawPosition): PositionSummary {
+function summarizePosition(item: RawPosition, channel: "campus" | "social" = "campus"): PositionSummary {
   const id = String(item.id ?? "");
+  const fallback = channel === "social" ? SOCIAL_PAGE : CAMPUS_PAGE;
   return {
     post_id: id,
     title: item.positionName ?? "",
     project: item.postCodeName ?? "",
-    recruit_label: item.positionTypeName ?? "",
+    recruit_label: channel === "social"
+      ? (item.positionTypeName ?? "社招")
+      : (item.positionTypeName ?? ""),
     bgs: "",
     work_cities: item.workLocation ?? "",
-    apply_url: id ? DETAIL_PAGE(id) : CAMPUS_PAGE,
+    apply_url: id ? DETAIL_PAGE(id, channel) : fallback,
   };
 }
 
@@ -289,16 +323,72 @@ export interface SearchOptions {
    *  Pass [] or omit for all cities. */
   workLocations?: string[];
   /** Filter by recruit mode. 1=校招 (campus program), 0=普通实习 (ad-hoc intern).
-   *  Omit to include both. */
+   *  Omit to include both. (Campus feed only — SRS feed ignores it.) */
   recruitType?: number;
+  /** CLI `--scope` echo (1.1.0+). Picks the upstream list endpoint
+   *  (campus vs SRS). Omit to preserve the historical campus default. */
+  scope?: PositionScope;
+}
+
+function channelForScope(s: PositionScope | undefined): "campus" | "social" | "all" {
+  if (s === "social") return "social";
+  if (s === "intern" || s === "campus") return "campus";
+  if (s === "all") return "all";
+  return "campus";
 }
 
 // ---------- searchPositions ----------
 
-export async function searchPositions(opts: SearchOptions = {}) {
+type SearchPositionsResult =
+  | {
+      ok: true;
+      source: string;
+      query: Record<string, unknown>;
+      page: number;
+      page_size: number;
+      total: number;
+      positions: PositionSummary[];
+    }
+  | {
+      ok: false;
+      source: string;
+      message: string;
+      query: Record<string, unknown>;
+      positions: PositionSummary[];
+    };
+
+export async function searchPositions(opts: SearchOptions = {}): Promise<SearchPositionsResult> {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+  const channel = channelForScope(opts.scope);
+
+  // scope=all → fan out both channels and merge (single concatenated page).
+  if (channel === "all") {
+    const [campusRes, socialRes] = await Promise.all([
+      searchPositions({ ...opts, scope: "campus" }),
+      searchPositions({ ...opts, scope: "social" }),
+    ]);
+    const positions: PositionSummary[] = [
+      ...(campusRes.ok ? campusRes.positions : []),
+      ...(socialRes.ok ? socialRes.positions : []),
+    ];
+    const total = (campusRes.ok ? (campusRes.total ?? 0) : 0)
+      + (socialRes.ok ? (socialRes.total ?? 0) : 0);
+    return {
+      ok: true,
+      source: "jobs.bilibili.com",
+      query: { scope: "all", pageNum: page, pageSize, positionName: keyword },
+      page,
+      page_size: pageSize,
+      total,
+      positions,
+    };
+  }
+
+  const path = channel === "social"
+    ? "/api/srs/position/positionList"
+    : "/api/campus/position/positionList";
 
   const payload: Record<string, unknown> = {
     pageNum: page,
@@ -308,11 +398,12 @@ export async function searchPositions(opts: SearchOptions = {}) {
     deptCodeList: [],
   };
 
-  if (opts.positionTypes?.length) {
-    payload.positionTypeList = opts.positionTypes;
-  } else {
-    payload.positionTypeList = [];
+  // intern scope narrows campus feed via positionTypeList=["实习"] unless caller overrides.
+  let positionTypes = opts.positionTypes;
+  if (!positionTypes?.length && opts.scope === "intern") {
+    positionTypes = ["实习"];
   }
+  payload.positionTypeList = positionTypes?.length ? positionTypes : [];
 
   if (opts.workLocations?.length) {
     payload.workLocationList = opts.workLocations;
@@ -320,17 +411,17 @@ export async function searchPositions(opts: SearchOptions = {}) {
     payload.workLocationList = [];
   }
 
-  if (opts.recruitType !== undefined) {
+  if (opts.recruitType !== undefined && channel === "campus") {
     payload.recruitType = opts.recruitType;
   }
 
-  const response = await call<RawListData>(payload);
+  const response = await call<RawListData>(payload, path);
   if (!response.ok || !response.data) {
     return {
       ok: false,
       message: response.message,
       source: "jobs.bilibili.com",
-      query: payload,
+      query: { ...payload, _path: path },
       positions: [] as PositionSummary[],
     };
   }
@@ -339,21 +430,63 @@ export async function searchPositions(opts: SearchOptions = {}) {
   return {
     ok: true,
     source: "jobs.bilibili.com",
-    query: payload,
+    query: { ...payload, _path: path },
     page,
     page_size: pageSize,
     total: response.data.total ?? rows.length,
-    positions: rows.map(summarizePosition),
+    positions: rows.map((row) => summarizePosition(row, channel)),
   };
 }
 
 // ---------- fetchAllPositions ----------
 
+type FetchAllPositionsResult =
+  | {
+      ok: true;
+      source: string;
+      total: number;
+      fetched: number;
+      positions: PositionSummary[];
+    }
+  | {
+      ok: false;
+      source: string;
+      message: string;
+      fetched: number;
+      positions: PositionSummary[];
+    };
+
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
-) {
+): Promise<FetchAllPositionsResult> {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 4); // ~400 positions max
+  const channel = channelForScope(opts.scope);
+
+  // scope=all → fan out both channels and merge with de-dup on post_id/url.
+  if (channel === "all") {
+    const [campusRes, socialRes] = await Promise.all([
+      fetchAllPositions({ ...opts, scope: "campus" }),
+      fetchAllPositions({ ...opts, scope: "social" }),
+    ]);
+    const seen = new Set<string>();
+    const merged: PositionSummary[] = [];
+    for (const p of [...(campusRes.positions ?? []), ...(socialRes.positions ?? [])]) {
+      const key = `${p.post_id}|${p.apply_url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(p);
+    }
+    const total = (campusRes.ok ? (campusRes.total ?? 0) : 0)
+      + (socialRes.ok ? (socialRes.total ?? 0) : 0);
+    return {
+      ok: true,
+      source: "jobs.bilibili.com",
+      total,
+      fetched: merged.length,
+      positions: merged,
+    };
+  }
 
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
@@ -393,40 +526,36 @@ export async function fetchPositionDetail(postId: string) {
   if (!id) return { ok: false as const, source: "jobs.bilibili.com", message: "post_id is required" };
 
   const pageSize = 100;
-  const maxPages = 4;
+  const maxPages = 5;
 
-  for (let page = 1; page <= maxPages; page++) {
-    const result = await searchPositions({ page, pageSize });
-    if (!result.ok) {
-      return {
-        ok: false as const,
-        source: "jobs.bilibili.com",
-        post_id: id,
-        message: result.message,
-      };
+  // Scan campus feed first (historical default), then SRS social feed.
+  for (const scope of ["campus", "social"] as const) {
+    for (let page = 1; page <= maxPages; page++) {
+      const result = await searchPositions({ page, pageSize, scope });
+      if (!result.ok) break; // fall through to next channel
+      const found = result.positions.find((p) => p.post_id === id);
+      if (found) {
+        return {
+          ok: true as const,
+          source: "jobs.bilibili.com",
+          post_id: id,
+          title: found.title,
+          project: found.project,
+          recruit_label: found.recruit_label,
+          bgs: found.bgs,
+          work_cities: found.work_cities,
+          apply_url: found.apply_url,
+        };
+      }
+      if (result.positions.length < pageSize) break;
     }
-    const found = result.positions.find((p) => p.post_id === id);
-    if (found) {
-      return {
-        ok: true as const,
-        source: "jobs.bilibili.com",
-        post_id: id,
-        title: found.title,
-        project: found.project,
-        recruit_label: found.recruit_label,
-        bgs: found.bgs,
-        work_cities: found.work_cities,
-        apply_url: found.apply_url,
-      };
-    }
-    if (result.positions.length < pageSize) break;
   }
 
   return {
     ok: false as const,
     source: "jobs.bilibili.com",
     post_id: id,
-    message: `post ${id} not found in public search results (scanned up to ${maxPages * pageSize} posts)`,
+    message: `post ${id} not found in public search results (scanned campus + SRS up to ${maxPages * pageSize} posts each)`,
   };
 }
 

@@ -39,7 +39,28 @@
 //   apply_url     ← https://jobs.mihoyo.com/#/position/${id}
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume, extractResumeSignals, scoreOverlap };
+
+/**
+ * miHoYo supports social + campus + intern + all (1.1.0+). The upstream has
+ * no intern-only enum — campus already lumps intern + new-grad — so `intern`
+ * is mapped to `campus`.
+ *
+ * Scope translation to upstream (channelDetailIds, hireType):
+ *   social  → ([1], 0)    (社招, default)
+ *   campus  → ([2], 1)    (校招)
+ *   intern  → ([2], 1)    (subset of campus)
+ *   all     → ([1], 0)    (no merged feed — defaults to social)
+ *   undefined → ([1], 0)  (historical default — social, preserves 1.0.93)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function channelForScope(s: PositionScope | undefined): { channelDetailIds: number[]; hireType: number } {
+  if (s === "campus" || s === "intern") return { channelDetailIds: [2], hireType: 1 };
+  // social / all / undefined → social defaults
+  return { channelDetailIds: [1], hireType: 0 };
+}
 
 const SOURCE = "jobs.mihoyo.com";
 const API_ROOT = "https://ats.openout.mihoyo.com/ats-portal";
@@ -74,10 +95,14 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /** Override default channel ids (social=[1], campus=[1] with hireType=1). */
+  /** Override default channel ids (social=[1], campus=[2] with hireType=1). */
   channelDetailIds?: number[];
   /** Override default hireType (0=social, 1=campus). */
   hireType?: number;
+  /** CLI `--scope` echo (1.1.0+). When set and both `channelDetailIds` and
+   *  `hireType` are omitted, scope picks the upstream channel. Explicit
+   *  overrides take precedence. */
+  scope?: PositionScope;
 }
 
 interface RawAddress {
@@ -174,9 +199,10 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
 
+  const scopeChannel = channelForScope(opts.scope);
   const body: Record<string, unknown> = {
-    channelDetailIds: opts.channelDetailIds ?? CHANNEL_DETAIL_IDS,
-    hireType: opts.hireType ?? HIRE_TYPE_SOCIAL,
+    channelDetailIds: opts.channelDetailIds ?? scopeChannel.channelDetailIds,
+    hireType: opts.hireType ?? scopeChannel.hireType,
     pageSize,
     pageNo: page,
   };

@@ -43,12 +43,15 @@
 
 import { createDecipheriv } from "node:crypto";
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+export const supportedScopes: ReadonlyArray<PositionScope> = ["campus", "social", "all"] as const;
 
 const SOURCE = "app.mokahr.com/sina";
 const API_ROOT = "https://app.mokahr.com";
 const ORG_ID = "sina";
-const CAMPUS_SITE_ID = 43536;
+const CAMPUS_SITE_ID = 43534;
 const SOCIAL_SITE_ID = 43535;
 const CAMPUS_PAGE = `https://app.mokahr.com/campus-recruitment/sina/${CAMPUS_SITE_ID}`;
 const SOCIAL_PAGE = `https://app.mokahr.com/social-recruitment/sina/${SOCIAL_SITE_ID}`;
@@ -160,6 +163,16 @@ export interface SearchOptions {
   pageSize?: number;
   /** "campus" (校招, default) or "social" (社招) */
   channel?: "campus" | "social";
+  /** CLI-level scope flag; translated to `channel` internally.
+   *  scope=social → siteId 43535, scope=campus → siteId 43534.
+   *  scope=all and undefined preserve the historical (campus) default. */
+  scope?: PositionScope;
+}
+
+function channelFromScope(scope: PositionScope | undefined): "campus" | "social" | undefined {
+  if (scope === "social") return "social";
+  if (scope === "campus") return "campus";
+  return undefined;
 }
 
 interface RawJob {
@@ -206,7 +219,7 @@ function summarize(
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const channel = opts.channel ?? "campus";
+  const channel = opts.channel ?? channelFromScope(opts.scope) ?? "campus";
   const siteId = channel === "social" ? SOCIAL_SITE_ID : CAMPUS_SITE_ID;
   const refererPage = channel === "social" ? SOCIAL_PAGE : CAMPUS_PAGE;
 
@@ -252,7 +265,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
 // ---------- fetchAllPositions ----------
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; channel?: "campus" | "social" } = {}
+  opts: { keyword?: string; maxPages?: number; pageSize?: number; channel?: "campus" | "social"; scope?: PositionScope } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
@@ -266,6 +279,7 @@ export async function fetchAllPositions(
       page,
       pageSize,
       channel: opts.channel,
+      scope: opts.scope,
     });
     if (!r.ok) {
       return {

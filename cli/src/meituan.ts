@@ -143,7 +143,28 @@
 //   department_intro ← departmentIntro (team introduction)
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Meituan supports all four scopes (1.1.0+).
+ *
+ * Scope translation to `jobTypeCodes`:
+ *   social  → ["3"]   (社招, ~2613 posts)
+ *   campus  → ["1"]   (校招应届正式)
+ *   intern  → ["2"]   (实习)
+ *   all     → ["1","2","3"]
+ *   undefined → ["1","2"]  (historical default — preserves 1.0.93 校招 tab)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function jobTypeCodesForScope(s: PositionScope | undefined): string[] {
+  if (s === "social") return ["3"];
+  if (s === "campus") return ["1"];
+  if (s === "intern") return ["2"];
+  if (s === "all") return ["1", "2", "3"];
+  return ["1", "2"];
+}
 
 const API_ROOT = "https://zhaopin.meituan.com/api/official";
 const LIST_PAGE = "https://zhaopin.meituan.com/job-list";
@@ -379,6 +400,10 @@ function summarizePosition(item: RawJobListEntry): PositionSummary {
 
 export interface SearchOptions {
   keyword?: string;
+  /** CLI `--scope` echo (1.1.0+). When set and `jobTypeCodes` is omitted,
+   *  scope picks the upstream jobType code(s). `jobTypeCodes` takes precedence
+   *  when both are provided. */
+  scope?: PositionScope;
   /** default: ["1","2"] (校招应届正式 + 实习) — matches the 校招 tab on zhaopin.meituan.com */
   jobTypeCodes?: string[];
   /**
@@ -437,7 +462,7 @@ async function resolveCityCodes(
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const jobTypeCodes = opts.jobTypeCodes ?? ["1", "2"];
+  const jobTypeCodes = opts.jobTypeCodes ?? jobTypeCodesForScope(opts.scope);
 
   // Resolve city names → [{code, name}]
   const cityList = opts.cities?.length
@@ -499,6 +524,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
 export async function fetchAllPositions(
   opts: {
     keyword?: string;
+    scope?: PositionScope;
     maxPages?: number;
     pageSize?: number;
     jobTypeCodes?: string[];
@@ -515,6 +541,7 @@ export async function fetchAllPositions(
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({
       keyword: opts.keyword,
+      scope: opts.scope,
       jobTypeCodes: opts.jobTypeCodes,
       cities: opts.cities,
       departments: opts.departments,

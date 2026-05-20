@@ -79,7 +79,22 @@
 //   Not used in this adapter.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Trip / Ctrip supports social + campus + intern + all (1.1.0+). There is no
+ * intern-only category — intern jobs appear within both 校招 and 社招
+ * feeds, so `intern` is mapped to `campus` (the historical default).
+ *
+ * Scope translation to upstream `category`:
+ *   social  → "1"   (社招, ~657 posts)
+ *   campus  → "2"   (校招, ~112 posts)
+ *   intern  → "2"   (subset of campus)
+ *   all     → undefined  (omit category, ~769 posts)
+ *   undefined → "2" (historical default — campus tab)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const API_ROOT = "https://careers.ctrip.com/api/hrrecruit";
 const CAMPUS_PAGE = "https://careers.ctrip.com/campus";
@@ -206,6 +221,9 @@ export interface SearchOptions {
    *  (category:"2", ~112 positions as of 2026-05).
    *  Set false to include all listings (social + campus, ~769 positions). */
   campusOnly?: boolean;
+  /** CLI `--scope` echo (1.1.0+). When set and `campusOnly` is omitted, scope
+   *  picks the upstream category. `campusOnly` takes precedence. */
+  scope?: PositionScope;
   /** Work city code from the API, e.g. "CO0009"=Shanghai, "CO0001"=Beijing.
    *  Omit or pass "" for all cities. */
   cityCode?: string;
@@ -217,7 +235,24 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-  const campusOnly = opts.campusOnly !== false; // default true
+
+  // Resolve category from explicit campusOnly first, then scope, then default.
+  // category="2" → campus, "1" → social, undefined → no filter (all).
+  let category: string | undefined;
+  if (opts.campusOnly === false) {
+    category = undefined;
+  } else if (opts.campusOnly === true) {
+    category = "2";
+  } else if (opts.scope === "social") {
+    category = "1";
+  } else if (opts.scope === "campus" || opts.scope === "intern") {
+    category = "2";
+  } else if (opts.scope === "all") {
+    category = undefined;
+  } else {
+    category = "2"; // historical default
+  }
+  const categoryFilterActive = category !== undefined;
 
   // Build the condition object.
   // NOTE: `keyword` crashes the server with a NullPointerException when combined
@@ -229,8 +264,8 @@ export async function searchPositions(opts: SearchOptions = {}) {
     pageSize,
   };
 
-  if (campusOnly) {
-    condition.category = "2";
+  if (categoryFilterActive) {
+    condition.category = category;
     // searchText is ignored by server when category is set; skip it to avoid confusion
   } else {
     // Without category filter, searchText works correctly
@@ -254,8 +289,8 @@ export async function searchPositions(opts: SearchOptions = {}) {
 
   let rows = response.data.recruitJobAdList ?? [];
 
-  // Client-side keyword filter when campusOnly is active (server ignores searchText in that mode)
-  if (campusOnly && keyword) {
+  // Client-side keyword filter when category filter is active (server ignores searchText in that mode)
+  if (categoryFilterActive && keyword) {
     const lk = keyword.toLowerCase();
     rows = rows.filter((r) => (r.jobTitle ?? "").toLowerCase().includes(lk));
   }
@@ -266,7 +301,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
     query: condition,
     page,
     page_size: pageSize,
-    total: campusOnly && keyword ? rows.length : (response.data.total ?? rows.length),
+    total: categoryFilterActive && keyword ? rows.length : (response.data.total ?? rows.length),
     positions: rows.map(summarizePosition),
   };
 }

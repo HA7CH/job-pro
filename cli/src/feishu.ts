@@ -43,6 +43,7 @@
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
 // ---------- shared apply-schema helper (re-used by bespoke Feishu adapters) ----------
@@ -149,12 +150,22 @@ export function buildFeishuApplySchema(args: {
 export interface FeishuAdapterConfig {
   /** e.g. "nio.jobs.feishu.cn" or "vrfi1sk8a0.jobs.feishu.cn" */
   host: string;
-  /** portal-channel / website-path header value ("campus" | "379481" | etc.) */
+  /** portal-channel / website-path header value ("campus" | "379481" | etc.).
+   *  Used when scope is undefined OR scope === "all" OR scope === "campus".
+   *  Treated as the adapter's historical default channel. */
   channel: string;
+  /** Optional dedicated channel for `scope=social`. If absent, the factory
+   *  falls back to `channel` + `recruitment_id_list:["101"]` semantics. */
+  socialChannel?: string;
+  /** Optional dedicated channel for `scope=intern`. If absent, the factory
+   *  falls back to `channel` + `recruitment_id_list:["202"]` semantics. */
+  internChannel?: string;
   /** Human-readable label for error/source fields */
   label: string;
   /** URL prefix for detail pages: `${applyUrlPrefix}/${id}/detail` */
   applyUrlPrefix: string;
+  /** Scopes this adapter can actually query. `undefined` = accepts all four. */
+  supportedScopes?: ReadonlyArray<PositionScope>;
 }
 
 // ---------- raw response types ----------
@@ -286,6 +297,10 @@ export interface SearchOptions {
   cityIdList?: string[];
   /** Filter by subject/program IDs. */
   subjectIdList?: string[];
+  /** Caller-requested recruit scope. Adapter translates to either an alternate
+   *  `portal-channel` (if `socialChannel`/`internChannel` is configured) or to
+   *  the canonical `recruitment_id_list` filter on the default channel. */
+  scope?: PositionScope;
 }
 
 // ---------- createAdapter ----------
@@ -293,30 +308,65 @@ export interface SearchOptions {
 export function createAdapter(cfg: FeishuAdapterConfig) {
   const API_ROOT = `https://${cfg.host}/api/v1`;
   const source = cfg.host;
+  const supportedScopes: ReadonlyArray<PositionScope> =
+    cfg.supportedScopes ?? (["social", "campus", "intern", "all"] as const);
 
-  function makeHeaders(): Record<string, string> {
+  /**
+   * Translate a CLI `--scope` value into Feishu wire-level params.
+   *
+   * Two strategies, in priority order:
+   *   1. If the tenant has a dedicated `socialChannel`/`internChannel`
+   *      configured (typical of NIO's separate campus/society subdomains),
+   *      swap the `portal-channel` header value.
+   *   2. Otherwise stay on the default channel and constrain by
+   *      `recruitment_id_list`. Feishu's canonical IDs are
+   *      `101` = 社招 (social), `201` = 校招 (campus), `202` = 实习 (intern).
+   *
+   * `scope === undefined` (caller didn't pass --scope) and `scope === "all"`
+   * both preserve historical behaviour — the adapter's original `channel`
+   * with no extra recruitment filter (so 1.0.93 callers get bit-for-bit
+   * identical queries).
+   */
+  function channelForScope(
+    s: PositionScope | undefined
+  ): { channel: string; recruitmentIdList?: string[] } {
+    if (s === undefined || s === "all") return { channel: cfg.channel };
+    if (s === "social") {
+      if (cfg.socialChannel) return { channel: cfg.socialChannel };
+      return { channel: cfg.channel, recruitmentIdList: ["101"] };
+    }
+    if (s === "intern") {
+      if (cfg.internChannel) return { channel: cfg.internChannel };
+      return { channel: cfg.channel, recruitmentIdList: ["202"] };
+    }
+    if (s === "campus") return { channel: cfg.channel, recruitmentIdList: ["201"] };
+    return { channel: cfg.channel };
+  }
+
+  function makeHeaders(channel: string): Record<string, string> {
     return {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       Accept: "application/json, text/plain, */*",
       "Content-Type": "application/json",
-      "portal-channel": cfg.channel,
+      "portal-channel": channel,
       "portal-platform": "pc",
-      "website-path": cfg.channel,
-      Referer: `https://${cfg.host}/${cfg.channel}/position`,
+      "website-path": channel,
+      Referer: `https://${cfg.host}/${channel}/position`,
     };
   }
 
   async function call<T>(
     path: string,
-    body: unknown
+    body: unknown,
+    channel: string = cfg.channel
   ): Promise<{ ok: boolean; data?: T; message: string }> {
     const url = `${API_ROOT}${path}`;
     let response: Response;
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: makeHeaders(),
+        headers: makeHeaders(channel),
         body: JSON.stringify(body),
       });
     } catch (err) {
@@ -382,6 +432,7 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     const page = Math.max(1, opts.page ?? 1);
     const offset = (page - 1) * pageSize;
     const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+    const scopeTranslation = channelForScope(opts.scope);
 
     const payload: Record<string, unknown> = {
       keyword,
@@ -392,7 +443,13 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
       language: "zh",
     };
 
-    const recruitmentIdList = asStringList(opts.recruitmentIdList);
+    // Caller's explicit recruitmentIdList wins over the scope-derived one.
+    // This preserves any 1.0.93 callsite that passed recruitmentIdList directly.
+    const callerRecruitmentIdList = asStringList(opts.recruitmentIdList);
+    const recruitmentIdList =
+      callerRecruitmentIdList !== undefined && callerRecruitmentIdList.length > 0
+        ? callerRecruitmentIdList
+        : scopeTranslation.recruitmentIdList;
     if (recruitmentIdList !== undefined && recruitmentIdList.length > 0) {
       payload.recruitment_id_list = recruitmentIdList;
     }
@@ -409,7 +466,11 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
       payload.subject_id_list = subjectIdList;
     }
 
-    const response = await call<RawSearchData>("/search/job/posts", payload);
+    const response = await call<RawSearchData>(
+      "/search/job/posts",
+      payload,
+      scopeTranslation.channel
+    );
     if (!response.ok || !response.data) {
       return {
         ok: false,
@@ -425,6 +486,7 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
       ok: true,
       source,
       query: payload,
+      scope: opts.scope,
       page,
       page_size: pageSize,
       total: response.data.count ?? rows.length,
@@ -546,7 +608,7 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     const url = `${API_ROOT}/config/job/filters/${cfg.channel}`;
     let response: Response;
     try {
-      response = await fetch(url, { headers: makeHeaders() });
+      response = await fetch(url, { headers: makeHeaders(cfg.channel) });
     } catch (err) {
       const r = {
         ok: false as const,
@@ -812,6 +874,8 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
   }
 
   return {
+    supportedScopes,
+    channelForScope,
     searchPositions,
     fetchAllPositions,
     fetchPositionDetail,

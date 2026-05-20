@@ -26,6 +26,13 @@
 
 import { createAdapter } from "./feishu.js";
 
+/** Recruit scopes MiniMax can serve.
+ *  MiniMax's multi-tenant Feishu portal (channel "379481") returns a unified
+ *  feed — recruit_type values include both 实习 and 正式 mixed together with
+ *  no portal-level scope switch. The dispatcher accepts social/campus/all
+ *  but every scope hits the same call. */
+export const supportedScopes = ["social", "campus", "all"] as const;
+
 export const {
   searchPositions,
   fetchAllPositions,
@@ -42,4 +49,5 @@ export const {
   channel: "379481",
   label: "MiniMax / MiniMax智能",
   applyUrlPrefix: "https://vrfi1sk8a0.jobs.feishu.cn/379481/position",
+  supportedScopes,
 });

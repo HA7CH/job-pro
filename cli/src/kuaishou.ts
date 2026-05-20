@@ -77,6 +77,36 @@
 //   Haerbin=哈尔滨 Shenyang=沈阳 Singapore=新加坡 and more.
 //
 // ============================================================
+// Social-hire endpoint discovery (probed 2026-05, /recruit/e portal):
+//
+//   Portal URL: https://zhaopin.kuaishou.cn/recruit/e/ (社招 / experienced)
+//   JS entry:   careers-experienced/.../main.a1eab777.js
+//   $basePath = "/recruit/e"
+//
+//   Confirmed working anon (no session):
+//     GET  /recruit/e/api/v1/dictionary/positionCategory  → C001/C002/...
+//     GET  /recruit/e/api/v1/dictionary/positionNature    → C001=全职 C002=实习 C003=兼职
+//     GET  /recruit/e/api/v1/dictionary/recruitProject    → socialr=社招 schoolr=校招 epiboly=外包
+//     GET  /recruit/e/api/v1/dictionary/workLocation      → city codes
+//
+//   Confirmed BLOCKED anon (returns code:-1 "系统错误" — backend requires session):
+//     GET  /recruit/e/api/v1/open/positions/simple
+//          ?pageNum=1&pageSize=2[&positionNatureCode=C001][&recruitProject=socialr]
+//          Always 200 envelope with code:-1 "系统错误" — the endpoint exists
+//          and dispatches, but the downstream list service rejects anon callers.
+//          (POST returns 40014 "参数不正确" — POST shape mismatch; the social
+//          SPA uses the GET signature.)
+//     GET  /recruit/e/api/v1/external/positions/recommend/simple
+//          → 40008 "用户未登录" (explicitly user.not.login).
+//
+// Conclusion: Kuaishou social-hire is anon-blocked at the upstream level. The
+// `supportedScopes` declaration EXCLUDES `"social"` so the dispatcher fails
+// fast with the §2.3 message rather than returning an opaque 系统错误. A
+// session-based path (Phase 2 apply executor reuses cookies) could revisit
+// this endpoint later — the discovery is preserved here so the future agent
+// doesn't repeat the recon.
+//
+// ============================================================
 // NOTE on keyword search: The positions/simple endpoint does NOT support
 // server-side text search.  Client-side filtering is applied in matchResume()
 // by scoring position name + description + demand against resume signals.
@@ -92,7 +122,35 @@
 //   apply_url     ← https://campus.kuaishou.cn/recruit/campus/e/#/campus/job-info/?code={code}
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Scopes this adapter can serve from the public, anon-accessible APIs (1.1.0+).
+ *
+ * Only `campus.kuaishou.cn/recruit/campus/e/api/v1/open/positions/simple` is
+ * anon-reachable. That endpoint covers `校招/fulltime` and `intern` via the
+ * `positionNatureCode` filter — but NOT `社招`, which lives on the separate
+ * `/recruit/e/` (zhaopin.kuaishou.cn) sub-tree and rejects every anon list
+ * call with code:-1 "系统错误" (see header for the full probe matrix).
+ *
+ * The dispatcher uses this list to fail fast with a useful message when a
+ * caller passes `--scope social` — preferable to surfacing the opaque
+ * upstream error.
+ */
+export const supportedScopes = ["campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+/** Map the CLI `--scope` value to Kuaishou's `positionNatureCode` parameter
+ *  on the campus endpoint. `social` is intentionally absent — see
+ *  `supportedScopes` above. `undefined` (caller omitted `--scope`) → no
+ *  filter (matches the 1.0.93 default of returning the full ~441-post pool). */
+function natureCodeForScope(scope: PositionScope | undefined): "fulltime" | "intern" | undefined {
+  if (scope === "campus") return "fulltime";
+  if (scope === "intern") return "intern";
+  // "social" cannot be served — dispatcher rejects before we get here.
+  // "all" + undefined → no nature filter (full pool).
+  return undefined;
+}
 
 const API_BASE =
   "https://campus.kuaishou.cn/recruit/campus/e";
@@ -253,6 +311,16 @@ export interface SearchOptions {
   /** Page size, 1–100. Default: 20. */
   pageSize?: number;
   /**
+   * CLI scope axis (1.1.0+). Maps to `positionNatureCode` via
+   * `natureCodeForScope`: campus→fulltime, intern→intern, all→no filter.
+   * `social` is structurally unsupported (see `supportedScopes`); the
+   * dispatcher rejects it before the call reaches us.
+   *
+   * When both `scope` and `positionNatureCode` are given, `scope` wins.
+   * `undefined` preserves the 1.0.93 default (no nature filter).
+   */
+  scope?: PositionScope;
+  /**
    * Filter by recruit type.
    * "fulltime" = 校招/正式 (~207 posts, matches 校园招聘 tab default).
    * "intern"   = 实习 (~234 posts).
@@ -288,7 +356,10 @@ export interface SearchOptions {
 
 function buildPayload(opts: SearchOptions, pageNum: number, pageSize: number) {
   const payload: Record<string, unknown> = { pageNum, pageSize };
-  if (opts.positionNatureCode) payload.positionNatureCode = opts.positionNatureCode;
+  // CLI scope wins over the bespoke positionNatureCode if both are present.
+  const natureFromScope = natureCodeForScope(opts.scope);
+  const nature = natureFromScope ?? opts.positionNatureCode;
+  if (nature) payload.positionNatureCode = nature;
   if (opts.positionCategoryCodes?.length) payload.positionCategoryCodes = opts.positionCategoryCodes;
   if (opts.workLocationCodes?.length) payload.workLocationCodes = opts.workLocationCodes;
   if (opts.positionLabel) payload.positionLabel = opts.positionLabel;
@@ -553,8 +624,14 @@ export async function findNoticesByQuestion(
 
 export async function matchResume(
   text: string,
-  opts: { topN?: number; candidates?: number } = {}
+  opts: { topN?: number; candidates?: number; scope?: PositionScope } = {}
 ) {
+  // `scope` is accepted for parity with the CLI surface but does not narrow
+  // the matching pool today — we already pull the full ~441-post listing and
+  // score client-side. `social` cannot reach this code path (rejected by
+  // dispatcher); `campus|intern|all` all benefit from the broad pool, so we
+  // intentionally ignore the value here.
+  void opts.scope;
   const topN = Math.max(1, opts.topN ?? 5);
   const candidates = Math.max(topN, opts.candidates ?? 20);
   const { terms, cities } = extractResumeSignals(text ?? "");

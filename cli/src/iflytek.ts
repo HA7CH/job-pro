@@ -33,7 +33,22 @@
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Beisen iTalent Category-axis mapping for the iflytek tenant.
+ *
+ * Confirmed by probing `GetJobAdSearchConditions` on iflytek.zhiye.com —
+ * the Category dictionary uses the same numeric IDs as vivo's tenant:
+ *
+ * `--scope social` → `Category: ["4"]` (员工社招)
+ * `--scope campus` → `Category: ["5"]` (员工校招)
+ * `--scope intern` → `Category: ["3"]` (实习生)
+ * `--scope all` / undefined → no Category filter (mixed feed across all
+ * channels, matching iFlytek's historical 1.0.93 default).
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const;
 
 const SOURCE = "iflytek.zhiye.com";
 const API_ROOT = "https://iflytek.zhiye.com";
@@ -138,8 +153,17 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /** "social" → 员工社招 ; "campus" → 员工校招 / 校园招聘 ; "intern" → 实习生 ; omit = all */
-  recruitType?: "social" | "campus" | "intern" | "all";
+  /**
+   * Canonical CLI-side scope flag (1.1.0+). Mapped via `categoryFromScope`
+   * to the Beisen Category axis: `social`=4, `campus`=5, `intern`=3,
+   * `all`/undefined = no filter (mixed feed).
+   */
+  scope?: PositionScope;
+  /**
+   * @deprecated kept for backward compatibility with 1.0.93 callers — use
+   * `scope` instead. Same string-value space as `scope`.
+   */
+  recruitType?: PositionScope;
 }
 
 interface RawJobAd {
@@ -173,13 +197,21 @@ function summarize(item: RawJobAd): PositionSummary {
   };
 }
 
-// Beisen tenants encode recruit type via numeric Category IDs that vary by
-// tenant. We don't know iFlytek's exact mapping without probing the
-// taxonomy endpoint, so we leave it open and let CLI users filter by the
-// returned `recruit_label` string client-side. When the mapping is known,
-// add the numeric codes here (vivo uses "3"=intern, "4"=social, "5"=campus).
-function categoryFromRecruitType(_t?: string): string[] | undefined {
-  return undefined;
+// Beisen tenants encode recruit type via numeric Category IDs. The iFlytek
+// tenant uses the same triplet as the vivo tenant (probed against
+// GetJobAdSearchConditions): "3"=intern, "4"=social, "5"=campus.
+function categoryFromScope(s?: PositionScope): string[] | undefined {
+  switch (s) {
+    case "social":
+      return ["4"];
+    case "campus":
+      return ["5"];
+    case "intern":
+      return ["3"];
+    case "all":
+    default:
+      return undefined;
+  }
 }
 
 // ---------- searchPositions ----------
@@ -196,7 +228,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
     PortalId: "",
     DisplayFields: ["Category", "Kind", "LocId", "Org", "HeadCount", "PostDate", "Salary"],
   };
-  const category = categoryFromRecruitType(opts.recruitType);
+  const category = categoryFromScope(opts.scope ?? opts.recruitType);
   if (category) body.Category = category;
 
   const r = await post<RawJobAd[]>("/api/Jobad/GetJobAdPageList", body);
@@ -224,7 +256,14 @@ export async function searchPositions(opts: SearchOptions = {}) {
 // ---------- fetchAllPositions ----------
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; recruitType?: SearchOptions["recruitType"] } = {}
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    scope?: PositionScope;
+    /** @deprecated use `scope` */
+    recruitType?: PositionScope;
+  } = {}
 ) {
   const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 30));
   const maxPages = Math.max(1, opts.maxPages ?? 30);
@@ -237,7 +276,7 @@ export async function fetchAllPositions(
       keyword: opts.keyword,
       page,
       pageSize,
-      recruitType: opts.recruitType,
+      scope: opts.scope ?? opts.recruitType,
     });
     if (!r.ok) {
       return { ok: false as const, source: SOURCE, message: r.message, total: 0, fetched: bucket.length, positions: bucket };

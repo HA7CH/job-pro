@@ -60,7 +60,14 @@
 //   apply_url     ← https://zhipu-ai.jobs.feishu.cn/index/position/${id}/detail
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/** Recruit scopes Zhipu can serve.
+ *  Zhipu's Feishu tenant only exposes a social/experienced channel
+ *  (recruitment_type_list = [{ id:"1", name:"社招" }]); there is no campus
+ *  or intern portal. Both "social" and "all" map to the same query. */
+export const supportedScopes = ["social", "all"] as const;
 
 const HOST = "zhipu-ai.jobs.feishu.cn";
 const CHANNEL = "index";
@@ -219,6 +226,10 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /** Caller-requested recruit scope. Zhipu only serves "social" (its sole
+   *  channel); "all" is identical; "campus" / "intern" never reach this
+   *  adapter — the dispatcher rejects them via supportedScopes. */
+  scope?: PositionScope;
   /** Filter by job category IDs from /config/job/filters/index → job_type_list.
    *  Known IDs (probed 2026-05):
    *    "6791702736615426317" = 研发
