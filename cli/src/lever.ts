@@ -28,6 +28,7 @@
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
 // ---------- adapter config ----------
@@ -89,6 +90,10 @@ export interface SearchOptions {
   teams?: string[];
   /** Filter by location substring(s). Case-insensitive. */
   cities?: string[];
+  /** Caller-requested recruit scope. Lever boards used by Chinese tenants
+   *  here are 100% experienced-hire by convention, so we accept the flag
+   *  and echo it back, but do not translate it to any upstream filter. */
+  scope?: PositionScope;
 }
 
 // ---------- createAdapter ----------
@@ -221,6 +226,7 @@ export function createAdapter(cfg: LeverAdapterConfig) {
     return {
       ok: true as const,
       source: SOURCE,
+      scope: opts.scope,
       query: opts,
       page,
       page_size: pageSize,
@@ -245,6 +251,7 @@ export function createAdapter(cfg: LeverAdapterConfig) {
     return {
       ok: true as const,
       source: SOURCE,
+      scope: opts.scope,
       total: filtered.length,
       fetched: filtered.length,
       positions: filtered.map(summarize),

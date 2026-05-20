@@ -75,7 +75,27 @@
 //   apply_url     ← https://hr.163.com/job-detail?id=${id}
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * NetEase supports social + campus + intern + all (1.1.0+). The campus
+ * endpoint (workType="1") already lumps intern + new-grad together, so
+ * `intern` is treated as `campus`.
+ *
+ * Scope translation to upstream `workType`:
+ *   social  → "0"   (社招, ~1952 posts)
+ *   campus  → "1"   (校园/实习, ~417 posts)
+ *   intern  → "1"   (subset of campus)
+ *   all     → "1"   (no separate "all" — caller may fan out)
+ *   undefined → "1" (historical default — preserves 1.0.93 campus tab)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function workTypeForScope(s: PositionScope | undefined): "0" | "1" {
+  if (s === "social") return "0";
+  return "1";
+}
 
 const API_ROOT = "https://hr.163.com/api/hr163";
 const CAMPUS_PAGE = "https://hr.163.com/job-list?workType=1";
@@ -236,6 +256,9 @@ export interface SearchOptions {
    * The only effective filter is `keyword`.
    */
   workType?: "0" | "1";
+  /** CLI `--scope` echo (1.1.0+). When set and `workType` is omitted, scope
+   *  picks the upstream workType. `workType` takes precedence. */
+  scope?: PositionScope;
 }
 
 // ---------- searchPositions ----------
@@ -244,7 +267,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(200, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 80);
-  const workType = opts.workType ?? "1";
+  const workType = opts.workType ?? workTypeForScope(opts.scope);
 
   const payload = {
     pageNum: page,
@@ -288,7 +311,7 @@ export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
   const pageSize = 200; // server max
-  const workType = opts.workType ?? "1";
+  const workType = opts.workType ?? workTypeForScope(opts.scope);
   const keyword = (opts.keyword ?? "").trim();
 
   const result = await searchPositions({ keyword, pageSize, workType, page: 1 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
 type Status = "live" | "building" | "none";
@@ -8,327 +8,390 @@ type Status = "live" | "building" | "none";
 type Company = {
   name: string;
   href: string;
-  listings: Status;
+  campus: Status;
+  social: Status;
   autoApply: Status;
+  /**
+   * Recruit channels this adapter can query in 1.1.0+ — `social` /
+   * `campus` / `intern` / `all`. Optional: when omitted, the landing
+   * page renders the company as supporting the full set (mirrors the
+   * dispatcher's fallback in `runCompany` when `supportedScopes` is
+   * undefined). Future per-company entries will fill this in as each
+   * adapter declares its `supportedScopes` tuple.
+   */
+  scopes?: ReadonlyArray<"social" | "campus" | "intern" | "all">;
 };
 
 const COMPANIES: Company[] = [
   {
     name: "Tencent",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/tencent.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "ByteDance",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/bytedance.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Alibaba",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/alibaba.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "Meituan",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/meituan.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Xiaohongshu",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xiaohongshu.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Google",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Google+adapter",
-    listings: "building",
+    campus: "building",
+    social: "building",
     autoApply: "building",
   },
   {
     name: "JD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/jd.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "Kuaishou",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/kuaishou.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "Xiaomi",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xiaomi.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Baidu",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/baidu.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "NetEase",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/netease.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Didi",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/didi.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Bilibili",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/bilibili.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "PDD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/pdd.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "NIO",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/nio.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "MiniMax",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/minimax.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Huawei",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/huawei.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "Weibo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/weibo.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "miHoYo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/mihoyo.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Ping An",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/pingan.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "SenseTime",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/sensetime.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Trip.com",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/trip.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Unitree",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/unitree.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "building",
   },
   {
     name: "BYD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/byd.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Ant Group",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/antgroup.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Li Auto",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/liauto.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Moonshot",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/moonshot.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Zhipu",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/zhipu.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "iQIYI",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/iqiyi.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Hikvision",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/hikvision.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "building",
   },
   {
     name: "Megvii",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/megvii.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Lilith Games",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/lilith.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Agibot",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/agibot.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "DeepSeek",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/deepseek.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "01.AI",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/zerooneai.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Galaxy Universal",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/galaxyuniversal.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "StepFun",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/stepfun.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "CICC",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cicc.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "building",
   },
   {
     name: "Baichuan",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/baichuan.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "XPeng",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xpeng.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "WeRide",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/weride.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "HoYoverse",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/hoyoverse.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "iFlytek",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/iflytek.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "OPPO",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/oppo.ts",
-    listings: "live",
+    campus: "live",
+    social: "building",
     autoApply: "live",
   },
   {
     name: "vivo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/vivo.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "SF Express",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/sf.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Cainiao",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cainiao.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "building",
   },
   {
     name: "Geely",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/geely.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "WeBank",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/webank.ts",
-    listings: "live",
+    campus: "building",
+    social: "live",
     autoApply: "building",
   },
   {
     name: "Horizon Robotics",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/horizonrobotics.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Cambricon",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cambricon.ts",
-    listings: "live",
+    campus: "live",
+    social: "live",
     autoApply: "live",
   },
   {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
-    listings: "building",
+    campus: "building",
+    social: "building",
     autoApply: "building",
   },
   {
     name: "Apple",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Apple+adapter",
-    listings: "building",
+    campus: "building",
+    social: "building",
     autoApply: "building",
   },
 ];
@@ -390,6 +453,7 @@ function statusClass(kind: Status): string {
 
 export default function Home() {
   const [copied, setCopied] = useState(false);
+  const [wechatOpen, setWechatOpen] = useState(false);
 
   async function copyPrompt() {
     try {
@@ -400,6 +464,15 @@ export default function Home() {
       // ignore — older browsers
     }
   }
+
+  useEffect(() => {
+    if (!wechatOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setWechatOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [wechatOpen]);
 
   return (
     <main className="page">
@@ -428,18 +501,31 @@ export default function Home() {
       </section>
 
       <p className="companion">
-        Pairs with{" "}
-        <a href="https://cv.ha7ch.com" target="_blank" rel="noopener noreferrer">
-          cv.ha7ch.com
-        </a>
-        {" "}— draft the resume you paste above.
+        <span className="companion-text">
+          Pairs with{" "}
+          <a href="https://cv.ha7ch.com" target="_blank" rel="noopener noreferrer">
+            cv.ha7ch.com
+          </a>
+          {" "}— draft the resume you paste above.
+        </span>
+        <button
+          type="button"
+          onClick={() => setWechatOpen(true)}
+          aria-label="WeChat group (bug reports & chat)"
+          className="companion-wechat"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213c0 .163.13.295.29.295a.32.32 0 0 0 .166-.054l1.903-1.114a.864.864 0 0 1 .717-.098a10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.81-.05c-.857-2.578.157-4.972 1.932-6.446c1.703-1.415 3.882-1.98 5.853-1.838c-.576-3.583-4.196-6.348-8.594-6.348M5.785 5.991c.642 0 1.162.529 1.162 1.18c0 .65-.52 1.178-1.162 1.178s-1.162-.528-1.162-1.179c0-.65.52-1.179 1.162-1.179m5.813 0c.642 0 1.162.529 1.162 1.18c0 .65-.52 1.178-1.162 1.178s-1.162-.528-1.162-1.179c0-.65.52-1.179 1.162-1.179m5.34 2.867c-1.797-.052-3.746.512-5.28 1.786c-1.72 1.428-2.687 3.72-1.78 6.22c.942 2.453 3.666 4.229 6.884 4.229c.826 0 1.622-.12 2.361-.336a.72.72 0 0 1 .598.082l1.584.926a.27.27 0 0 0 .14.047c.134 0 .24-.111.24-.247c0-.06-.023-.12-.038-.177c-.004-.005-.156-.586-.32-1.214a.5.5 0 0 1-.023-.156a.5.5 0 0 1 .192-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983a.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982m5.107 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983a.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982" />
+          </svg>
+        </button>
       </p>
 
       <section className="company-table" aria-labelledby="table-title">
         <h2 id="table-title" className="sr-only">Roadmap</h2>
         <div className="company-row company-row--header" aria-hidden>
           <span className="col-label">Company</span>
-          <span className="col-label">Info</span>
+          <span className="col-label">Campus Info</span>
+          <span className="col-label">Social Info</span>
           <span className="col-label">Auto-apply</span>
         </div>
         {COMPANIES.map((c) => (
@@ -451,54 +537,17 @@ export default function Home() {
             rel="noopener noreferrer"
           >
             <span className="company-name">{c.name}</span>
-            <span className={statusClass(c.listings)} aria-label={`Info: ${c.listings}`}>
-              <StatusIcon kind={c.listings} />
+            <span className={statusClass(c.campus)} aria-label={`Campus: ${c.campus}`}>
+              <StatusIcon kind={c.campus} />
+            </span>
+            <span className={statusClass(c.social)} aria-label={`Social: ${c.social}`}>
+              <StatusIcon kind={c.social} />
             </span>
             <span className={statusClass(c.autoApply)} aria-label={`Auto-apply: ${c.autoApply}`}>
               <StatusIcon kind={c.autoApply} />
             </span>
           </a>
         ))}
-      </section>
-
-      <section className="phase2-card" aria-labelledby="phase2-title">
-        <h2 id="phase2-title" className="phase2-title">Phase 2 — submit, not just search</h2>
-        <p className="phase2-lede">
-          50 / 50 companies expose an application schema. <strong>45 / 50 have
-          end-to-end-verified apply endpoints</strong> (3 Greenhouse/Lever
-          fire anonymously; 42 need a captured browser session). 5 are
-          intentionally external — Liepin recruiter chat / WeChat mini-program,
-          structurally non-API.
-        </p>
-        <pre className="phase2-snippet">{`# one-time setup
-job-pro profile init --interactive      # prompts 5 essential fields
-job-pro profile lint                    # validate format (email/phone/resume)
-
-# scan the whole market
-job-pro find "intern" --apply-ready --text   # only show buckets you can fire today
-
-# inspect + stage a job
-job-pro xpeng apply <id> --schema                  # peek at the form
-job-pro xpeng apply <id> --interactive --remember  # fill in terminal; persist answers
-
-# actually submit (preview → confirm → official-site submitter)
-job-pro xpeng apply <id> --confirm-submit
-
-# script mode is still available when you intentionally want no prompt
-JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
-  job-pro xpeng apply <id> --really-submit`}</pre>
-        <p className="phase2-detail">
-          For non-Greenhouse adapters (Feishu / Moka / Beisen / bespoke),
-          run <code>job-pro extension</code> for the bundled MV3 add-on
-          path + a 6-step Chrome install walkthrough, then drop{" "}
-          <code>~/Downloads/jobpro/&lt;adapter&gt;.session.json</code>{" "}
-          under <code>~/.jobpro/</code>.
-          See{" "}
-          <a href="https://github.com/HA7CH/job-pro/blob/main/docs/auto-apply.md" target="_blank" rel="noopener noreferrer">
-            docs/auto-apply.md
-          </a>{" "}
-          for the 50-row submission-flow matrix.
-        </p>
       </section>
 
       <p className="link-row">
@@ -537,6 +586,39 @@ JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
           ha7ch.com
         </a>
       </p>
+
+      {wechatOpen && (
+        <div
+          className="wechat-overlay"
+          onClick={() => setWechatOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="WeChat group QR code"
+        >
+          <div
+            className="wechat-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="wechat-title">Job Pro 交流群 · bug 反馈</p>
+            <img
+              src="/wechat-group.jpg"
+              alt="WeChat group QR code for Job Pro"
+              className="wechat-qr"
+            />
+            <p className="wechat-hint">
+              微信扫码加群。二维码过期后{" "}
+              <a
+                href="https://github.com/HA7CH/job-pro/issues/new"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                开个 issue
+              </a>{" "}
+              提醒更新。
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

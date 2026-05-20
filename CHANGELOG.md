@@ -4,7 +4,98 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
-## Unreleased — `apply --confirm-submit`: preview, confirm, then fire
+## 1.1.0 — `--scope social|campus|intern|all`
+
+<!-- WORKTREE-A:CLI -->
+Unified `--scope` flag across the entire dispatcher. Every adapter now
+accepts `--scope social|campus|intern|all` on `search`, `all`, `match`,
+and the cross-company `find` verb. `apply` accepts it cosmetically;
+inspection verbs (`detail`, `dicts`, `notices`, `flow`, `resume-check`,
+`memory`, `recon`, `selftest`, `list`, `status`, `extension`, `profile`)
+silently ignore it.
+
+Contract additions in `cli/src/adapter.ts`:
+
+* `export type PositionScope = "social" | "campus" | "intern" | "all"` —
+  the one canonical scope name used everywhere downstream.
+* `AdapterSearchOptions.scope?: PositionScope` (and the same on
+  `AdapterAllOptions`) — adapters translate this to their upstream
+  channel / recruitType / jobType / workType / zpType / seasonType key.
+* `CompanyAdapter.supportedScopes?: ReadonlyArray<PositionScope>` — each
+  adapter declares which channels it can actually query. `undefined` =
+  "I accept all four"; an explicit tuple lets the dispatcher fail fast
+  with `<company> does not support --scope <scope>. Supported: ...`.
+
+Dispatcher (`cli/src/index.ts`):
+
+* `runCompany` pre-scans `--scope <value>` BEFORE per-verb dispatch,
+  validates against `social|campus|intern|all`, and refuses unsupported
+  scopes against the adapter's `supportedScopes` declaration.
+* `find` treats `--scope` as a SOFT filter: companies whose
+  `supportedScopes` excludes the requested scope are silently skipped
+  from the result body (NOT counted in `failed`). JSON output gains
+  `scope_used` and `companies_skipped_by_scope[]`; `--text` mode prints
+  a footer line listing skipped companies.
+* `HELP` text documents the flag + adds a `--scope social` example.
+
+Defaults are preserved bit-for-bit. Omitting `--scope` leaves the
+adapter's options bag with `scope: undefined`, distinct from
+`--scope all`. Every 1.0.93 caller sees zero behaviour change.
+
+Smoke test (`cli/test/smoke.ts`) now runs a second pass:
+`searchPositions({ pageSize: 1, scope: "social" })` against every
+adapter whose `supportedScopes` includes `"social"` (or is undefined).
+Pass criteria: `ok:true`, `total >= 0`, first-row keys present when
+`total > 0`. `recruit_label` mismatch is WARN, not FAIL.
+<!-- /WORKTREE-A:CLI -->
+
+### Adapters
+<!-- WORKTREE-B:FEISHU -->
+- Feishu factory: add scope→channel translation (`socialChannel` / `internChannel` config; `recruitmentIdList` fallback for tenants without dedicated portals).
+<!-- /WORKTREE-B:FEISHU -->
+<!-- WORKTREE-C:MOKA -->
+- Moka factory: scope→channel mapping; scope=all triggers parallel multi-channel merge
+<!-- /WORKTREE-C:MOKA -->
+<!-- WORKTREE-D:WECRUIT -->
+- Wecruit factory + sensetime / horizonrobotics: `--scope social|campus|all` via `recruitType` translation; supportedScopes derived from configured channels.
+<!-- /WORKTREE-D:WECRUIT -->
+<!-- WORKTREE-E:BEISEN -->
+- vivo + iflytek (Beisen iTalent): `--scope` mapped to `Category` (`"3"=intern`, `"4"=social`, `"5"=campus`); iflytek mapping previously unset, now wired.
+<!-- /WORKTREE-E:BEISEN -->
+<!-- WORKTREE-F:GREENHOUSE-LEVER -->
+- xpeng / weride / hoyoverse: declared `supportedScopes:["social","all"]` — international Greenhouse/Lever boards are 100% experienced-hire by company convention.
+<!-- /WORKTREE-F:GREENHOUSE-LEVER -->
+<!-- WORKTREE-A:TIER1_BESPOKE -->
+- 10 bespoke Tier-1 adapters wired for `--scope`: meituan (`jobType` 1/2/3), xiaohongshu (`recruitType` campus/social), antgroup (separate `/social/` endpoint), liauto (`/school` vs `/social/job-page`), byd (social-only — campus is auth-gated), trip (`category` 1/2), netease (`workType` 0/1), mihoyo (`channelDetailIds`+`hireType`), alibaba (no-social — different domain), didi (client-side filter on `J-` vs `JR-` post_id prefix).
+<!-- /WORKTREE-A:TIER1_BESPOKE -->
+<!-- WORKTREE-A:TIER1_FEISHU -->
+- 7 Feishu-tenant adapters wired: zhipu / baichuan (social-only tenants), iqiyi (3-portal: job/campus/intern), xiaomi (omit `portal-channel` header → 2533-post social pool), agibot / minimax / zerooneai (mixed-feed tenants).
+<!-- /WORKTREE-A:TIER1_FEISHU -->
+<!-- WORKTREE-A:TIER1_MOKA -->
+- 7 Moka-tenant adapters wired: moonshot / deepseek / galaxyuniversal / stepfun / geely (social-only tenants); weibo (siteId 43534 campus + 43535 social); megvii (siteId 38642 campus + 38641 social).
+<!-- /WORKTREE-A:TIER1_MOKA -->
+<!-- WORKTREE-G:BYTEDANCE -->
+- ByteDance: social wired via `portal-channel: society` + `website-path: society` + `recruitment_id_list:["101"]` against the same `POST /api/v1/search/job/posts` endpoint. The user-visible URL slug is `experienced`, but the server matches the site key `society` (parent recruit_type id:"1"=社招/Experienced). Probed 2026-05-20: `society` channel returns ~10000 social posts; the prior probe header `experienced` returned `code:-9000003 "site not exist"`. `supportedScopes = ["social","campus","intern","all"]`; scope=all parallel-fetches both campus + society and merges. `fetchPositionDetail` now probes campus first, society second (post_id alone doesn't reveal channel); apply_url uses the channel the post was found in so deep-links land on the right portal.
+<!-- /WORKTREE-G:BYTEDANCE -->
+<!-- WORKTREE-H:KUAISHOU-BAIDU -->
+- baidu: `--scope social` wired — same `POST /httservice/getPostListNew` endpoint accepts `recruitType=SOCIAL` (1641 anonymous social posts). `scope=all` fan-outs across GRADUATE+INTERN+SOCIAL.
+- kuaishou: social-hire endpoint discovered (`/recruit/e/api/v1/open/positions/simple` on `zhaopin.kuaishou.cn`) but session-gated (`-1 系统错误` anon); `supportedScopes` excludes `"social"` so dispatcher fails fast.
+<!-- /WORKTREE-H:KUAISHOU-BAIDU -->
+<!-- WORKTREE-I:BILIBILI-PDD -->
+- bilibili: `--scope social` wired — `/api/srs/position/positionList` IS anonymously accessible via the same CSRF handshake as campus (~470 social posts). Apply URLs switch between `/campus/positions/<id>` and `/social/positions/<id>`.
+- pdd: no public anonymous social endpoint exists (all social subdomains DNS-fail or 401); `supportedScopes` excludes `"social"`.
+<!-- /WORKTREE-I:BILIBILI-PDD -->
+<!-- WORKTREE-J:OPPO-SF -->
+- sf: `--scope social` wired via separate stack `hr.sf-express.com/SearchJob.do` (~1976 anonymous social posts, no CSRF). `scope=all` fan-outs campus + social and de-dupes by apply_url.
+- oppo: no public social endpoint (every variant returns total:0, project taxonomy is campus-only); `supportedScopes` excludes `"social"`. Funneled externally (Liepin/BOSS/WeChat).
+<!-- /WORKTREE-J:OPPO-SF -->
+<!-- WORKTREE-K:TIER2_REST -->
+- cambricon: `--scope social` wired via Moka `siteId:1113` (added to channels array; factory routes by scope).
+- lilith: single-portal Feishu tenant (`lilithgames.jobs.feishu.cn/career/`) serves 社招/校招/实习 mixed; cannot server-side filter; `supportedScopes:["social","campus","intern","all"]` but all resolve to one query.
+- huawei / pingan / nio: confirmed structurally campus-only (huawei `jobType=SOCIAL` 405; pingan `recruitType="2"` silently ignored; nio social on separate login-gated stack); `supportedScopes` excludes `"social"`.
+<!-- /WORKTREE-K:TIER2_REST -->
+
+## 1.0.94 — `apply --confirm-submit`: preview, confirm, then fire
 
 `apply` no longer makes an interactive user copy a second command just to
 move from "resume looks OK" to "submit it." New flags:

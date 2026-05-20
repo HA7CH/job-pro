@@ -170,59 +170,6 @@ button {
   overflow: hidden;
 }
 
-.phase2-card {
-  margin-top: 2.5rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 1.25rem 1.25rem 1rem;
-  background: var(--background);
-}
-
-.phase2-title {
-  font-family: var(--font-serif);
-  font-size: 1.25rem;
-  margin: 0 0 0.5rem;
-  letter-spacing: -0.01em;
-}
-
-.phase2-lede {
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--muted-foreground);
-  margin: 0 0 0.75rem;
-}
-
-.phase2-snippet {
-  background: var(--muted);
-  border-radius: var(--radius-sm);
-  padding: 0.875rem 1rem;
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
-  line-height: 1.55;
-  margin: 0 0 0.75rem;
-  white-space: pre-wrap;
-  overflow-x: auto;
-}
-
-.phase2-detail {
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  color: var(--muted-foreground);
-  margin: 0;
-}
-.phase2-detail code {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.875em;
-  background: var(--muted);
-  padding: 0.05em 0.3em;
-  border-radius: 3px;
-}
-.phase2-detail a {
-  color: var(--foreground);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
 .prompt-head {
   display: flex;
   align-items: center;
@@ -274,11 +221,34 @@ button {
   font-size: 0.75rem;
   line-height: 1.5;
   color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.companion-text {
+  flex: 1;
+  min-width: 0;
 }
 .companion a {
   color: var(--foreground);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.companion-wechat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  padding: 0.1rem;
+  margin-left: auto;
+  transition: color 0.14s ease;
+}
+.companion-wechat:hover {
+  color: var(--foreground);
+}
+.companion-wechat svg {
+  width: 1rem;
+  height: 1rem;
 }
 
 /* ── company table (no dividers, tight rows) ── */
@@ -289,7 +259,7 @@ button {
 
 .company-row {
   display: grid;
-  grid-template-columns: 1fr 5rem 6rem;
+  grid-template-columns: 1fr 6rem 6rem 6rem;
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 0.25rem;
@@ -428,6 +398,70 @@ button {
   margin-left: auto;
 }
 
+/* ── WeChat QR modal ── */
+
+.wechat-overlay {
+  position: fixed;
+  inset: 0;
+  background: oklch(0 0 0 / 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 50;
+  animation: wechat-fade 0.14s ease;
+}
+
+@keyframes wechat-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.wechat-card {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  max-width: 22rem;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.875rem;
+  box-shadow: 0 10px 30px oklch(0 0 0 / 0.18);
+}
+
+.wechat-title {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+.wechat-qr {
+  width: 100%;
+  max-width: 16rem;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
+.wechat-hint {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  margin: 0;
+  text-align: center;
+}
+
+.wechat-hint a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* ── responsive (sub-560px) ── */
 
 @media (max-width: 560px) {
@@ -436,7 +470,7 @@ button {
   }
 
   .company-row {
-    grid-template-columns: 1fr 4rem 5rem;
+    grid-template-columns: 1fr 4.5rem 4.5rem 5rem;
     gap: 0.5rem;
   }
 

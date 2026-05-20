@@ -58,7 +58,24 @@
 //   apply_url      ← https://campus-talent.alibaba.com/campus/positionDetail?positionId=<id>
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { extractResumeSignals, scoreOverlap, checkResume };
+
+/**
+ * Alibaba: only campus + intern channels are wired (1.1.0+).
+ *
+ * The public endpoint we hit is `campus-talent.alibaba.com` — Alibaba's
+ * social-hire flow lives on a different domain (job.alibaba.com / 阿里招聘)
+ * and is NOT wired into this adapter. Declaring `["campus","intern","all"]`
+ * lets the dispatcher fail fast on `--scope social` and route the caller
+ * elsewhere.
+ *
+ * Within campus + intern, the upstream `batchId` selects a specific batch
+ * (e.g. 2027届实习生); both scopes share the same default batch and there
+ * is no internal channel switch, so `intern` and `campus` produce the same
+ * query — the difference is intent, not the upstream shape.
+ */
+export const supportedScopes = ["campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const API_ROOT = "https://campus-talent.alibaba.com";
 const CAMPUS_PAGE = `${API_ROOT}/campus/position`;
@@ -248,6 +265,10 @@ function summarizePosition(item: RawPosition): PositionSummary {
 export interface SearchOptions {
   /** Full-text keyword. Sent as `searchKey` which the server does filter on. */
   keyword?: string;
+  /** CLI `--scope` echo (1.1.0+). Alibaba only wires campus + intern channels;
+   *  scope is accepted but does not change the upstream query (campus and
+   *  intern share the same batch-driven query shape). */
+  scope?: PositionScope;
   page?: number;
   pageSize?: number;
   /**

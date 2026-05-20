@@ -88,7 +88,28 @@
 //   apply_url     ← https://www.lixiang.com/job/detail/<id>.html
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Li Auto supports social + campus + intern + all (1.1.0+). The campus
+ * endpoint mixes 正式 (job_mode=201) + 实习 (job_mode=202); intern is
+ * surfaced via that same endpoint and filtered client-side downstream
+ * by job_mode_name=="实习".
+ *
+ * Scope translation:
+ *   social  → /social/job-page  (~2185 posts, campusOnly=false)
+ *   campus  → /school/job-page  (~361 posts, campusOnly=true)
+ *   intern  → /school/job-page  (subset, job_mode=202)
+ *   all     → /school/job-page  (caller fans out via fetchAll if needed)
+ *   undefined → /school/job-page (historical default)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function campusOnlyForScope(s: PositionScope | undefined): boolean {
+  if (s === "social") return false;
+  return true;
+}
 
 const API_ROOT = "https://api-web.lixiang.com/osd-hr-recruitment-website/v1/recruit";
 const EMPLOY_PAGE = "https://www.lixiang.com/employ.html";
@@ -230,6 +251,9 @@ export interface SearchOptions {
   /** If true (default), query the campus+intern endpoint (~361 posts).
    *  Set false to query the social-hire endpoint (~2185 posts). */
   campusOnly?: boolean;
+  /** CLI `--scope` echo (1.1.0+). When set and `campusOnly` is omitted, scope
+   *  picks which endpoint to hit. `campusOnly` takes precedence. */
+  scope?: PositionScope;
 }
 
 // ---------- searchPositions ----------
@@ -238,7 +262,10 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-  const campusOnly = opts.campusOnly !== false; // default true
+  // Explicit campusOnly wins; otherwise derive from scope; otherwise default true.
+  const campusOnly = opts.campusOnly === undefined
+    ? campusOnlyForScope(opts.scope)
+    : opts.campusOnly !== false;
 
   const path = campusOnly ? "/school/job-page" : "/social/job-page";
   const referer = campusOnly ? CAMPUS_PAGE : SOCIAL_PAGE;

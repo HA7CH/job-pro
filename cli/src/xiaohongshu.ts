@@ -95,8 +95,28 @@
 //   apply_url     ← DETAIL_PAGE(positionId)
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 
 export { checkResume };
+
+/**
+ * Xiaohongshu supports social + campus + intern + all (1.1.0+). Intern lives
+ * inside the campus feed (jobProjectName="Ace 顶尖实习生计划") — the upstream
+ * has no separate intern recruitType, so `intern` is mapped to `campus`.
+ *
+ * Scope translation to upstream `recruitType`:
+ *   social  → "social"  (~828 posts)
+ *   campus  → "campus"  (~319 posts, includes intern)
+ *   intern  → "campus"
+ *   all     → "campus" (fan-out is the caller's responsibility)
+ *   undefined → "campus"  (historical default)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function recruitTypeForScope(s: PositionScope | undefined): "campus" | "social" {
+  if (s === "social") return "social";
+  return "campus";
+}
 
 const API_ROOT = "https://job.xiaohongshu.com";
 const CAMPUS_PAGE = "https://job.xiaohongshu.com/campus/position";
@@ -303,6 +323,9 @@ export interface SearchOptions {
    *  to find top-intern positions use recruitType:"campus" and filter client-side
    *  on project === "Ace 顶尖实习生计划". */
   recruitType?: "campus" | "social" | "top_intern";
+  /** CLI `--scope` echo (1.1.0+). When set and `recruitType` is omitted, scope
+   *  picks the upstream recruitType. `recruitType` takes precedence. */
+  scope?: PositionScope;
   keyword?: string;
   page?: number;
   pageSize?: number;
@@ -330,7 +353,10 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const page = Math.max(1, opts.page ?? 1);
   // "top_intern" is rejected by the upstream API (error 999). The caller may pass it
   // for intent documentation, but we map it to "campus" and note the caveat.
-  const recruitType = opts.recruitType === "top_intern" ? "campus" : (opts.recruitType ?? "campus");
+  // When recruitType is omitted, fall back to scope→recruitType mapping then default.
+  const recruitType = opts.recruitType === "top_intern"
+    ? "campus"
+    : (opts.recruitType ?? recruitTypeForScope(opts.scope));
   const body: Record<string, unknown> = {
     recruitType,
     keyword: (opts.keyword ?? "").trim().slice(0, 50),
@@ -375,7 +401,13 @@ export async function searchPositions(opts: SearchOptions = {}) {
 }
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; recruitType?: SearchOptions["recruitType"] } = {}
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    recruitType?: SearchOptions["recruitType"];
+    scope?: PositionScope;
+  } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
@@ -384,7 +416,7 @@ export async function fetchAllPositions(
   let total: number | undefined;
 
   for (let page = 1; page <= maxPages; page++) {
-    const result = await searchPositions({ keyword: opts.keyword, recruitType: opts.recruitType, page, pageSize });
+    const result = await searchPositions({ keyword: opts.keyword, recruitType: opts.recruitType, scope: opts.scope, page, pageSize });
     if (!result.ok) {
       return {
         ok: false as const,

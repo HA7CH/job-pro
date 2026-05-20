@@ -51,7 +51,16 @@
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/** Recruit scopes Agibot can serve.
+ *  Agibot's four Feishu portals (index/social/campus/intern) all share the
+ *  same /api/v1/search/job/posts endpoint — the API ignores the portal
+ *  channel and returns the union of all positions. Every scope therefore
+ *  hits the identical query; the dispatcher accepts social/campus/all and
+ *  the adapter doesn't try to client-side filter. */
+export const supportedScopes = ["social", "campus", "all"] as const;
 
 const SOURCE = "agirobot.jobs.feishu.cn";
 const API_ROOT = "https://agirobot.jobs.feishu.cn/api/v1";
@@ -211,6 +220,9 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /** Canonical CLI scope. Accepted but ignored — Agibot's API returns a
+   *  unified social+campus+intern feed and we don't client-side filter. */
+  scope?: PositionScope;
 }
 
 // ---------- searchPositions ----------

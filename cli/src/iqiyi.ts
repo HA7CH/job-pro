@@ -96,7 +96,26 @@
 //   apply_url     ← https://careers.iqiyi.com/{website_path}/position/{id}/detail
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/** Recruit scopes iQIYI can serve.
+ *  iQIYI runs three Feishu portals on careers.iqiyi.com selected by the
+ *  website-path header: "job" (社招), "campus" (校招), "intern" (实习).
+ *  All four canonical scopes map cleanly:
+ *    social → portal "job"  (default)
+ *    campus → portal "campus"
+ *    intern → portal "intern"
+ *    all    → portal "job"  (no merge: caller can iterate scope explicitly) */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const;
+
+/** CLI scope → upstream portal mapping. */
+function portalForScope(scope: PositionScope | undefined): PortalPath {
+  if (scope === "campus") return "campus";
+  if (scope === "intern") return "intern";
+  // scope=social, scope=all, scope=undefined → default social portal "job"
+  return "job";
+}
 
 const API_ROOT = "https://careers.iqiyi.com/api/v1";
 
@@ -323,9 +342,14 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /** Canonical CLI scope. Mapped to a portal via portalForScope():
+   *  social→"job", campus→"campus", intern→"intern", all→"job".
+   *  Ignored when `portal` is set explicitly. */
+  scope?: PositionScope;
   /** Portal to search. Default: "job" (社招, ~82 posts).
    *  "campus" = 应届生校招 (~14 posts, recruit_type 正式/201).
-   *  "intern"  = 实习生 (~92 posts, recruit_type 实习/202). */
+   *  "intern"  = 实习生 (~92 posts, recruit_type 实习/202).
+   *  When omitted, derived from `scope` (see portalForScope). */
   portal?: PortalPath;
   /** Filter by job function IDs from /config/job/filters/{path} → job_function_list.
    *  Parent IDs include all children.
@@ -347,7 +371,8 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const page = Math.max(1, opts.page ?? 1);
   const offset = (page - 1) * pageSize;
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-  const portalPath: PortalPath = opts.portal ?? "job";
+  // Explicit portal wins; otherwise derive from canonical scope.
+  const portalPath: PortalPath = opts.portal ?? portalForScope(opts.scope);
 
   const asStringList = (v: unknown): string[] | undefined => {
     if (v === undefined) return undefined;
@@ -411,7 +436,7 @@ export async function fetchAllPositions(
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 5);
-  const portalPath: PortalPath = opts.portal ?? "job";
+  const portalPath: PortalPath = opts.portal ?? portalForScope(opts.scope);
 
   const bucket: PositionSummary[] = [];
   let total: number | undefined;

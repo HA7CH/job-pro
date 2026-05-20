@@ -13,6 +13,13 @@
 // being tested is "the adapter still talks to the upstream and returns the
 // canonical shape", not "<company> currently has exactly N jobs open".
 //
+// 1.1.0+ — second pass:
+//   For each adapter whose `supportedScopes` includes "social", run a
+//   `searchPositions({ pageSize: 1, scope: "social" })` and assert the same
+//   shape (ok:true / total≥0 / first-row keys present when total>0). A
+//   `recruit_label` mismatch is reported as WARN, not FAIL, since some
+//   adapters surface the channel as `工作类型` text on a different field.
+//
 // Run with: pnpm test
 // Exit code: 0 = all pass, 1 = at least one failure.
 
@@ -194,6 +201,70 @@ async function probe(name: string, adapter: Adapter): Promise<Result> {
   }
 }
 
+// 1.1.0 second-pass: scope=social probe for adapters that declare it.
+//
+// We run this AFTER the default pass so a default-pass FAIL is reported in
+// its original column; scope=social failures get their own block prefixed
+// with `[social]` to make the rollout coverage easy to read at a glance.
+//
+// Adapter selection: `adapter.supportedScopes?.includes("social")`. When
+// `supportedScopes` is undefined (legacy / not-yet-converted adapter) we
+// assume the adapter accepts all four scopes (matches the dispatcher's
+// fallback in runCompany) — so it gets probed. Tier-3 adapters that
+// explicitly drop "social" from their tuple (tencent / jd / cainiao /
+// webank / hikvision / cicc / unitree per §6) are skipped.
+async function probeSocial(name: string, adapter: Adapter): Promise<Result> {
+  const supported = adapter.supportedScopes;
+  if (supported !== undefined && !supported.includes("social")) {
+    return { name, pass: true, tag: "PASS", reason: "no social channel (declared)" };
+  }
+  try {
+    const search = (await adapter.searchPositions({ pageSize: 1, scope: "social" })) as {
+      ok: boolean;
+      total?: number;
+      positions?: unknown[];
+      message?: string;
+    };
+    if (!search.ok) {
+      const msg = search.message ?? "no message";
+      if (KNOWN_LIMITED.has(name)) {
+        return { name, pass: true, tag: "WARN", reason: `[social] ok:false — ${msg.slice(0, 100)}` };
+      }
+      return {
+        name,
+        pass: false,
+        tag: "FAIL",
+        reason: `[social] live adapter returned ok:false — ${msg.slice(0, 150)}`,
+      };
+    }
+    const total = search.total;
+    if (typeof total !== "number" || total < 0) {
+      return { name, pass: false, tag: "FAIL", reason: `[social] total is ${JSON.stringify(total)} (expected non-negative number)` };
+    }
+    if (total > 0) {
+      const first = search.positions?.[0] as Record<string, unknown> | undefined;
+      if (!first) {
+        return { name, pass: false, tag: "FAIL", reason: `[social] total=${total} but positions[0] missing` };
+      }
+      for (const key of ["post_id", "title", "apply_url"]) {
+        if (!first[key]) {
+          return { name, pass: false, tag: "FAIL", reason: `[social] positions[0].${key} missing/empty` };
+        }
+      }
+      // recruit_label mismatch is WARN, not FAIL — some adapters surface
+      // the channel as part of `job_type` / `工作类型` on a different key.
+      const label = typeof first["recruit_label"] === "string" ? (first["recruit_label"] as string) : "";
+      if (label && !/社招|social/i.test(label)) {
+        return { name, pass: true, tag: "WARN", reason: `[social] total=${total}, recruit_label="${label}" (not flagged 社招)` };
+      }
+    }
+    return { name, pass: true, tag: "PASS", reason: `[social] total=${total}` };
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.message}` : String(err);
+    return { name, pass: false, tag: "FAIL", reason: `[social] threw: ${msg}` };
+  }
+}
+
 async function main() {
   const start = Date.now();
   const results = await Promise.all(
@@ -212,7 +283,29 @@ async function main() {
   console.log(
     `\n  ${passes.length} healthy, ${warns.length} limited, ${fails.length} broken / ${results.length} total  (${elapsed}s)`
   );
-  process.exit(fails.length ? 1 : 0);
+
+  // 1.1.0 social-pass: only run for adapters declaring `supportedScopes`
+  // that includes "social", OR adapters with no `supportedScopes` field
+  // (= legacy accepting all four). Tier-3 adapters that explicitly omit
+  // "social" report PASS with reason "no social channel (declared)" and
+  // do NOT issue a network call.
+  console.log(`\n  --- scope=social second pass ---`);
+  const socialStart = Date.now();
+  const socialResults = await Promise.all(
+    Object.entries(ADAPTERS).map(([name, adapter]) => probeSocial(name, adapter))
+  );
+  for (const r of socialResults) {
+    console.log(`  ${r.tag.padEnd(4)}  ${r.name.padEnd(width)}  ${r.reason}`);
+  }
+  const socialFails = socialResults.filter((r) => r.tag === "FAIL");
+  const socialWarns = socialResults.filter((r) => r.tag === "WARN");
+  const socialPasses = socialResults.filter((r) => r.tag === "PASS");
+  const socialElapsed = ((Date.now() - socialStart) / 1000).toFixed(1);
+  console.log(
+    `\n  social: ${socialPasses.length} ok, ${socialWarns.length} warn, ${socialFails.length} broken / ${socialResults.length} total  (${socialElapsed}s)`
+  );
+
+  process.exit(fails.length + socialFails.length ? 1 : 0);
 }
 
 main();

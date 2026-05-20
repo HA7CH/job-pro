@@ -45,7 +45,14 @@
 // DIMENSION 3 — recruitType (招聘类型)
 //   "GRADUATE" = 校园招聘 (new-grad, default)   ~100 positions
 //   "INTERN"   = 实习生招聘                      ~778 positions (split by projectType)
-//   "SOCIAL"   = 社招 (separate portal, not returned here)
+//   "SOCIAL"   = 社招                            ~1641 positions (1.1.0+: same endpoint, recruitType=SOCIAL).
+//                Probe 2026-05: POST /httservice/getPostListNew with
+//                recruitType=SOCIAL returns `status:"ok",data.total:"1641"`
+//                with the same RawPosition shape (postId, name, postType,
+//                projectType="" usually, workPlace). Apply URL uses
+//                /jobs/detail/SOCIAL/<postId>. Dictionary fetch with
+//                recruitType=SOCIAL returns postType + workPlace; no
+//                project-type sub-filter is offered for social.
 //
 // DIMENSION 4 — projectType (项目类型, varies by recruitType)
 //   For GRADUATE:  "" = all (~100), "1" = 校招 (~89), "3" = AIDU项目, "4" = 管培生项目
@@ -76,7 +83,28 @@
 //   /httservice/notice* → (no public notice endpoint found)
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Scopes this adapter can query (1.1.0+).
+ *
+ * Baidu's `/httservice/getPostListNew` accepts `recruitType` ∈
+ * {GRADUATE, INTERN, SOCIAL}. All three return the same JSON shape from the
+ * same POST endpoint — no separate social portal — so we can serve every
+ * scope including `"all"` (which fans out to all three and merges).
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+/** Map the CLI `--scope` value to Baidu's `recruitType` parameter.
+ *  `undefined` (caller omitted `--scope`) → no change; preserves 1.0.93
+ *  default of `GRADUATE` selected inside searchPositions. */
+function recruitTypeForScope(scope: PositionScope | undefined): "GRADUATE" | "INTERN" | "SOCIAL" | undefined {
+  if (scope === "social") return "SOCIAL";
+  if (scope === "campus") return "GRADUATE";
+  if (scope === "intern") return "INTERN";
+  return undefined;
+}
 
 const API_ROOT = "https://talent.baidu.com";
 const LIST_PAGE = "https://talent.baidu.com/jobs/list";
@@ -258,10 +286,19 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /**
+   * CLI scope axis (1.1.0+). Translates to `recruitType` per
+   * `recruitTypeForScope`: social→SOCIAL, campus→GRADUATE, intern→INTERN.
+   * `all` fans out across all three and merges (de-duped by post_id).
+   * `undefined` preserves the historical default (GRADUATE).
+   *
+   * When both `scope` and `recruitType` are provided, `scope` wins.
+   */
+  scope?: PositionScope;
   /** Recruit type. Default: "GRADUATE" (校园招聘, matches default site tab, ~100 positions).
    *  Use "INTERN" for 实习生招聘 (~778 positions total, split by projectType).
-   *  Note: "SOCIAL" (社招) lives on a separate portal and is not returned here. */
-  recruitType?: "GRADUATE" | "INTERN";
+   *  Use "SOCIAL" for 社招 (~1641 positions). Probed and verified 2026-05. */
+  recruitType?: "GRADUATE" | "INTERN" | "SOCIAL";
   /** Project type code.
    *  For GRADUATE: "" = all (~100), "1" = 校招 (~89), "3" = AIDU项目, "4" = 管培生项目
    *  For INTERN:   "" = misc (9 items), "-1" = 日常实习项目 (~416), "9" = 暑期实习项目 (~362)
@@ -281,11 +318,34 @@ export interface SearchOptions {
 
 // ---------- searchPositions ----------
 
-export async function searchPositions(opts: SearchOptions = {}) {
+export type SearchResult =
+  | {
+      ok: false;
+      message: string;
+      source: string;
+      query: Record<string, string | string[]>;
+      positions: PositionSummary[];
+    }
+  | {
+      ok: true;
+      source: string;
+      query: Record<string, string | string[]>;
+      page: number;
+      page_size: number;
+      total: number;
+      positions: PositionSummary[];
+    };
+
+export async function searchPositions(opts: SearchOptions = {}): Promise<SearchResult> {
+  // `scope:"all"` fans out — delegate to a fan-out helper.
+  if (opts.scope === "all") return searchPositionsAcrossAllScopes(opts);
+
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 10));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-  const recruitType = opts.recruitType ?? "GRADUATE";
+  const scopeRT = recruitTypeForScope(opts.scope);
+  const recruitType: "GRADUATE" | "INTERN" | "SOCIAL" =
+    scopeRT ?? opts.recruitType ?? "GRADUATE";
 
   const params: Record<string, string | string[]> = {
     recruitType,
@@ -317,7 +377,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
 
   if (!response.ok || !response.data) {
     return {
-      ok: false as const,
+      ok: false,
       message: response.message,
       source: "talent.baidu.com",
       query: params,
@@ -328,7 +388,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const rows = response.data.list ?? [];
   const total = Number(response.data.total ?? rows.length);
   return {
-    ok: true as const,
+    ok: true,
     source: "talent.baidu.com",
     query: params,
     page,
@@ -338,11 +398,109 @@ export async function searchPositions(opts: SearchOptions = {}) {
   };
 }
 
+// ---------- fan-out helpers for scope=all ----------
+//
+// `--scope all` is the explicit "give me every recruit channel" signal. We
+// issue three sequential searches (GRADUATE, INTERN, SOCIAL) and concatenate
+// the results, de-duplicated by post_id. Each channel's total is preserved
+// in the merged `query.totals` string for callers that care.
+async function searchPositionsAcrossAllScopes(opts: SearchOptions): Promise<SearchResult> {
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 10));
+  const page = Math.max(1, opts.page ?? 1);
+  const channels: Array<"GRADUATE" | "INTERN" | "SOCIAL"> = ["GRADUATE", "INTERN", "SOCIAL"];
+  const merged: PositionSummary[] = [];
+  const seen = new Set<string>();
+  const totals: Record<string, number> = {};
+  let lastQuery: Record<string, string | string[]> = {};
+  for (const rt of channels) {
+    // Drop scope to avoid re-entering this branch; pass recruitType explicitly.
+    const r = await searchPositions({ ...opts, scope: undefined, recruitType: rt, page, pageSize });
+    if (!r.ok) {
+      return {
+        ok: false,
+        message: `[${rt}] ${r.message}`,
+        source: "talent.baidu.com",
+        query: r.query,
+        positions: [] as PositionSummary[],
+      };
+    }
+    totals[rt] = r.total;
+    lastQuery = r.query;
+    for (const p of r.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      merged.push(p);
+    }
+  }
+  return {
+    ok: true,
+    source: "talent.baidu.com",
+    query: { ...lastQuery, scope: "all", totals: JSON.stringify(totals) },
+    page,
+    page_size: pageSize,
+    total: Object.values(totals).reduce((a, b) => a + b, 0),
+    positions: merged,
+  };
+}
+
 // ---------- fetchAllPositions ----------
+
+export type FetchAllResult =
+  | {
+      ok: false;
+      message: string;
+      source: string;
+      fetched: number;
+      positions: PositionSummary[];
+    }
+  | {
+      ok: true;
+      source: string;
+      total: number;
+      fetched: number;
+      positions: PositionSummary[];
+    };
+
+async function fetchAllPositionsAcrossAllScopes(
+  opts: SearchOptions & { maxPages?: number }
+): Promise<FetchAllResult> {
+  const channels: Array<"GRADUATE" | "INTERN" | "SOCIAL"> = ["GRADUATE", "INTERN", "SOCIAL"];
+  const merged: PositionSummary[] = [];
+  const seen = new Set<string>();
+  let totalSum = 0;
+  for (const rt of channels) {
+    const r = await fetchAllPositions({ ...opts, scope: undefined, recruitType: rt });
+    if (!r.ok) {
+      return {
+        ok: false,
+        message: `[${rt}] ${r.message}`,
+        source: "talent.baidu.com",
+        fetched: merged.length,
+        positions: merged,
+      };
+    }
+    totalSum += r.total;
+    for (const p of r.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      merged.push(p);
+    }
+  }
+  return {
+    ok: true,
+    source: "talent.baidu.com",
+    total: totalSum,
+    fetched: merged.length,
+    positions: merged,
+  };
+}
 
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
-) {
+): Promise<FetchAllResult> {
+  // `scope:"all"` fans out across GRADUATE/INTERN/SOCIAL.
+  if (opts.scope === "all") return fetchAllPositionsAcrossAllScopes(opts);
+
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 5);
 
@@ -353,7 +511,7 @@ export async function fetchAllPositions(
     const result = await searchPositions({ ...opts, page, pageSize });
     if (!result.ok) {
       return {
-        ok: false as const,
+        ok: false,
         message: result.message,
         source: "talent.baidu.com",
         fetched: bucket.length,
@@ -367,7 +525,7 @@ export async function fetchAllPositions(
   }
 
   return {
-    ok: true as const,
+    ok: true,
     source: "talent.baidu.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
@@ -472,6 +630,7 @@ export async function fetchDictionaries() {
     recruitTypes: [
       { code: "GRADUATE", name: "校园招聘", note: "new-grad campus hire (~100 positions shown)" },
       { code: "INTERN", name: "实习生招聘", note: "intern (~416 日常 + ~362 暑期)" },
+      { code: "SOCIAL", name: "社招", note: "experienced/social hire (~1641 positions, verified 2026-05)" },
     ],
   };
 }
@@ -509,11 +668,13 @@ export async function findNoticesByQuestion(
 
 export async function matchResume(
   text: string,
-  opts: { topN?: number; candidates?: number; recruitType?: "GRADUATE" | "INTERN" } = {}
+  opts: { topN?: number; candidates?: number; recruitType?: "GRADUATE" | "INTERN" | "SOCIAL"; scope?: PositionScope } = {}
 ) {
   const topN = Math.max(1, opts.topN ?? 5);
   const candidates = Math.max(topN, opts.candidates ?? 20);
-  const recruitType = opts.recruitType ?? "GRADUATE";
+  const scopeRT = recruitTypeForScope(opts.scope);
+  const recruitType: "GRADUATE" | "INTERN" | "SOCIAL" =
+    scopeRT ?? opts.recruitType ?? "GRADUATE";
   const { terms, cities } = extractResumeSignals(text ?? "");
 
   if (!terms.length) {

@@ -42,6 +42,8 @@ const adapter = createAdapter({
   ],
 });
 
+export const supportedScopes = ["social", "all"] as const;
+
 export const searchPositions = adapter.searchPositions;
 export const fetchAllPositions = adapter.fetchAllPositions;
 export const fetchPositionDetail = adapter.fetchPositionDetail;

@@ -99,7 +99,35 @@
 //   apply_url     ← https://xiaomi.jobs.f.mioffice.cn/campus/position/${id}/detail
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/** Recruit scopes Xiaomi can serve.
+ *  Xiaomi's Feishu fork (xiaomi.jobs.f.mioffice.cn) exposes three pools via the
+ *  portal-channel header (see header comment for post counts):
+ *    no header           → ~2533 社招 (social/experienced)
+ *    portal-channel:campus     → ~357  正式 (campus / new-grad)
+ *    portal-channel:internship → ~729  实习 (intern)
+ *  Scope mapping:
+ *    social → omit portal-channel header entirely
+ *    campus → portal-channel: campus
+ *    intern → portal-channel: internship
+ *    all    → caller's choice (defaults to campus for back-compat) */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const;
+
+/** Internal channel value covering all three scopes. "social" means
+ *  "no portal-channel header at all". */
+type XmChannel = "campus" | "internship" | "social";
+
+/** Map canonical scope → internal channel. Pass scope=undefined to preserve
+ *  the historical campus default. */
+function channelForScope(scope: PositionScope | undefined): XmChannel | undefined {
+  if (scope === "social") return "social";
+  if (scope === "intern") return "internship";
+  if (scope === "campus") return "campus";
+  // scope=all and scope=undefined → preserve historical default (campus).
+  return undefined;
+}
 
 const API_ROOT = "https://xiaomi.jobs.f.mioffice.cn/api/v1";
 const CAMPUS_PAGE = "https://xiaomi.jobs.f.mioffice.cn/campus/";
@@ -110,17 +138,24 @@ const CAMPUS_DETAIL = (id: string) =>
 const INTERN_DETAIL = (id: string) =>
   `https://xiaomi.jobs.f.mioffice.cn/internship/position/${encodeURIComponent(id)}/detail`;
 
-function makeHeaders(channel: "campus" | "internship"): Record<string, string> {
-  return {
+function makeHeaders(channel: XmChannel): Record<string, string> {
+  const base: Record<string, string> = {
     "User-Agent":
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     Accept: "application/json, text/plain, */*",
     "Content-Type": "application/json",
-    "portal-channel": channel,
     "portal-platform": "pc",
-    "website-path": channel,
-    Referer: channel === "campus" ? CAMPUS_PAGE : INTERN_PAGE,
   };
+  // scope=social → OMIT portal-channel + website-path. Without those headers
+  // the API defaults to the ~2533-post 社招 pool.
+  if (channel === "social") {
+    base.Referer = `https://xiaomi.jobs.f.mioffice.cn/`;
+    return base;
+  }
+  base["portal-channel"] = channel;
+  base["website-path"] = channel;
+  base.Referer = channel === "campus" ? CAMPUS_PAGE : INTERN_PAGE;
+  return base;
 }
 
 // ---------- low-level call helper ----------
@@ -135,7 +170,7 @@ interface XmEnvelope<T> {
 async function call<T>(
   path: string,
   body: unknown,
-  channel: "campus" | "internship" = "campus"
+  channel: XmChannel = "campus"
 ): Promise<{ ok: boolean; data?: T; message: string }> {
   const url = `${API_ROOT}${path}`;
   let response: Response;
@@ -224,7 +259,7 @@ export interface PositionSummary {
 
 function summarizePosition(
   item: RawJobPost,
-  channel: "campus" | "internship"
+  channel: XmChannel
 ): PositionSummary {
   const id = String(item.id ?? "");
   const cityList = item.city_list ?? [];
@@ -240,7 +275,19 @@ function summarizePosition(
   // Xiaomi's campus API returns job_category as null; job_function carries the category name
   const project =
     item.job_function?.name ?? item.job_category?.name ?? "";
-  const detailFn = channel === "internship" ? INTERN_DETAIL : CAMPUS_DETAIL;
+  // Detail page mapping. Social posts have no dedicated portal path on
+  // mioffice.cn; the campus detail URL pattern is the documented one, and
+  // ATSX renders the post regardless of portal once the id is known.
+  let detailFn: (id: string) => string;
+  let listPage: string;
+  if (channel === "internship") {
+    detailFn = INTERN_DETAIL;
+    listPage = INTERN_PAGE;
+  } else {
+    // "campus" and "social" both fall back to the campus detail prefix.
+    detailFn = CAMPUS_DETAIL;
+    listPage = CAMPUS_PAGE;
+  }
   return {
     post_id: id,
     title: item.title ?? "",
@@ -248,7 +295,7 @@ function summarizePosition(
     recruit_label: item.recruit_type?.name ?? "",
     bgs: "",
     work_cities,
-    apply_url: id ? detailFn(id) : (channel === "internship" ? INTERN_PAGE : CAMPUS_PAGE),
+    apply_url: id ? detailFn(id) : listPage,
   };
 }
 
@@ -259,12 +306,22 @@ export interface SearchOptions {
   page?: number;
   pageSize?: number;
   /**
+   * Canonical CLI scope. Mapped to an internal channel via channelForScope():
+   *   social → omit portal-channel header (社招 ~2533 posts)
+   *   campus → "campus"  (正式 ~357 posts)
+   *   intern → "internship" (实习 ~729 posts)
+   *   all / undefined → preserve historical campus default
+   * Ignored when `channel` is set explicitly.
+   */
+  scope?: PositionScope;
+  /**
    * Which portal pool to query.
    *   "campus"     → 正式 new-grad positions (~357 posts, default)
    *   "internship" → 实习 intern positions   (~729 posts)
-   * Default: "campus".
+   *   "social"     → no portal-channel header (~2533 social posts)
+   * Default: "campus". When omitted, derived from `scope`.
    */
-  channel?: "campus" | "internship";
+  channel?: XmChannel;
   /**
    * Filter by recruitment_id_list.
    * In the campus channel the only meaningful value is "201" (正式).
@@ -299,7 +356,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const page = Math.max(1, opts.page ?? 1);
   const offset = (page - 1) * pageSize;
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
-  const channel = opts.channel ?? "campus";
+  // Explicit channel wins; otherwise derive from canonical scope; otherwise
+  // preserve historical campus default.
+  const channel: XmChannel = opts.channel ?? channelForScope(opts.scope) ?? "campus";
 
   const asStringList = (v: unknown): string[] | undefined => {
     if (v === undefined) return undefined;
@@ -307,10 +366,12 @@ export async function searchPositions(opts: SearchOptions = {}) {
     return arr.map(String);
   };
 
-  // Default filter: 201=正式 in campus channel, 202=实习 in internship channel
+  // Default recruitment filter is meaningful only for campus/internship pools.
+  // For the social pool we drop the filter so the full ~2533 posts surface.
   const defaultRecruitId = channel === "internship" ? "202" : "201";
   const recruitmentIdList =
-    asStringList(opts.recruitmentIdList) ?? [defaultRecruitId];
+    asStringList(opts.recruitmentIdList) ??
+    (channel === "social" ? undefined : [defaultRecruitId]);
 
   const payload: Record<string, unknown> = {
     keyword,
@@ -319,8 +380,10 @@ export async function searchPositions(opts: SearchOptions = {}) {
     portal_type: 3,
     portal_entrance: 1,
     language: "zh",
-    recruitment_id_list: recruitmentIdList,
   };
+  if (recruitmentIdList && recruitmentIdList.length) {
+    payload.recruitment_id_list = recruitmentIdList;
+  }
 
   const jobFunctionIdList = asStringList(opts.jobFunctionIdList);
   if (jobFunctionIdList?.length) {
@@ -366,7 +429,7 @@ export async function fetchAllPositions(
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 5);
-  const channel = opts.channel ?? "campus";
+  const channel: XmChannel = opts.channel ?? channelForScope(opts.scope) ?? "campus";
 
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
@@ -404,10 +467,10 @@ export async function fetchAllPositions(
 
 export async function fetchPositionDetail(
   postId: string,
-  opts: { channel?: "campus" | "internship" } = {}
+  opts: { channel?: XmChannel; scope?: PositionScope } = {}
 ) {
   const id = (postId ?? "").trim();
-  const channel = opts.channel ?? "campus";
+  const channel: XmChannel = opts.channel ?? channelForScope(opts.scope) ?? "campus";
   if (!id) {
     return { ok: false, source: "xiaomi.jobs.f.mioffice.cn", message: "post_id is required" };
   }
@@ -418,15 +481,17 @@ export async function fetchPositionDetail(
 
   for (let page = 1; page <= maxPages; page++) {
     const offset = (page - 1) * pageSize;
-    const payload = {
+    const payload: Record<string, unknown> = {
       keyword: "",
       limit: pageSize,
       offset,
       portal_type: 3,
       portal_entrance: 1,
       language: "zh",
-      recruitment_id_list: [defaultRecruitId],
     };
+    if (channel !== "social") {
+      payload.recruitment_id_list = [defaultRecruitId];
+    }
     const response = await call<RawSearchData>("/search/job/posts", payload, channel);
     if (!response.ok || !response.data) break;
 
@@ -623,11 +688,11 @@ export async function findNoticesByQuestion(
 
 export async function matchResume(
   text: string,
-  opts: { topN?: number; candidates?: number; channel?: "campus" | "internship" } = {}
+  opts: { topN?: number; candidates?: number; channel?: XmChannel; scope?: PositionScope } = {}
 ) {
   const topN = Math.max(1, opts.topN ?? 5);
   const candidates = Math.max(topN, opts.candidates ?? 20);
-  const channel = opts.channel ?? "campus";
+  const channel: XmChannel = opts.channel ?? channelForScope(opts.scope) ?? "campus";
   const { terms, cities } = extractResumeSignals(text ?? "");
 
   if (!terms.length) {
@@ -644,10 +709,15 @@ export async function matchResume(
   if (!queries.length) queries.push(terms[0] ?? "");
   const [posLists, rawResults] = await Promise.all([
     Promise.all(queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100, channel }))),
-    Promise.all(queries.map((q) => call<RawSearchData>("/search/job/posts", {
-      keyword: q, limit: 100, offset: 0, portal_type: 3, portal_entrance: 1, language: "zh",
-      recruitment_id_list: [defaultRecruitId],
-    }, channel))),
+    Promise.all(queries.map((q) => {
+      const payload: Record<string, unknown> = {
+        keyword: q, limit: 100, offset: 0, portal_type: 3, portal_entrance: 1, language: "zh",
+      };
+      if (channel !== "social") {
+        payload.recruitment_id_list = [defaultRecruitId];
+      }
+      return call<RawSearchData>("/search/job/posts", payload, channel);
+    })),
   ]);
   const seen = new Set<string>();
   const pool: PositionSummary[] = [];

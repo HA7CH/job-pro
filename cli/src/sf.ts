@@ -1,7 +1,7 @@
-// 顺丰 (SF Express) campus-recruiting adapter for `job-pro`.
+// 顺丰 (SF Express) recruiting adapter for `job-pro`.
 //
 // ============================================================
-// API DISCOVERY (probed 2026-05-15)
+// API DISCOVERY — CAMPUS feed (probed 2026-05-15)
 //
 // campus.sf-express.com is a Vue SPA built with Webpack. The campus-recruiting
 // flow was originally believed to be GeeTest-gated (POST /api/zp/jobList → 401),
@@ -25,10 +25,66 @@
 //   "managetraniee"  管培生类
 //   "" (omitted)     全部
 //
+// CAVEAT: the `seasonType` query param on /api/web/position/query is
+// server-side IGNORED (probed 2026-05-20: seasonType=1..9 plus "" all return
+// the same 132-position payload). The campus feed itself only contains rows
+// with seasonType:"1" (校招) and "3" (管培). Filtering by recruit channel
+// therefore happens client-side or via the SOCIAL endpoint below.
+//
+// ============================================================
+// API DISCOVERY — SOCIAL feed (probed 2026-05-20, worktree J)
+//
+// SF's social-hire portal lives at a completely different stack:
+//
+//   https://hr.sf-express.com/                — JSP/Spring portal (顺丰人才招聘系统-社会招聘)
+//   POST   /SearchJob.do                       → paginated社招 list (anon)
+//   GET    /JobSearchById/<id>,<positionType>  → social position detail page
+//   GET    /jobMainHandlerT/main?jobType=…&outName=…  → HTML search results
+//
+// `/SearchJob.do` accepts a JSON body { workAddress, currentPage, outName,
+// category, identification } and returns
+//   { JobSearchList: { totalResult, totalPage, currentPage, listObj:[…] } }
+// where each listObj row has id / outName (display title) / jobName /
+// positionType (1/2/3 = 一线/二线/三线 grade) / positionTypeTxt / workAddress
+// (city) / mainDuty / positionReq / educationReqTxt / workYearTxt /
+// salaryRangeTxt / publishTime. ~1,976 active social positions at probe time.
+//
+// Required headers: standard browser UA + Content-Type:application/json. No
+// CSRF / cookie / captcha is enforced for read-only browsing. The page size
+// is fixed server-side at 10 rows per call (showCount:10), and the
+// `pageSize`/`showCount` field passed in the body is ignored.
+//
+// Other discovered routes on hr.sf-express.com (anon-readable):
+//   /index, /index.jsp, /jobMainHandler/main/<category>,
+//   /jobMainHandlerT/main?jobType=<id>&outName=<keyword>,
+//   /SearchDynamicHandler/<page>/job, /SearchSiteHandler/<page>/job,
+//   /loginHandler.do, /registerHandler.do (apply flow — out of scope).
+//
+// Subdomains probed and ruled out:
+//   career.sf-express.com / careers.sf-express.com / social.sf-express.com /
+//   work.sf-express.com / join.sf-express.com / recruit.sf-express.com /
+//   experience.sf-express.com / employee.sf-express.com / careers-social.sf-express.com
+//   → all either DNS-fail or "Empty reply from server". Only campus.sf-express.com
+//   (校招) and hr.sf-express.com (社招) are live.
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * SF Express supports social + campus + intern + all (1.1.0+).
+ *
+ * Scope translation to upstream feed:
+ *   social  → POST hr.sf-express.com/SearchJob.do        (~1976 posts, 社招)
+ *   campus  → GET campus.sf-express.com/api/web/position/query
+ *   intern  → GET campus.sf-express.com/api/web/position/query (server seasonType
+ *             filter is ignored; full mixed feed returned for now — client-side
+ *             narrowing by internType is the caller's responsibility)
+ *   all     → fan out both endpoints and merge
+ *   undefined → campus.sf-express.com feed (historical default, preserves 1.0.93)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const SOURCE = "campus.sf-express.com";
 const API_ROOT = "https://campus.sf-express.com";
@@ -98,8 +154,17 @@ export interface SearchOptions {
   pageSize?: number;
   /** "consulting" | "managetraniee" (sic) | "" for all */
   positionType?: string;
-  /** "1" = 校招, "2" = 实习, "3" = 管培 (see seasonType in API) */
+  /** "1" = 校招, "2" = 实习, "3" = 管培 (see seasonType in API). NOTE: the
+   *  server-side filter is currently ignored — the campus feed returns the
+   *  full ~132-row payload regardless of this value. Kept for forward
+   *  compatibility if SF re-enables it. */
   seasonType?: string;
+  /** Social-only filter (1.1.0+): workAddress city name, e.g. "深圳市". */
+  workAddress?: string;
+  /** Social-only filter (1.1.0+): position category, e.g. "IT" / "运营". */
+  category?: string;
+  /** CLI `--scope` echo (1.1.0+). See module-level supportedScopes comment. */
+  scope?: PositionScope;
 }
 
 interface RawPosition {
@@ -142,9 +207,199 @@ function summarize(item: RawPosition): PositionSummary {
   };
 }
 
+// ---------- social feed (hr.sf-express.com) ----------
+
+const SOCIAL_SOURCE = "hr.sf-express.com";
+const SOCIAL_API_ROOT = "https://hr.sf-express.com";
+const SOCIAL_SITE_ROOT = "https://hr.sf-express.com/";
+// `/JobSearchById/<id>,<positionType>` is the human-facing detail page used by
+// the SF social-hire portal. positionType (1/2/3) controls which template
+// renders the page but is not used as a security gate.
+const SOCIAL_DETAIL_PAGE = (id: string, positionType: number | string = 3) =>
+  `https://hr.sf-express.com/JobSearchById/${encodeURIComponent(id)},${encodeURIComponent(String(positionType))}`;
+
+const SOCIAL_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  "Content-Type": "application/json;charset=UTF-8",
+  Referer: "https://hr.sf-express.com/jobMainHandlerT/main?jobType=9999",
+  Origin: SOCIAL_API_ROOT,
+};
+
+interface SocialRawPosition {
+  id?: number | string;
+  outName?: string;       // display title preferred by the SPA renderer
+  jobName?: string;       // canonical job name (fallback)
+  positionType?: number;  // 1/2/3 (一线/二线/三线 grade)
+  positionTypeTxt?: string;
+  workAddress?: string;
+  orgName?: string;
+  educationReqTxt?: string;
+  workYearTxt?: string;
+  salaryRangeTxt?: string;
+  mainDuty?: string;
+  positionReq?: string;
+  publishTime?: string;
+  identification?: string;
+}
+
+interface SocialEnvelope {
+  JobSearchList?: {
+    showCount?: number;
+    totalPage?: number;
+    totalResult?: number;
+    currentPage?: number | string;
+    listObj?: SocialRawPosition[];
+  };
+}
+
+function summarizeSocial(item: SocialRawPosition): PositionSummary {
+  const id = String(item.id ?? "");
+  const displayTitle = (item.outName ?? item.jobName ?? "").toString().trim();
+  return {
+    post_id: id,
+    title: displayTitle,
+    project: (item.orgName ?? "").toString().trim(),
+    recruit_label: "社招",
+    bgs: (item.positionTypeTxt ?? "").toString().trim(),
+    work_cities: (item.workAddress ?? "").toString().trim(),
+    apply_url: id ? SOCIAL_DETAIL_PAGE(id, item.positionType ?? 3) : SOCIAL_SITE_ROOT,
+  };
+}
+
+/**
+ * POST hr.sf-express.com/SearchJob.do — server-paginated社招 list. Page size
+ * is fixed at 10 server-side; the request body's `showCount` is ignored.
+ */
+async function searchSocialPositions(opts: SearchOptions = {}): Promise<SearchPositionsResult> {
+  const page = Math.max(1, opts.page ?? 1);
+  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+  const body: Record<string, unknown> = {
+    workAddress: opts.workAddress ?? "",
+    currentPage: page,
+    outName: keyword,
+    category: opts.category ?? "",
+    identification: "",
+  };
+
+  let response: Response;
+  try {
+    response = await fetch(`${SOCIAL_API_ROOT}/SearchJob.do`, {
+      method: "POST",
+      headers: SOCIAL_HEADERS,
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return {
+      ok: false as const,
+      source: SOCIAL_SOURCE,
+      message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+      query: body,
+      positions: [] as PositionSummary[],
+    };
+  }
+  if (!response.ok) {
+    return {
+      ok: false as const,
+      source: SOCIAL_SOURCE,
+      message: `HTTP ${response.status}: ${response.statusText}`,
+      query: body,
+      positions: [] as PositionSummary[],
+    };
+  }
+  let payload: SocialEnvelope;
+  try {
+    payload = (await response.json()) as SocialEnvelope;
+  } catch (err) {
+    return {
+      ok: false as const,
+      source: SOCIAL_SOURCE,
+      message: `bad JSON: ${err instanceof Error ? err.message : err}`,
+      query: body,
+      positions: [] as PositionSummary[],
+    };
+  }
+  const wrapper = payload.JobSearchList ?? {};
+  const rows = wrapper.listObj ?? [];
+  return {
+    ok: true as const,
+    source: SOCIAL_SOURCE,
+    query: body,
+    page,
+    page_size: wrapper.showCount ?? 10,
+    total: wrapper.totalResult ?? rows.length,
+    positions: rows.map(summarizeSocial),
+  };
+}
+
+/**
+ * Pick the upstream feed for a given CLI scope. `social` → hr.sf-express.com;
+ * everything else (campus / intern / all / undefined) routes through
+ * campus.sf-express.com. `all` is handled separately by fanning out both.
+ */
+function feedForScope(s: PositionScope | undefined): "social" | "campus" | "all" {
+  if (s === "social") return "social";
+  if (s === "all") return "all";
+  return "campus"; // campus / intern / undefined → existing default
+}
+
 // ---------- searchPositions ----------
 
-export async function searchPositions(opts: SearchOptions = {}) {
+type SearchPositionsResult =
+  | {
+      ok: true;
+      source: string;
+      query: Record<string, unknown>;
+      page: number;
+      page_size: number;
+      total: number;
+      positions: PositionSummary[];
+    }
+  | {
+      ok: false;
+      source: string;
+      message: string;
+      query: Record<string, unknown>;
+      positions: PositionSummary[];
+    };
+
+export async function searchPositions(opts: SearchOptions = {}): Promise<SearchPositionsResult> {
+  const feed = feedForScope(opts.scope);
+
+  // social-only — route to hr.sf-express.com
+  if (feed === "social") {
+    return searchSocialPositions(opts);
+  }
+
+  // scope=all — fan out both feeds and concatenate one logical page.
+  // Each feed paginates independently; we expose the union as positions[]
+  // and sum totals so callers know the full pool size.
+  if (feed === "all") {
+    const [campusRes, socialRes] = await Promise.all([
+      searchPositions({ ...opts, scope: "campus" }),
+      searchPositions({ ...opts, scope: "social" }),
+    ]);
+    const positions: PositionSummary[] = [
+      ...(campusRes.ok ? campusRes.positions : []),
+      ...(socialRes.ok ? socialRes.positions : []),
+    ];
+    const total =
+      (campusRes.ok && typeof campusRes.total === "number" ? campusRes.total : 0) +
+      (socialRes.ok && typeof socialRes.total === "number" ? socialRes.total : 0);
+    return {
+      ok: true as const,
+      source: `${SOURCE}+${SOCIAL_SOURCE}`,
+      query: { scope: "all", keyword: opts.keyword ?? "", page: opts.page ?? 1 },
+      page: opts.page ?? 1,
+      page_size: positions.length,
+      total,
+      positions,
+    };
+  }
+
+  // Default (campus / intern / undefined) → campus.sf-express.com
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const query: Record<string, string | number | undefined> = {
@@ -154,6 +409,8 @@ export async function searchPositions(opts: SearchOptions = {}) {
   if (opts.keyword) query.positionName = opts.keyword.trim().slice(0, 60);
   if (opts.positionType) query.positionType = opts.positionType;
   if (opts.seasonType) query.seasonType = opts.seasonType;
+  // intern scope is a no-op server-side (seasonType filter is ignored). We
+  // still echo it so the caller can see it in `query.scope` for traceability.
 
   const r = await call<RawPosition[]>("/api/web/position/query", query);
   if (!r.ok) {
@@ -179,9 +436,103 @@ export async function searchPositions(opts: SearchOptions = {}) {
 
 // ---------- fetchAllPositions ----------
 
+type FetchAllPositionsResult =
+  | {
+      ok: true;
+      source: string;
+      total: number;
+      fetched: number;
+      positions: PositionSummary[];
+    }
+  | {
+      ok: false;
+      source: string;
+      message: string;
+      total: number;
+      fetched: number;
+      positions: PositionSummary[];
+    };
+
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number } = {}
-) {
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    /** CLI `--scope` echo (1.1.0+). See `SearchOptions.scope`. */
+    scope?: PositionScope;
+    workAddress?: string;
+    category?: string;
+  } = {}
+): Promise<FetchAllPositionsResult> {
+  const feed = feedForScope(opts.scope);
+
+  // scope=all → walk both feeds in parallel and merge by `${source}|post_id`
+  if (feed === "all") {
+    const [campusRes, socialRes] = await Promise.all([
+      fetchAllPositions({ ...opts, scope: "campus" }),
+      fetchAllPositions({ ...opts, scope: "social" }),
+    ]);
+    const seen = new Set<string>();
+    const merged: PositionSummary[] = [];
+    for (const p of [
+      ...(campusRes.positions ?? []),
+      ...(socialRes.positions ?? []),
+    ]) {
+      const key = `${p.apply_url || p.post_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(p);
+    }
+    const total =
+      (campusRes.ok && typeof campusRes.total === "number" ? campusRes.total : 0) +
+      (socialRes.ok && typeof socialRes.total === "number" ? socialRes.total : 0);
+    return {
+      ok: true as const,
+      source: `${SOURCE}+${SOCIAL_SOURCE}`,
+      total,
+      fetched: merged.length,
+      positions: merged,
+    };
+  }
+
+  // scope=social — page through hr.sf-express.com/SearchJob.do (server fixes
+  // page size at 10, so a few extra pages keep the round-trip count modest).
+  if (feed === "social") {
+    const maxPages = Math.max(1, opts.maxPages ?? 50);
+    const bucket: PositionSummary[] = [];
+    let total: number | undefined;
+    for (let page = 1; page <= maxPages; page++) {
+      const r = await searchSocialPositions({
+        keyword: opts.keyword,
+        page,
+        workAddress: opts.workAddress,
+        category: opts.category,
+      });
+      if (!r.ok) {
+        return {
+          ok: false as const,
+          source: SOCIAL_SOURCE,
+          message: r.message,
+          total: 0,
+          fetched: bucket.length,
+          positions: bucket,
+        };
+      }
+      if (total === undefined) total = r.total;
+      if (!r.positions.length) break;
+      bucket.push(...r.positions);
+      if (total !== undefined && bucket.length >= total) break;
+    }
+    return {
+      ok: true as const,
+      source: SOCIAL_SOURCE,
+      total: total ?? bucket.length,
+      fetched: bucket.length,
+      positions: bucket,
+    };
+  }
+
+  // Default (campus / intern / undefined) — campus.sf-express.com
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
 
@@ -189,7 +540,12 @@ export async function fetchAllPositions(
   let total: number | undefined;
 
   for (let page = 1; page <= maxPages; page++) {
-    const r = await searchPositions({ keyword: opts.keyword, page, pageSize });
+    const r = await searchPositions({
+      keyword: opts.keyword,
+      page,
+      pageSize,
+      scope: opts.scope,
+    });
     if (!r.ok) {
       return {
         ok: false as const,
@@ -310,16 +666,23 @@ export async function findNoticesByQuestion(
 
 // ---------- matchResume ----------
 
-export async function matchResume(text: string, opts: { topN?: number; candidates?: number } = {}) {
+export async function matchResume(
+  text: string,
+  opts: { topN?: number; candidates?: number; scope?: PositionScope } = {}
+) {
   const { terms, cities } = extractResumeSignals(text ?? "");
   const topN = Math.max(1, opts.topN ?? 5);
   const candidates = Math.max(topN, opts.candidates ?? 200);
 
-  const all = await fetchAllPositions({ pageSize: 50, maxPages: Math.ceil(candidates / 50) });
+  const all = await fetchAllPositions({
+    pageSize: 50,
+    maxPages: Math.ceil(candidates / 50),
+    scope: opts.scope,
+  });
   if (!all.ok) {
     return {
       ok: false as const,
-      source: SOURCE,
+      source: opts.scope === "social" ? SOCIAL_SOURCE : SOURCE,
       message: all.message,
       extracted_terms: terms,
       city_preferences: cities,
@@ -338,7 +701,12 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
 
   return {
     ok: true as const,
-    source: SOURCE,
+    source:
+      opts.scope === "social"
+        ? SOCIAL_SOURCE
+        : opts.scope === "all"
+        ? `${SOURCE}+${SOCIAL_SOURCE}`
+        : SOURCE,
     extracted_terms: terms,
     city_preferences: cities,
     candidate_pool: all.positions.length,

@@ -23,7 +23,28 @@
 // dashboard surfaces, not the public search.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Ant Group supports social + campus + intern + all (1.1.0+). The campus
+ * endpoint lumps intern + new-grad together, so `intern` maps to `campus`.
+ *
+ * Scope translation to internal `recruitType`:
+ *   social  → "social"   (~922 posts via /api/social/position/search)
+ *   campus  → "campus"   (~467 posts via /api/campus/position/search, incl. intern)
+ *   intern  → "campus"
+ *   all     → "all"      (fan out both endpoints, merged)
+ *   undefined → "all"    (historical default — preserves 1.0.93 merged feed)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function recruitTypeFromScope(s: PositionScope | undefined): "campus" | "social" | "all" {
+  if (s === "social") return "social";
+  if (s === "campus" || s === "intern") return "campus";
+  if (s === "all") return "all";
+  return "all";
+}
 
 const SOURCE = "hrcareersweb.antgroup.com";
 const API_ROOT = "https://hrcareersweb.antgroup.com/api";
@@ -125,6 +146,9 @@ export interface SearchOptions {
   pageSize?: number;
   /** "campus" → 校招/实习 endpoint; "social" → 社招 endpoint; omit = merge both. */
   recruitType?: "campus" | "social" | "all";
+  /** CLI `--scope` echo (1.1.0+). When set and `recruitType` is omitted, scope
+   *  picks the upstream endpoint. `recruitType` takes precedence. */
+  scope?: PositionScope;
   /** Filter by BG code (社招 only); e.g. "19887" 支付宝事业群. */
   bgCode?: string;
 }
@@ -189,7 +213,7 @@ async function searchSingle(
 // ---------- searchPositions ----------
 
 export async function searchPositions(opts: SearchOptions = {}) {
-  const recruitType = opts.recruitType ?? "all";
+  const recruitType = opts.recruitType ?? recruitTypeFromScope(opts.scope);
   const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
 
@@ -246,7 +270,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
-  const recruitType = opts.recruitType ?? "all";
+  const recruitType = opts.recruitType ?? recruitTypeFromScope(opts.scope);
   const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 30));
   const maxPages = Math.max(1, opts.maxPages ?? 40);
 

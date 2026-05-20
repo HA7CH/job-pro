@@ -37,11 +37,19 @@ export { extractResumeSignals, scoreOverlap, checkResume };
 
 export type { PositionSummary, SearchOptions } from "./feishu.js";
 
+/** Recruit scopes Baichuan can serve.
+ *  Baichuan's Feishu tenant (cq6qe6bvfr6.jobs.feishu.cn / channel
+ *  "baichuanzhaopin") is the "社会招聘官方网站" — social-only. Both "social"
+ *  and "all" map to the same query; "campus" / "intern" are rejected by the
+ *  dispatcher. */
+export const supportedScopes = ["social", "all"] as const;
+
 const _adapter = createAdapter({
   host: "cq6qe6bvfr6.jobs.feishu.cn",
   channel: "baichuanzhaopin",
   label: "Baichuan (百川智能)",
   applyUrlPrefix: "https://cq6qe6bvfr6.jobs.feishu.cn/baichuanzhaopin/position",
+  supportedScopes,
 });
 
 export const searchPositions = _adapter.searchPositions;

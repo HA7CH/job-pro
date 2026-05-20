@@ -15,3 +15,4 @@ dist/
 next-env.d.ts
 .vercel
 .claude/
+tsconfig.tsbuildinfo

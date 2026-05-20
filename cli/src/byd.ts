@@ -56,7 +56,22 @@
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * BYD only exposes social-hire publicly (1.1.0+). The default zpType="00251"
+ * IS the social channel; campus listings live behind a separate auth-gated
+ * /school/* flow. Declaring `["social","all"]` lets the dispatcher fail fast
+ * on `--scope campus|intern`.
+ *
+ * Scope translation:
+ *   social  → zpType:"00251"  (default, ~1647 posts)
+ *   all     → zpType:"00251"  (identical — only social is public)
+ *   campus / intern → rejected by dispatcher (not in supportedScopes)
+ *   undefined → zpType:"00251"
+ */
+export const supportedScopes = ["social", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const SOURCE = "job.byd.com";
 const API_ROOT = "https://job.byd.com";
@@ -143,6 +158,9 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /** CLI `--scope` echo (1.1.0+). BYD only exposes social publicly, so scope
+   *  is accepted but does not change the query (zpType is already social). */
+  scope?: PositionScope;
   /** zpType — recruit channel. Default "00251" (Experienced / 社招). */
   zpType?: string;
   /** position-type codes from queryCodeTree ids=0030 */

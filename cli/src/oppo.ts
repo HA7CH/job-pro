@@ -1,7 +1,7 @@
 // OPPO careers adapter for `job-pro`.
 //
 // ============================================================
-// API DISCOVERY (probed 2026-05-15)
+// API DISCOVERY (probed 2026-05-15; social re-probe 2026-05-20)
 //
 // careers.oppo.com is a Vite SPA whose campus job listing is rendered by the
 // dynamically-loaded chunk /assets/js/job-edfe7d6e.js. The chunk exposes two
@@ -23,10 +23,52 @@
 //   GET  /openapi/position/relatedPosition?...           → related jobs
 //   GET  /openapi/sec/getRiskReport                      → WAF risk probe
 //   GET  /openapi/system/dictionary/queryList            → filter taxonomy
+//
+// ============================================================
+// SOCIAL-HIRE STATUS (1.1.0, worktree J)
+//
+// OPPO has NO public social-hire API on careers.oppo.com.
+//
+// What was probed (2026-05-20):
+//   1. /openapi/position/pageNew with recruitmentType ∈ {Social, Society,
+//      Experienced, social, SOCIAL, EXPERIENCED, Recruit, Recruitment,
+//      experienced, society} → every variant returns code:0 with total:0.
+//   2. /openapi/position/project/list enumerates the entire upstream project
+//      taxonomy: only "doctor" (博士生), "Graduate" (应届生 校招), and "Intern"
+//      (实习生) project types exist. There is no社招 / Experienced project.
+//   3. /openapi/position/queryList → HTTP 404 (legacy route, never existed).
+//   4. /api/recruit/social/list → HTTP 500 from a generic Spring controller
+//      (catch-all error, not a real route).
+//   5. career.oppo.com (separate subdomain, HTTP 200) is the applicant flow
+//      site — login, resume edit, delivery tracking — and exposes
+//      /api/delivery/*, /api/system/user/*, /api/careerObjective/*, but NO
+//      position-search endpoint. Its bundle does not reference openapi/.
+//   6. social.oppo.com / hr.oppo.com / jobs.oppo.com / recruit.oppo.com /
+//      experienced.oppo.com / careers-social.oppo.com / experience.oppo.com
+//      → all DNS-fail (no SSL handshake). These subdomains do not exist.
+//
+// Conclusion: OPPO routes社招/social hires through external channels (Liepin,
+// BOSS, WeChat referrals) — same posture as Tencent / JD on this axis.
+// Declare supportedScopes:["campus","intern","all"]. The dispatcher rejects
+// --scope social at the entry boundary with a useful message.
 // ============================================================
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * OPPO supports campus + intern + all (1.1.0+).
+ *
+ * Scope translation:
+ *   campus → recruitmentType:"Campus"  (existing default; preserves 1.0.93)
+ *   intern → recruitmentType:"Intern"
+ *   all / undefined → no recruitmentType filter (mixed campus + intern)
+ *
+ * `--scope social` is rejected by the dispatcher (see supportedScopes below).
+ * OPPO has no public social-hire API — see the API DISCOVERY block above.
+ */
+export const supportedScopes = ["campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 const SOURCE = "careers.oppo.com";
 const API_ROOT = "https://careers.oppo.com";
@@ -116,6 +158,23 @@ export interface SearchOptions {
   recruitType?: "campus" | "intern";
   /** city code, e.g. "440300" = 深圳市 */
   cityCode?: string;
+  /** CLI `--scope` echo (1.1.0+). When set, overrides `recruitType`:
+   *  campus→Campus, intern→Intern, all→omit filter. `social` is rejected by
+   *  the dispatcher (see supportedScopes). */
+  scope?: PositionScope;
+}
+
+/**
+ * Translate the CLI scope to the upstream `recruitmentType` query field.
+ * Returns `undefined` to mean "do not send the filter" (i.e. mixed feed).
+ */
+function recruitmentTypeForScope(s: PositionScope | undefined): string | undefined {
+  if (s === "campus") return "Campus";
+  if (s === "intern") return "Intern";
+  // "all" → no filter, mixed feed. "social" never reaches here (dispatcher
+  // rejects it via supportedScopes). undefined preserves 1.0.93 behaviour
+  // (caller's existing `recruitType` field wins).
+  return undefined;
 }
 
 interface RawPositionEntry {
@@ -155,8 +214,17 @@ export async function searchPositions(opts: SearchOptions = {}) {
     pageSize,
   };
   if (opts.keyword) body.keyword = opts.keyword.trim().slice(0, 60);
-  if (opts.recruitType === "campus") body.recruitmentType = "Campus";
-  else if (opts.recruitType === "intern") body.recruitmentType = "Intern";
+  // The CLI `--scope` flag takes precedence over the legacy per-adapter
+  // `recruitType` field when both are set. When neither is set we preserve
+  // the 1.0.93 default (mixed campus + intern feed).
+  const scopeFilter = recruitmentTypeForScope(opts.scope);
+  if (scopeFilter !== undefined) {
+    body.recruitmentType = scopeFilter;
+  } else if (opts.recruitType === "campus") {
+    body.recruitmentType = "Campus";
+  } else if (opts.recruitType === "intern") {
+    body.recruitmentType = "Intern";
+  }
   if (opts.cityCode) body.workCityCode = opts.cityCode;
 
   const r = await call<{ records?: RawPositionEntry[]; total?: number; pages?: number }>(
@@ -188,7 +256,14 @@ export async function searchPositions(opts: SearchOptions = {}) {
 // ---------- fetchAllPositions ----------
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; recruitType?: "campus" | "intern" } = {}
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    recruitType?: "campus" | "intern";
+    /** CLI `--scope` echo (1.1.0+). See `SearchOptions.scope`. */
+    scope?: PositionScope;
+  } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
   const maxPages = Math.max(1, opts.maxPages ?? 40);
@@ -202,6 +277,7 @@ export async function fetchAllPositions(
       page,
       pageSize,
       recruitType: opts.recruitType,
+      scope: opts.scope,
     });
     if (!r.ok) {
       return { ok: false as const, source: SOURCE, message: r.message, total: 0, fetched: bucket.length, positions: bucket };
@@ -297,12 +373,19 @@ export async function findNoticesByQuestion(
 
 // ---------- matchResume ----------
 
-export async function matchResume(text: string, opts: { topN?: number; candidates?: number } = {}) {
+export async function matchResume(
+  text: string,
+  opts: { topN?: number; candidates?: number; scope?: PositionScope } = {}
+) {
   const { terms, cities } = extractResumeSignals(text ?? "");
   const topN = Math.max(1, opts.topN ?? 5);
   const candidates = Math.max(topN, opts.candidates ?? 200);
 
-  const all = await fetchAllPositions({ pageSize: 50, maxPages: Math.ceil(candidates / 50) });
+  const all = await fetchAllPositions({
+    pageSize: 50,
+    maxPages: Math.ceil(candidates / 50),
+    scope: opts.scope,
+  });
   if (!all.ok) {
     return {
       ok: false as const,

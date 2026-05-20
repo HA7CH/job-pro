@@ -30,11 +30,19 @@ export { extractResumeSignals, scoreOverlap, checkResume };
 
 export type { PositionSummary, SearchOptions } from "./feishu.js";
 
+/** Recruit scopes 01.AI can serve.
+ *  The "index" channel is a single mixed pool that returns experienced and
+ *  campus positions side-by-side (the tenant only configured one channel).
+ *  All scopes go through the same query; the dispatcher accepts
+ *  social/campus/all. */
+export const supportedScopes = ["social", "campus", "all"] as const;
+
 const _adapter = createAdapter({
   host: "01ai.jobs.feishu.cn",
   channel: "index",
   label: "01.AI (零一万物)",
   applyUrlPrefix: "https://01ai.jobs.feishu.cn/index/position",
+  supportedScopes,
 });
 
 export const searchPositions = _adapter.searchPositions;

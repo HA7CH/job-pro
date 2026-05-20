@@ -153,23 +153,94 @@
 //   apply_url     ← https://jobs.bytedance.com/campus/position/${id}/detail
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import type { PositionScope, AdapterSearchOptions } from "./adapter.js";
 export { extractResumeSignals, scoreOverlap, checkResume };
+
+// ============================================================
+// Social-hire (社招) endpoint — wired 1.1.0 (worktree G, probed 2026-05-20)
+//
+// jobs.bytedance.com publishes a SECOND tenant of the same atsx-throne (Feishu
+// Hire) site under /experienced/ for social/experienced hiring. The probe matrix:
+//
+//   portal-channel: experienced + website-path: experienced
+//     → 200 { code:-9000003, message:"site not exist" }   (URL slug, not site key)
+//   portal-channel: society     + website-path: society
+//     → 200 { code:0, data:{ count:10000, job_post_list:[...] } }   ✓ winner
+//
+// The user-visible URL is `https://jobs.bytedance.com/experienced/position`
+// but the header value the server matches is `society` (parent recruit_type
+// is id:"1" / name:"社招" / en_name:"Experienced"; "experienced" is the
+// English label, "society" is the site key).
+//
+// Sample first post's recruit_type:
+//   { id:"101", name:"正式", parent:{ id:"1", name:"社招", en_name:"Experienced" } }
+//
+// So for the SOCIAL site:
+//   recruitment_id "101" = 正式 (full-time social hire)
+// vs. CAMPUS site recruitment ids (201/202/301), which live under parent id:"2"
+// (校招).  The two sites have disjoint recruitment_id namespaces; do NOT pass
+// campus-side "201" into the society endpoint or vice versa.
+//
+// fetchPositionDetail probes campus first then society (the bare post_id
+// doesn't tell us which channel it lives in). Apply_url uses the channel the
+// post was found in so the browser deep-link lands on the right portal.
+// ============================================================
+
+/**
+ * ByteDance supports campus / intern / social / all (1.1.0+).
+ * - campus    → portal-channel:campus,  recruitment_id_list:["201"]   (~2057 posts)
+ * - intern    → portal-channel:campus,  recruitment_id_list:["202"]   (~5767 posts)
+ * - social    → portal-channel:society, recruitment_id_list:["101"]   (~10000 posts)
+ * - all       → parallel-fetch campus + society and merge
+ * - undefined → adapter's historical default: campus + recruitment_id_list:["201"]
+ *               (preserves 1.0.93 behaviour bit-for-bit — matches the website's
+ *                default 校园招聘 tab view)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+type BdChannel = "campus" | "society";
 
 const API_ROOT = "https://jobs.bytedance.com/api/v1";
 const CAMPUS_PAGE = "https://jobs.bytedance.com/campus/position";
-const DETAIL_PAGE = (id: string) =>
-  `https://jobs.bytedance.com/campus/position/${encodeURIComponent(id)}/detail`;
+const SOCIAL_PAGE = "https://jobs.bytedance.com/experienced/position";
+const DETAIL_PAGE = (id: string, channel: BdChannel = "campus") =>
+  channel === "society"
+    ? `https://jobs.bytedance.com/experienced/position/${encodeURIComponent(id)}/detail`
+    : `https://jobs.bytedance.com/campus/position/${encodeURIComponent(id)}/detail`;
 
-const DEFAULT_HEADERS: Record<string, string> = {
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  Accept: "application/json, text/plain, */*",
-  "Content-Type": "application/json",
-  "portal-channel": "campus",
-  "portal-platform": "pc",
-  "website-path": "campus",
-  Referer: CAMPUS_PAGE,
-};
+function baseHeaders(channel: BdChannel): Record<string, string> {
+  const isSocial = channel === "society";
+  return {
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    Accept: "application/json, text/plain, */*",
+    "Content-Type": "application/json",
+    "portal-channel": channel,
+    "portal-platform": "pc",
+    "website-path": channel,
+    Origin: "https://jobs.bytedance.com",
+    Referer: isSocial ? SOCIAL_PAGE : CAMPUS_PAGE,
+  };
+}
+
+const DEFAULT_HEADERS: Record<string, string> = baseHeaders("campus");
+
+/** Translate CLI `--scope` to the upstream { channel, recruitmentIdList } pair.
+ *  - undefined (omitted) → campus + ["201"] (historical default, ~2057 posts)
+ *  - "campus"            → campus + ["201"]
+ *  - "intern"            → campus + ["202"]
+ *  - "social"            → society + ["101"]
+ *  - "all"               → caller MUST handle the parallel-fetch path explicitly;
+ *                          we return campus+201 here as a sentinel default. */
+function channelForScope(s: PositionScope | undefined): {
+  channel: BdChannel;
+  recruitmentIdList: string[];
+} {
+  if (s === "social") return { channel: "society", recruitmentIdList: ["101"] };
+  if (s === "intern") return { channel: "campus", recruitmentIdList: ["202"] };
+  // "campus" | "all" | undefined → historical campus default
+  return { channel: "campus", recruitmentIdList: ["201"] };
+}
 
 // ---------- low-level call helper ----------
 
@@ -181,14 +252,15 @@ interface BdEnvelope<T> {
 
 async function call<T>(
   path: string,
-  body: unknown
+  body: unknown,
+  channel: BdChannel = "campus"
 ): Promise<{ ok: boolean; data?: T; message: string }> {
   const url = `${API_ROOT}${path}`;
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: DEFAULT_HEADERS,
+      headers: channel === "campus" ? DEFAULT_HEADERS : baseHeaders(channel),
       body: JSON.stringify(body),
     });
   } catch (err) {
@@ -274,7 +346,7 @@ export interface PositionSummary {
   apply_url: string;
 }
 
-function summarizePosition(item: RawJobPost): PositionSummary {
+function summarizePosition(item: RawJobPost, channel: BdChannel = "campus"): PositionSummary {
   const id = String(item.id ?? "");
   // Build work_cities: prefer city_list for multi-city; fall back to city_info
   const cityList = item.city_list ?? [];
@@ -284,6 +356,7 @@ function summarizePosition(item: RawJobPost): PositionSummary {
   } else {
     work_cities = item.city_info?.name ?? (cityList[0]?.name ?? "");
   }
+  const fallback = channel === "society" ? SOCIAL_PAGE : CAMPUS_PAGE;
   return {
     post_id: id,
     title: item.title ?? "",
@@ -291,19 +364,22 @@ function summarizePosition(item: RawJobPost): PositionSummary {
     recruit_label: item.recruit_type?.name ?? "",
     bgs: "",
     work_cities,
-    apply_url: id ? DETAIL_PAGE(id) : CAMPUS_PAGE,
+    apply_url: id ? DETAIL_PAGE(id, channel) : fallback,
   };
 }
 
 // ---------- SearchOptions ----------
 
-export interface SearchOptions {
+export interface SearchOptions extends AdapterSearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /** Filter by recruitment type. Default: ["201"] (正式/new-grad, matches site default tab).
-   *  Use ["202"] for 实习 (intern, ~5767 posts).
-   *  Pass [] or omit for all listings (~7824). */
+  /** Filter by recruitment type. Default depends on `scope`:
+   *  - scope omitted / "campus" → ["201"] (正式 campus / new-grad, ~2057 posts)
+   *  - scope "intern"           → ["202"] (实习 intern, ~5767 posts)
+   *  - scope "social"           → ["101"] (社招 正式, ~10000 posts via society channel)
+   *  - scope "all"              → parallel-fetch campus(["201"]) + society(["101"])
+   *  Pass an explicit list to override. */
   recruitmentIdList?: string[];
   /** Filter by job category IDs from /config/job/filters/campus → job_type_list.
    *  Parent IDs include all children. See header comment for full taxonomy.
@@ -328,7 +404,20 @@ export interface SearchOptions {
 
 // ---------- searchPositions ----------
 
-export async function searchPositions(opts: SearchOptions = {}) {
+const asStringList = (v: unknown): string[] | undefined => {
+  if (v === undefined) return undefined;
+  const arr = Array.isArray(v) ? v : [v];
+  return arr.map(String);
+};
+
+/** One-channel search. Used by `searchPositions` directly for
+ *  scope ∈ {undefined, campus, intern, social}; called twice in parallel
+ *  for scope=all. */
+async function searchSingle(
+  channel: BdChannel,
+  opts: SearchOptions,
+  defaultRecruitmentIds: string[]
+) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const offset = (page - 1) * pageSize;
@@ -336,15 +425,8 @@ export async function searchPositions(opts: SearchOptions = {}) {
 
   // Build optional filter arrays — undefined means "omit the key" (API returns
   // all for that dim). The ByteDance server is strict: it expects every entry
-  // in *_id_list to be a string ("201", "CT_11", "7621018569480046853") and
-  // 400s when a number sneaks through, which happens easily when the CLI flag
-  // looks numeric. Stringify everything coming in.
-  const asStringList = (v: unknown): string[] | undefined => {
-    if (v === undefined) return undefined;
-    const arr = Array.isArray(v) ? v : [v];
-    return arr.map(String);
-  };
-  const recruitmentIdList = asStringList(opts.recruitmentIdList) ?? ["201"];
+  // in *_id_list to be a string and 400s when a number sneaks through.
+  const recruitmentIdList = asStringList(opts.recruitmentIdList) ?? defaultRecruitmentIds;
 
   const payload: Record<string, unknown> = {
     keyword,
@@ -353,12 +435,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
     portal_type: 3,
     portal_entrance: 1,
     language: "zh",
-    // "201" = 正式 (campus / new-grad) — matches the default 校园招聘 tab on the website.
-    // Without this filter the API returns ~7824 (campus + intern combined).
     recruitment_id_list: recruitmentIdList,
   };
 
-  // Inject optional filters only when caller explicitly provides them
   const jobCategoryIdList = asStringList(opts.jobCategoryIdList);
   if (jobCategoryIdList?.length) {
     payload.job_category_id_list = jobCategoryIdList;
@@ -372,26 +451,88 @@ export async function searchPositions(opts: SearchOptions = {}) {
     payload.subject_id_list = subjectIdList;
   }
 
-  const response = await call<RawSearchData>("/search/job/posts", payload);
+  const response = await call<RawSearchData>("/search/job/posts", payload, channel);
   if (!response.ok || !response.data) {
     return {
-      ok: false,
+      ok: false as const,
+      channel,
       message: response.message,
-      source: "jobs.bytedance.com",
       query: payload,
+      page,
+      page_size: pageSize,
+      total: 0,
       positions: [] as PositionSummary[],
     };
   }
 
   const rows = response.data.job_post_list ?? [];
   return {
-    ok: true,
-    source: "jobs.bytedance.com",
+    ok: true as const,
+    channel,
+    message: "ok",
     query: payload,
     page,
     page_size: pageSize,
     total: response.data.count ?? rows.length,
-    positions: rows.map(summarizePosition),
+    positions: rows.map((p) => summarizePosition(p, channel)),
+  };
+}
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  // 1.1.0 — scope-aware dispatch. `undefined` preserves 1.0.93 default
+  // (campus + recruitment_id_list:["201"]).
+  const scope = opts.scope;
+
+  // scope=all: parallel-fetch campus + society and merge.
+  if (scope === "all") {
+    const page = Math.max(1, opts.page ?? 1);
+    const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
+    const [campus, society] = await Promise.all([
+      searchSingle("campus", opts, ["201"]),
+      searchSingle("society", opts, ["101"]),
+    ]);
+    const positions = [...campus.positions, ...society.positions];
+    const total = (campus.ok ? campus.total : 0) + (society.ok ? society.total : 0);
+    if (!campus.ok && !society.ok) {
+      return {
+        ok: false,
+        message: campus.message,
+        source: "jobs.bytedance.com",
+        query: { scope: "all", page, pageSize, keyword: opts.keyword ?? "" },
+        positions: [] as PositionSummary[],
+      };
+    }
+    return {
+      ok: true,
+      source: "jobs.bytedance.com",
+      query: { scope: "all", page, pageSize, keyword: opts.keyword ?? "" },
+      page,
+      page_size: pageSize,
+      total,
+      positions,
+    };
+  }
+
+  // Single-channel cases (undefined, campus, intern, social).
+  const { channel, recruitmentIdList } = channelForScope(scope);
+  const r = await searchSingle(channel, opts, recruitmentIdList);
+  if (!r.ok) {
+    return {
+      ok: false,
+      message: r.message,
+      source: "jobs.bytedance.com",
+      query: r.query,
+      positions: [] as PositionSummary[],
+    };
+  }
+  return {
+    ok: true,
+    source: "jobs.bytedance.com",
+    query: r.query,
+    page: r.page,
+    page_size: r.page_size,
+    total: r.total,
+    positions: r.positions,
   };
 }
 
@@ -495,46 +636,55 @@ export async function fetchPositionDetail(postId: string) {
   const pageSize = 100;
   const maxPages = 5;
 
-  for (let page = 1; page <= maxPages; page++) {
-    const offset = (page - 1) * pageSize;
-    const payload = {
-      keyword: "",
-      limit: pageSize,
-      offset,
-      portal_type: 3,
-      portal_entrance: 1,
-      language: "zh",
-      recruitment_id_list: ["201"],
-    };
-    const response = await call<RawSearchData>("/search/job/posts", payload);
-    if (!response.ok || !response.data) break;
+  // 1.1.0: probe campus first (cheap when id is a campus post), then society.
+  // We can't tell from the bare id which channel a post lives in.
+  const probeOrder: Array<{ channel: BdChannel; recruitmentIds: string[] }> = [
+    { channel: "campus", recruitmentIds: ["201"] },
+    { channel: "society", recruitmentIds: ["101"] },
+  ];
 
-    const posts = response.data.job_post_list ?? [];
-    const found = posts.find((p) => String(p.id) === id);
-    if (found) {
-      const summary = summarizePosition(found);
-      return {
-        ok: true,
-        source: "jobs.bytedance.com",
-        post_id: id,
-        title: found.title ?? "",
-        direction: found.sub_title ?? "",
-        description: found.description ?? "",
-        requirements: found.requirement ?? "",
-        work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
-        recruit_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
-        apply_url: summary.apply_url,
+  for (const { channel, recruitmentIds } of probeOrder) {
+    for (let page = 1; page <= maxPages; page++) {
+      const offset = (page - 1) * pageSize;
+      const payload = {
+        keyword: "",
+        limit: pageSize,
+        offset,
+        portal_type: 3,
+        portal_entrance: 1,
+        language: "zh",
+        recruitment_id_list: recruitmentIds,
       };
+      const response = await call<RawSearchData>("/search/job/posts", payload, channel);
+      if (!response.ok || !response.data) break;
+
+      const posts = response.data.job_post_list ?? [];
+      const found = posts.find((p) => String(p.id) === id);
+      if (found) {
+        const summary = summarizePosition(found, channel);
+        return {
+          ok: true,
+          source: "jobs.bytedance.com",
+          post_id: id,
+          title: found.title ?? "",
+          direction: found.sub_title ?? "",
+          description: found.description ?? "",
+          requirements: found.requirement ?? "",
+          work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
+          recruit_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
+          apply_url: summary.apply_url,
+        };
+      }
+      // If this page returned fewer than pageSize, no more pages exist on this channel.
+      if (posts.length < pageSize) break;
     }
-    // If this page returned fewer than pageSize, no more pages exist
-    if (posts.length < pageSize) break;
   }
 
   return {
     ok: false,
     source: "jobs.bytedance.com",
     post_id: id,
-    message: `post ${id} not found in public search results (searched up to ${maxPages * pageSize} posts)`,
+    message: `post ${id} not found in public search results (searched up to ${maxPages * pageSize} posts per channel × 2 channels)`,
   };
 }
 
@@ -649,11 +799,16 @@ export async function fetchDictionaries() {
     group_en: s.subject_group_info?.en_name ?? s.subject_group_info?.i18n_name ?? "",
   }));
 
-  // recruitment_type_list is null in the public response; expose as static known values
+  // recruitment_type_list is null in the public response; expose as static known values.
+  // Note: dictionaries are fetched against the campus site, so social-side
+  // recruitment id "101" is documented here but lives under the "society"
+  // portal-channel (use --scope social to query it). The two sites have
+  // disjoint recruitment_id namespaces.
   const recruitmentTypes = [
-    { id: "201", name: "正式", note: "campus / new-grad (~2057 posts)" },
-    { id: "202", name: "实习", note: "intern (~5767 posts)" },
+    { id: "201", name: "正式", note: "campus / new-grad (~2057 posts, portal-channel:campus)" },
+    { id: "202", name: "实习", note: "intern (~5767 posts, portal-channel:campus)" },
     { id: "301", name: "其他", note: "reserved, currently 0 active posts" },
+    { id: "101", name: "社招/正式", note: "social hire (~10000 posts, portal-channel:society — use --scope social)" },
   ];
 
   const result = {

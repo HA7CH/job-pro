@@ -67,7 +67,31 @@
 //   apply_url     ← https://talent.didiglobal.com/campus#/position/{jdId}/detail
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+/**
+ * Didi supports social + campus + intern + all (1.1.0+). The upstream
+ * /job/front/list endpoint returns a mixed feed with no server-side recruit
+ * filter — campus posts carry a "JR-" prefix on `jdNo`, social posts carry
+ * "J-". Scope filtering is applied client-side after the fetch.
+ *
+ * Scope translation (client-side filter on `jdNo` prefix):
+ *   social  → keep rows where jdNo starts with "J-" (and NOT "JR-")
+ *   campus  → keep rows where jdNo starts with "JR-"
+ *   intern  → keep rows where jdNo starts with "JR-" (no separate intern signal in jdNo)
+ *   all     → no filter
+ *   undefined → no filter (historical behaviour — mixed feed)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
+
+function jdNoMatchesScope(jdNo: string | undefined, s: PositionScope | undefined): boolean {
+  if (!s || s === "all") return true;
+  const n = jdNo ?? "";
+  if (s === "campus" || s === "intern") return n.startsWith("JR-");
+  if (s === "social") return n.startsWith("J-") && !n.startsWith("JR-");
+  return true;
+}
 
 const API_ROOT = "https://talent.didiglobal.com/recruit-portal-service/api";
 const PORTAL_PAGE = "https://talent.didiglobal.com/";
@@ -225,6 +249,11 @@ export interface SearchOptions {
    *  this value is passed through but ignored server-side.  Use for informational
    *  purposes only (the response will always contain ≤16 items). */
   pageSize?: number;
+  /** CLI `--scope` echo (1.1.0+). Didi's upstream is a mixed feed; scope is
+   *  applied as a client-side filter on `jdNo` prefix (J-=social, JR-=campus).
+   *  Per-page totals shrink accordingly; `total` reflects the upstream's
+   *  unfiltered count. */
+  scope?: PositionScope;
 }
 
 // ---------- searchPositions ----------
@@ -253,14 +282,16 @@ export async function searchPositions(opts: SearchOptions = {}) {
     };
   }
 
-  const rows = response.data.items ?? [];
+  const rawRows = response.data.items ?? [];
+  // 1.1.0+: --scope is a client-side filter on jdNo prefix (no server-side recruit filter).
+  const rows = rawRows.filter((r) => jdNoMatchesScope(r.jdNo, opts.scope));
   return {
     ok: true,
     source: "talent.didiglobal.com",
     query: params,
     page,
-    page_size: rows.length, // actual count (always ≤ 16)
-    total: response.data.total ?? rows.length,
+    page_size: rows.length, // actual count after scope filter (always ≤ 16)
+    total: response.data.total ?? rawRows.length,
     positions: rows.map(summarizePosition),
   };
 }
