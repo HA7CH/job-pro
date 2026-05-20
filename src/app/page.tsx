@@ -524,8 +524,8 @@ export default function Home() {
         <h2 id="table-title" className="sr-only">Roadmap</h2>
         <div className="company-row company-row--header" aria-hidden>
           <span className="col-label">Company</span>
-          <span className="col-label">Campus</span>
-          <span className="col-label">Social</span>
+          <span className="col-label">Campus Info</span>
+          <span className="col-label">Social Info</span>
           <span className="col-label">Auto-apply</span>
         </div>
         {COMPANIES.map((c) => (
