@@ -34,7 +34,7 @@
 //
 // ============================================================
 
-import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 export { checkResume };
 
 const SOURCE = "vivo.zhiye.com";

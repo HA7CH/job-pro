@@ -525,7 +525,7 @@ export async function matchResume(
   let finalList = scored.slice(0, topN);
   if (!finalList.length) {
     // Fall back: return first topN from list without enrichment
-    finalList = listResult.positions.slice(0, topN).map((position) => ({
+    finalList = pool.slice(0, topN).map((position) => ({
       score: 0,
       position,
       reasons: [],

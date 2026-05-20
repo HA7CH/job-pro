@@ -4,6 +4,21 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## Unreleased — `apply --confirm-submit`: preview, confirm, then fire
+
+`apply` no longer makes an interactive user copy a second command just to
+move from "resume looks OK" to "submit it." New flags:
+
+* `--confirm-submit` stages the application, prints the final payload,
+  asks for one explicit confirmation, then runs the existing official-site
+  submitter for that adapter.
+* `--submit-after-confirm` is an alias for the same flow.
+* `--really-submit` still exists for scripts and keeps the
+  `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` attestation.
+
+Batch real submission remains refused by design; use `--debug-submit-to`
+for batch wire-format checks, then submit individual jobs after preview.
+
 ## 1.0.93 — `match` actually works: docx/pdf/json resume input, fixed false positives, degree-aware sort
 
 `job-pro <co> match` used to require a plain-text resume on stdin and

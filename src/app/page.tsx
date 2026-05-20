@@ -481,8 +481,10 @@ job-pro find "intern" --apply-ready --text   # only show buckets you can fire to
 job-pro xpeng apply <id> --schema                  # peek at the form
 job-pro xpeng apply <id> --interactive --remember  # fill in terminal; persist answers
 
-# actually submit (4-layer safety gate: env attest + staged.ready
-# + endpoint_verified + session.json <30d)
+# actually submit (preview → confirm → official-site submitter)
+job-pro xpeng apply <id> --confirm-submit
+
+# script mode is still available when you intentionally want no prompt
 JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
   job-pro xpeng apply <id> --really-submit`}</pre>
         <p className="phase2-detail">
