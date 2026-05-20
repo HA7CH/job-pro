@@ -169,7 +169,10 @@ export interface SearchOptions {
  * Returns `undefined` to mean "do not send the filter" (i.e. mixed feed).
  */
 function recruitmentTypeForScope(s: PositionScope | undefined): string | undefined {
-  if (s === "campus") return "Campus";
+  // OPPO's upstream taxonomy uses "Graduate" for 应届生/校招 (not "Campus" —
+  // that string returns 0 results despite looking right). Verified 2026-05
+  // via /openapi/position/project/list.
+  if (s === "campus") return "Graduate";
   if (s === "intern") return "Intern";
   // "all" → no filter, mixed feed. "social" never reaches here (dispatcher
   // rejects it via supportedScopes). undefined preserves 1.0.93 behaviour
@@ -221,7 +224,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
   if (scopeFilter !== undefined) {
     body.recruitmentType = scopeFilter;
   } else if (opts.recruitType === "campus") {
-    body.recruitmentType = "Campus";
+    body.recruitmentType = "Graduate";
   } else if (opts.recruitType === "intern") {
     body.recruitmentType = "Intern";
   }

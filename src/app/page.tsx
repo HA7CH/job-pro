@@ -152,14 +152,14 @@ const COMPANIES: Company[] = [
   {
     name: "miHoYo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/mihoyo.ts",
-    campus: "building",
+    campus: "live",
     social: "live",
     autoApply: "live",
   },
   {
     name: "Ping An",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/pingan.ts",
-    campus: "building",
+    campus: "live",
     social: "building",
     autoApply: "live",
   },
@@ -327,7 +327,7 @@ const COMPANIES: Company[] = [
   {
     name: "OPPO",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/oppo.ts",
-    campus: "building",
+    campus: "live",
     social: "building",
     autoApply: "live",
   },

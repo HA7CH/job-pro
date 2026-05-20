@@ -57,7 +57,7 @@ export { checkResume, extractResumeSignals, scoreOverlap };
 export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
 
 function channelForScope(s: PositionScope | undefined): { channelDetailIds: number[]; hireType: number } {
-  if (s === "campus" || s === "intern") return { channelDetailIds: [2], hireType: 1 };
+  if (s === "campus" || s === "intern") return { channelDetailIds: [1], hireType: 1 };
   // social / all / undefined → social defaults
   return { channelDetailIds: [1], hireType: 0 };
 }

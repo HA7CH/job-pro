@@ -31,11 +31,16 @@ export { extractResumeSignals, scoreOverlap, checkResume };
 export type { PositionSummary, SearchOptions } from "./feishu.js";
 
 /** Recruit scopes 01.AI can serve.
- *  The "index" channel is a single mixed pool that returns experienced and
- *  campus positions side-by-side (the tenant only configured one channel).
- *  All scopes go through the same query; the dispatcher accepts
- *  social/campus/all. */
-export const supportedScopes = ["social", "campus", "all"] as const;
+ *  The "index" channel is a single mixed pool with only social + intern
+ *  positions — no campus (校招). Verified 2026-05 via
+ *  /api/v1/config/job/filters/index, which declares only recruitment_type
+ *  id "1" (社招/Experienced); per-post recruit_type ids are "101" (全职) or
+ *  "301" (实习), both children of "1". `campus` is dropped because filtering
+ *  by recruitment_id_list=["201"] returns count:0.
+ *
+ *  Note: `intern` would also need a tenant-specific recruitment_id_list
+ *  ["301"] override (factory default is ["202"]); not addressed here. */
+export const supportedScopes = ["social", "all"] as const;
 
 const _adapter = createAdapter({
   host: "01ai.jobs.feishu.cn",

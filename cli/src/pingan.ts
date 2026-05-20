@@ -340,9 +340,14 @@ export async function searchPositions(opts: SearchOptions = {}) {
   if (opts.positionCategoryId) payload["positionCategoryId"] = opts.positionCategoryId.trim();
   // positionType: explicit positionType wins; otherwise derive from scope (1.1.0+).
   // undefined positionType + undefined/all scope = all types (no filter).
+  //
+  // NOTE (2026-05-21): Upstream silently broke server-side filtering on
+  // `positionType` — any value ("全职" / "实习" / "校招" / ...) now returns
+  // `{responseCode:"10001", responseMsg:"请求成功", data:null}`. The field
+  // is still populated on each row, so we filter client-side instead of
+  // sending it upstream. We omit positionType from the request payload.
   const positionType =
     opts.positionType !== undefined ? opts.positionType : positionTypeForScope(opts.scope);
-  if (positionType !== undefined) payload["positionType"] = positionType;
 
   const response = await call<RawPositionListData>(
     "/candidate/position/campus/positionSearch/queryPositionPage",
@@ -358,11 +363,15 @@ export async function searchPositions(opts: SearchOptions = {}) {
     };
   }
 
-  const rows = response.data.list ?? [];
+  const allRows = response.data.list ?? [];
+  const rows =
+    positionType !== undefined && positionType !== ""
+      ? allRows.filter((r) => r.positionType === positionType)
+      : allRows;
   return {
     ok: true,
     source: "campus.pingan.com",
-    query: payload,
+    query: { ...payload, ...(positionType !== undefined ? { positionType } : {}) },
     page,
     page_size: pageSize,
     total: response.data.totalCount ?? rows.length,
