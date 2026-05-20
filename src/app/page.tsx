@@ -68,7 +68,7 @@ const COMPANIES: Company[] = [
   {
     name: "JD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/jd.ts",
-    campus: "live",
+    campus: "building",
     social: "building",
     autoApply: "live",
   },
@@ -103,8 +103,8 @@ const COMPANIES: Company[] = [
   {
     name: "Didi",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/didi.ts",
-    campus: "live",
-    social: "live",
+    campus: "building",
+    social: "building",
     autoApply: "live",
   },
   {
@@ -132,7 +132,7 @@ const COMPANIES: Company[] = [
     name: "MiniMax",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/minimax.ts",
     campus: "live",
-    social: "live",
+    social: "building",
     autoApply: "live",
   },
   {
@@ -152,14 +152,14 @@ const COMPANIES: Company[] = [
   {
     name: "miHoYo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/mihoyo.ts",
-    campus: "live",
+    campus: "building",
     social: "live",
     autoApply: "live",
   },
   {
     name: "Ping An",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/pingan.ts",
-    campus: "live",
+    campus: "building",
     social: "building",
     autoApply: "live",
   },
@@ -236,8 +236,8 @@ const COMPANIES: Company[] = [
   {
     name: "Megvii",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/megvii.ts",
-    campus: "live",
-    social: "live",
+    campus: "building",
+    social: "building",
     autoApply: "live",
   },
   {
@@ -264,7 +264,7 @@ const COMPANIES: Company[] = [
   {
     name: "01.AI",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/zerooneai.ts",
-    campus: "live",
+    campus: "building",
     social: "live",
     autoApply: "live",
   },
@@ -327,7 +327,7 @@ const COMPANIES: Company[] = [
   {
     name: "OPPO",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/oppo.ts",
-    campus: "live",
+    campus: "building",
     social: "building",
     autoApply: "live",
   },
