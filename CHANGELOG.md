@@ -68,6 +68,7 @@ Pass criteria: `ok:true`, `total >= 0`, first-row keys present when
 <!-- WORKTREE-A:TIER1_MOKA -->
 <!-- /WORKTREE-A:TIER1_MOKA -->
 <!-- WORKTREE-G:BYTEDANCE -->
+- ByteDance: social wired via `portal-channel: society` + `website-path: society` + `recruitment_id_list:["101"]` against the same `POST /api/v1/search/job/posts` endpoint. The user-visible URL slug is `experienced`, but the server matches the site key `society` (parent recruit_type id:"1"=社招/Experienced). Probed 2026-05-20: `society` channel returns ~10000 social posts; the prior probe header `experienced` returned `code:-9000003 "site not exist"`. `supportedScopes = ["social","campus","intern","all"]`; scope=all parallel-fetches both campus + society and merges. `fetchPositionDetail` now probes campus first, society second (post_id alone doesn't reveal channel); apply_url uses the channel the post was found in so deep-links land on the right portal.
 <!-- /WORKTREE-G:BYTEDANCE -->
 <!-- WORKTREE-H:KUAISHOU-BAIDU -->
 <!-- /WORKTREE-H:KUAISHOU-BAIDU -->
