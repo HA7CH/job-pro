@@ -252,3 +252,66 @@ Together these mean a submission only fires when the user has explicitly:
 - attested to the env-var prompt,
 - run a verb that says "really submit",
 - and have a complete profile + resume on disk.
+
+## Social-hire (1.1.0)
+
+1.1.0 extends every adapter with a unified `--scope` flag:
+
+```
+--scope <social|campus|intern|all>
+```
+
+The flag works on `search`, `all`, `match`, and the cross-company `find`
+verb. `apply` accepts it cosmetically (the submit endpoint doesn't change
+per scope on any one company). `detail` / `dicts` / `notices` / `flow` /
+`resume-check` / `memory` / `recon` / `selftest` / `list` / `status` /
+`extension` / `profile` silently ignore it.
+
+### Contract (`cli/src/adapter.ts`)
+
+```ts
+export type PositionScope = "social" | "campus" | "intern" | "all";
+
+export interface AdapterSearchOptions {
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+  /** undefined = adapter's historical default (1.0.93-compat). */
+  scope?: PositionScope;
+}
+
+export interface CompanyAdapter {
+  /** undefined = "I accept all 4". */
+  readonly supportedScopes?: ReadonlyArray<PositionScope>;
+  ...
+}
+```
+
+### Dispatcher behaviour
+
+- `runCompany` reads `--scope <value>` at the top, validates it against
+  `social|campus|intern|all`, and checks `adapter.supportedScopes`. If the
+  adapter has declared a tuple that excludes the requested scope, the call
+  dies with `<company> does not support --scope <scope>. Supported: ...`.
+- `find` treats `--scope` as a SOFT filter: only adapters whose
+  `supportedScopes` includes the scope are searched; the rest are silently
+  skipped from the result body and reported in
+  `companies_skipped_by_scope[]` (`--text` mode prints a footer line).
+
+### Defaults are preserved
+
+Omitting `--scope` is NOT the same as `--scope all`. The dispatcher leaves
+`scope` undefined in the options bag; each adapter falls back to its 1.0.93
+default channel / recruitType / jobType. Existing scripts continue to
+behave exactly as they did before 1.1.0.
+
+### Coverage
+
+Adapters declare `supportedScopes` to advertise which channels they can
+actually query — see each adapter's source. Tier-3 (`tencent`, `jd`,
+`cainiao`, `webank`, `hikvision`, `cicc`, `unitree`) declare
+`["campus","intern","all"]` and refuse `--scope social` with a useful
+explanation (no public social-hire API; some are WeChat-only or
+recruiter-IM-mediated). Greenhouse / Lever boards (`xpeng`, `weride`,
+`hoyoverse`) declare `["social","all"]` (US/intl arm hires are social by
+convention).

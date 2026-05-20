@@ -50,7 +50,7 @@ import * as geely from "./geely.js";
 import * as webank from "./webank.js";
 import * as horizonrobotics from "./horizonrobotics.js";
 import * as cambricon from "./cambricon.js";
-import type { CompanyAdapter } from "./adapter.js";
+import type { CompanyAdapter, PositionScope } from "./adapter.js";
 import {
   loadProfile,
   loadProfileRaw,
@@ -264,6 +264,10 @@ for the live probe matrix. See docs/auto-apply.md.
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
+  --scope <social|campus|intern|all>  restrict to a single recruit channel
+                                      (default: each adapter's historical pick).
+                                      Works on \`search\`, \`all\`, \`match\`,
+                                      and the cross-company \`find\` verb.
   detail <post_id>                  show full JD for one job
   all [<kw>]                        paginate every job (filter by kw if given)
   dicts                             dump filter dictionaries (where supported)
@@ -295,6 +299,7 @@ OUTPUT
 EXAMPLES
   job-pro tencent search "后台开发" --page-size 5
   job-pro bytedance search "前端" --page-size 5
+  job-pro bytedance search "后台开发" --scope social --page-size 5
   job-pro alibaba search "AI" --page-size 5
   job-pro tencent detail 1200791473415778304
   job-pro bytedance detail 7638940721068099893
@@ -317,6 +322,25 @@ DOCS
 function die(msg: string): never {
   console.error(`Error: ${msg}`);
   process.exit(1);
+}
+
+/**
+ * Validate and narrow a raw `--scope` value (1.1.0+).
+ *
+ * `undefined` (caller omitted the flag) flows through unchanged — adapters
+ * fall back to their historical default. Any other string must be one of
+ * the four canonical scopes; anything else dies early with a useful list.
+ */
+const POSITION_SCOPES = ["social", "campus", "intern", "all"] as const;
+function validateScope(raw: unknown): PositionScope | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    die(`unknown scope: ${JSON.stringify(raw)}. Accepted: social, campus, intern, all.`);
+  }
+  if (!(POSITION_SCOPES as readonly string[]).includes(raw)) {
+    die(`unknown scope: ${raw}. Accepted: social, campus, intern, all.`);
+  }
+  return raw as PositionScope;
 }
 
 function popCompactFlag(args: string[]): { args: string[]; compact: boolean } {
@@ -479,6 +503,34 @@ async function runCompany(
   if (!verb) die(`expected a verb. Try \`job-pro help\`.`);
 
   const { args, compact } = popCompactFlag(rest);
+
+  // 1.1.0 — validate `--scope` against the adapter's declared supportedScopes
+  // BEFORE per-verb dispatch, so an unsupported scope dies fast with a
+  // useful "company X does not support --scope Y. Supported: ..." message
+  // instead of getting silently translated into an empty result by the
+  // adapter. The actual scope value still flows through `popAllOpts` inside
+  // each verb branch (search/all/match) into the adapter's options bag.
+  //
+  // Pre-scan rather than mutate `args` so verb handlers still see the flag
+  // and route it through their existing `popAllOpts(args)` path. Validation
+  // is verb-agnostic — `apply` / `detail` / `dicts` / etc. accept the flag
+  // and silently ignore it (cosmetic per §1.3), so the check is just an
+  // early gate against "this adapter has no such channel at all".
+  const scopeIdx = args.indexOf("--scope");
+  if (scopeIdx !== -1) {
+    const rawScope = args[scopeIdx + 1];
+    const scope = validateScope(rawScope);
+    if (scope !== undefined) {
+      const supported =
+        (adapter.supportedScopes as readonly string[] | undefined) ??
+        (POSITION_SCOPES as readonly string[]);
+      if (!supported.includes(scope)) {
+        die(
+          `${company} does not support --scope ${scope}. Supported: ${supported.join(", ")}.`
+        );
+      }
+    }
+  }
 
   if (verb === "search") {
     const { args: positional, opts } = popAllOpts(args);
@@ -1745,7 +1797,7 @@ Or copy the path to clipboard (macOS):
     const applyReadyOnly = args.includes("--apply-ready");
     const keyword = args[1];
     if (!keyword || keyword.startsWith("--")) {
-      die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--apply-ready] [--compact | --text]`);
+      die(`usage: job-pro find <keyword> [--limit N] [--companies a,b,c] [--timeout ms] [--apply-ready] [--scope social|campus|intern|all] [--compact | --text]`);
     }
     // Apply-readiness derives from the canonical SUBMIT_KIND_BY_FAMILY map
     // (single source of truth shared with `list`). multipart-anon is fire-
@@ -1762,18 +1814,42 @@ Or copy the path to clipboard (macOS):
     const { args: aLimit, value: limitStr } = popFlagValue(args, "--limit");
     const { args: aCompanies, value: companiesStr } = popFlagValue(aLimit, "--companies");
     const { args: aTimeout, value: timeoutStr } = popFlagValue(aCompanies, "--timeout");
-    void aTimeout;
+    const { args: aScope, value: scopeStr } = popFlagValue(aTimeout, "--scope");
+    void aScope;
     const limit = limitStr ? Math.max(1, parseInt(limitStr, 10)) : 3;
     const timeout = timeoutStr ? Math.max(1000, parseInt(timeoutStr, 10)) : 8000;
-    const scope: string[] = companiesStr
+    // 1.1.0 — `--scope` on `find` is a SOFT filter (§1.5): companies whose
+    // `supportedScopes` includes the requested scope are searched with the
+    // scope passed through; companies that don't support it are silently
+    // skipped from the result body (NOT counted in `failed`). The JSON
+    // output gains `scope_used` + `companies_skipped_by_scope[]` so callers
+    // can see what got dropped.
+    const requestedScope = validateScope(scopeStr);
+    const companyScope: string[] = companiesStr
       ? companiesStr.split(",").map((s) => s.trim()).filter(Boolean)
       : Object.keys(ADAPTERS);
-    const unknown = scope.filter((c) => !(c in ADAPTERS));
+    const unknown = companyScope.filter((c) => !(c in ADAPTERS));
     if (unknown.length > 0) die(`unknown company in --companies: ${unknown.join(", ")}`);
+
+    // Partition by supportedScopes when `--scope` was given.
+    const scopeSkipped: string[] = [];
+    const eligible: string[] = [];
+    for (const c of companyScope) {
+      if (requestedScope === undefined) {
+        eligible.push(c);
+        continue;
+      }
+      const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[c];
+      const supported =
+        (adapter.supportedScopes as readonly string[] | undefined) ??
+        (POSITION_SCOPES as readonly string[]);
+      if (supported.includes(requestedScope)) eligible.push(c);
+      else scopeSkipped.push(c);
+    }
 
     const startedAt = Date.now();
     const settled = await Promise.all(
-      scope.map(async (company) => {
+      eligible.map(async (company) => {
         const adapter = (ADAPTERS as Record<string, CompanyAdapter>)[company];
         const t0 = Date.now();
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1782,7 +1858,7 @@ Or copy the path to clipboard (macOS):
             timer = setTimeout(() => resolve({ timedOut: true }), timeout);
           });
           const searchP = adapter
-            .searchPositions({ keyword, pageSize: limit })
+            .searchPositions({ keyword, pageSize: limit, scope: requestedScope })
             .then((r) => ({ ok: true as const, value: r }));
           const raced = await Promise.race([timeoutP, searchP]);
           const elapsed = Date.now() - t0;
@@ -1819,8 +1895,15 @@ Or copy the path to clipboard (macOS):
         "missing-session": "🟡",
         external: "⛔",
       };
-      const filterNote = applyReadyOnly ? " [apply-ready only]" : "";
-      console.log(`\nfind "${keyword}" — ${total} hit(s) across ${withHits.length}/${scope.length} companies (${totalMs}ms)${filterNote}\n`);
+      const filterParts: string[] = [];
+      if (applyReadyOnly) filterParts.push("apply-ready only");
+      if (requestedScope !== undefined) filterParts.push(`scope=${requestedScope}`);
+      const filterNote = filterParts.length ? ` [${filterParts.join(" · ")}]` : "";
+      const scopeNote =
+        requestedScope !== undefined && scopeSkipped.length > 0
+          ? ` (scope-filtered: ${scopeSkipped.length} skipped)`
+          : "";
+      console.log(`\nfind "${keyword}" — ${total} hit(s) across ${withHits.length}/${eligible.length} companies (${totalMs}ms)${filterNote}${scopeNote}\n`);
       for (const r of withHits) {
         const icon = STATUS_ICON[r.apply_status ?? ""] ?? "?";
         console.log(`${icon} ${r.company} (${r.count}) — ${r.apply_status}`);
@@ -1853,6 +1936,14 @@ Or copy the path to clipboard (macOS):
         console.log(`Failed (${failed.length}):`);
         for (const f of failed) console.log(`  ${f.company}: ${f.message}`);
       }
+      // §1.5: when --text + --scope is set, print a footer listing the
+      // companies that were silently skipped because their `supportedScopes`
+      // declaration excluded the requested scope.
+      if (requestedScope !== undefined && scopeSkipped.length > 0) {
+        console.log(
+          `Skipped by --scope ${requestedScope} (${scopeSkipped.length}): ${scopeSkipped.join(" ")}`
+        );
+      }
       return;
     }
     emit(
@@ -1861,7 +1952,9 @@ Or copy the path to clipboard (macOS):
         keyword,
         total,
         company_count: withHits.length,
-        scanned_companies: scope.length,
+        scanned_companies: eligible.length,
+        scope_used: requestedScope,
+        companies_skipped_by_scope: scopeSkipped,
         elapsed_ms: totalMs,
         results: withHits,
         failed,

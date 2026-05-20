@@ -10,6 +10,15 @@ type Company = {
   href: string;
   listings: Status;
   autoApply: Status;
+  /**
+   * Recruit channels this adapter can query in 1.1.0+ — `social` /
+   * `campus` / `intern` / `all`. Optional: when omitted, the landing
+   * page renders the company as supporting the full set (mirrors the
+   * dispatcher's fallback in `runCompany` when `supportedScopes` is
+   * undefined). Future per-company entries will fill this in as each
+   * adapter declares its `supportedScopes` tuple.
+   */
+  scopes?: ReadonlyArray<"social" | "campus" | "intern" | "all">;
 };
 
 const COMPANIES: Company[] = [

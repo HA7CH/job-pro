@@ -4,15 +4,34 @@
 [![npm](https://img.shields.io/npm/v/job-pro.svg)](https://www.npmjs.com/package/job-pro)
 [![apply ready](https://img.shields.io/badge/apply--ready-45%20%2F%2050-green)](./docs/auto-apply.md)
 
-Query Chinese big-tech campus recruiting from your terminal — [job.ha7ch.com](https://job.ha7ch.com)
+Query Chinese big-tech campus + social recruiting from your terminal — [job.ha7ch.com](https://job.ha7ch.com)
 
 ```bash
 npx job-pro@latest tencent search "后台开发"
+npx job-pro@latest bytedance search "后台开发" --scope social
 ```
 
 No signup, no token, no proxy server. **50 companies, all live.** The CLI talks
 straight to each company's public API (e.g. `join.qq.com` for Tencent) and
 prints JSON. Pipe it into `jq`, Claude Code, anything.
+
+### Campus + social (1.1.0+)
+
+Every adapter accepts a unified `--scope` flag:
+
+```bash
+job-pro bytedance search "后台开发" --scope social --page-size 5
+job-pro xiaohongshu all                --scope campus
+job-pro find "AI infra"                --scope social --text
+```
+
+`--scope` works on `search`, `all`, `match`, and the cross-company `find`
+verb. Default (flag omitted) preserves each adapter's 1.0.93 behaviour
+bit-for-bit — usually campus or a mixed feed. Adapters that can't query
+the requested channel (Tencent / JD / Cainiao / WeBank / Hikvision / CICC /
+Unitree have no public social-hire API) refuse fast with a useful message
+instead of silently returning empty. On `find`, those companies are
+silently skipped and reported under `companies_skipped_by_scope`.
 
 Run `job-pro help` for the full company list, or see the roadmap matrix at
 [job.ha7ch.com](https://job.ha7ch.com). Per-release notes:

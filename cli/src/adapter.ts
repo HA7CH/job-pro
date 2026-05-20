@@ -20,11 +20,33 @@ import type { PositionSummary as TencentPositionSummary } from "./tencent.js";
 /** Canonical position summary keys shared across every adapter. */
 export type PositionSummary = TencentPositionSummary;
 
+/**
+ * One canonical scope name across the entire CLI surface (1.1.0+).
+ *
+ * The CLI `--scope` flag is parsed into this enum and passed straight into
+ * each adapter's `searchPositions` / `fetchAllPositions` options bag. Each
+ * adapter translates it to its own upstream channel / recruitType / jobType
+ * / workType / zpType / seasonType key — `scope` is the UBIQUITOUS NAME on
+ * the dispatcher side, the per-adapter shape is private.
+ *
+ * `undefined` (caller omitted `--scope`) is NOT the same as `"all"` — the
+ * former means "use the adapter's historical default" (preserves 1.0.93
+ * behaviour bit-for-bit); the latter means "explicitly fetch every channel
+ * and merge". Adapters MUST distinguish these two cases.
+ */
+export type PositionScope = "social" | "campus" | "intern" | "all";
+
 /** Permissive options bag — adapters validate their own keys. */
 export interface AdapterSearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /**
+   * Caller-requested recruit scope (1.1.0+). Adapters translate to their
+   * upstream channel/recruitType/jobType/workType key. `undefined` =
+   * adapter's historical default (preserves 1.0.93 behaviour).
+   */
+  scope?: PositionScope;
   [extra: string]: unknown;
 }
 
@@ -50,6 +72,15 @@ export interface AdapterFlowOptions {
  * upstream. The contract enforced here is "method exists with this signature".
  */
 export interface CompanyAdapter {
+  /**
+   * Scopes this adapter can actually query (1.1.0+). Optional for backward
+   * compatibility — `undefined` means "I accept all four" (`social`,
+   * `campus`, `intern`, `all`). The dispatcher uses this to fail fast with
+   * a useful message when a caller asks for `--scope <x>` and the adapter
+   * has structurally no such channel (e.g. Greenhouse boards are 100%
+   * social by convention; Tencent has no public social-hire API).
+   */
+  readonly supportedScopes?: ReadonlyArray<PositionScope>;
   searchPositions(opts?: AdapterSearchOptions): Promise<unknown>;
   fetchAllPositions(opts?: AdapterAllOptions): Promise<unknown>;
   fetchPositionDetail(postId: string): Promise<unknown>;
