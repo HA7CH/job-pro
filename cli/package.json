@@ -1,6 +1,6 @@
 {
   "name": "@ha7ch/job-pro",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Query Chinese big-tech campus + social recruiting + auto-apply from your terminal. 50 companies, all 50 live (46 via official APIs, 4 via Liepin third-party fallback). 45/50 with end-to-end verified apply endpoints; 5 structurally-external (Liepin IM × 4 + Unitree WeChat). Unified `--scope social|campus|intern|all` flag across every adapter. No signup, no token, no server.",
   "homepage": "https://job.ha7ch.com",
   "repository": "https://github.com/HA7CH/job-pro",

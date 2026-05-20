@@ -27,11 +27,12 @@
 import { createAdapter } from "./feishu.js";
 
 /** Recruit scopes MiniMax can serve.
- *  MiniMax's multi-tenant Feishu portal (channel "379481") returns a unified
- *  feed — recruit_type values include both 实习 and 正式 mixed together with
- *  no portal-level scope switch. The dispatcher accepts social/campus/all
- *  but every scope hits the same call. */
-export const supportedScopes = ["social", "campus", "all"] as const;
+ *  Probed 2026-05-21: /api/v1/config/job/filters/379481 declares exactly one
+ *  recruitment_type — {id:"2", name:"校招"}. Posts label themselves 正式 or
+ *  实习 in the mixed feed, but there is no 社招/Experienced top-level type on
+ *  this tenant; the factory's social fallback (recruitment_id_list=["101"])
+ *  returns 0 unconditionally. Drop social so dispatcher fail-fasts. */
+export const supportedScopes = ["campus", "intern", "all"] as const;
 
 export const {
   searchPositions,
