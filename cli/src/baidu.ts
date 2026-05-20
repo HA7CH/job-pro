@@ -686,8 +686,10 @@ export async function matchResume(
     };
   }
 
+  // Baidu rejects pageSize > ~20 when a keyword is supplied — use 20 for keyword
+  // search, then fall through to the no-keyword broad fetch for more candidates.
   const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, pageSize: 100, recruitType });
+  const list = await searchPositions({ keyword, pageSize: 20, recruitType });
   if (!list.ok) {
     return { ok: false as const, source: STUB_SOURCE, message: list.message, positions: [] };
   }

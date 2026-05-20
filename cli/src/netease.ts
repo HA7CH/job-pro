@@ -74,7 +74,7 @@
 //   work_cities   ← item.workPlaceNameList joined with " / "
 //   apply_url     ← https://hr.163.com/job-detail?id=${id}
 
-import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
@@ -478,13 +478,27 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const listResult = await searchPositions({ keyword, pageSize: 100, workType: "1" });
-  if (!listResult.ok) {
+  const queries = pickDistinctiveTerms(terms, 3);
+  if (!queries.length) queries.push(terms[0] ?? "");
+  const lists = await Promise.all(queries.map((q) => searchPositions({ keyword: q, pageSize: 100, workType: "1" })));
+  const seen = new Set<string>();
+  const pool: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of lists) {
+    if (!l.ok) { lastErr = l.message; continue; }
+    for (const p of l.positions) {
+      if (!seen.has(p.post_id)) { seen.add(p.post_id); pool.push(p); }
+    }
+  }
+  if (!pool.length) {
+    const broad = await searchPositions({ pageSize: 100, workType: "1" });
+    if (broad.ok) pool.push(...broad.positions);
+  }
+  if (!pool.length) {
     return {
       ok: false as const,
       source: SOURCE,
-      message: listResult.message,
+      message: lastErr ?? "no positions returned",
       positions: [] as PositionSummary[],
     };
   }
@@ -499,7 +513,7 @@ export async function matchResume(
   };
   const scored: Scored[] = [];
 
-  const shortlist = listResult.positions.slice(0, candidates);
+  const shortlist = pool.slice(0, candidates);
   for (const p of shortlist) {
     // Quick score from summary fields first
     const summaryBlob = [p.title, p.project, p.bgs, p.work_cities, p.recruit_label].join(" ");
@@ -534,7 +548,7 @@ export async function matchResume(
   let finalList = scored.slice(0, topN);
   if (!finalList.length) {
     // Fall back: return first topN from list without enrichment
-    finalList = listResult.positions.slice(0, topN).map((position) => ({
+    finalList = pool.slice(0, topN).map((position) => ({
       score: 0,
       position,
       reasons: [],

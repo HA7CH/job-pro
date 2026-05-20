@@ -747,12 +747,14 @@ export async function matchResume(
   }
   scored.sort((a, b) => b.score - a.score);
 
-  const matches = scored.slice(0, topN).map((s) => ({
-    ...summarizePosition(s.raw),
-    score: s.score,
-    matched_terms: s.matched_terms,
-    city_match: s.city_match,
-  }));
+  const matches = scored.length
+    ? scored.slice(0, topN).map((s) => ({
+        ...summarizePosition(s.raw),
+        score: s.score,
+        matched_terms: s.matched_terms,
+        city_match: s.city_match,
+      }))
+    : rawCorpus.slice(0, topN).map((r) => summarizePosition(r));
 
   return {
     ok: true as const,

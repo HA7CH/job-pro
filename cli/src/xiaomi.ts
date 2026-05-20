@@ -98,7 +98,7 @@
 //   work_cities   ← item.city_info.name + city_list joined with " / " for multi-city
 //   apply_url     ← https://xiaomi.jobs.f.mioffice.cn/campus/position/${id}/detail
 
-import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
@@ -704,31 +704,38 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100, channel });
-  if (!list.ok) {
-    return {
-      ok: false,
-      source: "xiaomi.jobs.f.mioffice.cn",
-      message: list.message,
-      positions: [],
-    };
-  }
-
   const defaultRecruitId = channel === "internship" ? "202" : "201";
-  const payload: Record<string, unknown> = {
-    keyword,
-    limit: 100,
-    offset: 0,
-    portal_type: 3,
-    portal_entrance: 1,
-    language: "zh",
-  };
-  if (channel !== "social") {
-    payload.recruitment_id_list = [defaultRecruitId];
+  const queries = pickDistinctiveTerms(terms, 3);
+  if (!queries.length) queries.push(terms[0] ?? "");
+  const [posLists, rawResults] = await Promise.all([
+    Promise.all(queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100, channel }))),
+    Promise.all(queries.map((q) => {
+      const payload: Record<string, unknown> = {
+        keyword: q, limit: 100, offset: 0, portal_type: 3, portal_entrance: 1, language: "zh",
+      };
+      if (channel !== "social") {
+        payload.recruitment_id_list = [defaultRecruitId];
+      }
+      return call<RawSearchData>("/search/job/posts", payload, channel);
+    })),
+  ]);
+  const seen = new Set<string>();
+  const pool: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of posLists) {
+    if (!l.ok) { lastErr = l.message; continue; }
+    for (const p of l.positions) {
+      if (!seen.has(p.post_id)) { seen.add(p.post_id); pool.push(p); }
+    }
   }
-  const raw = await call<RawSearchData>("/search/job/posts", payload, channel);
-  const rawPosts: RawJobPost[] = raw.ok ? (raw.data?.job_post_list ?? []) : [];
+  if (!pool.length) {
+    const broad = await searchPositions({ page: 1, pageSize: 100, channel });
+    if (broad.ok) pool.push(...broad.positions);
+  }
+  if (!pool.length) {
+    return { ok: false, source: "xiaomi.jobs.f.mioffice.cn", message: lastErr ?? "no positions returned", positions: [] };
+  }
+  const rawPosts: RawJobPost[] = rawResults.flatMap((r) => r.ok ? (r.data?.job_post_list ?? []) : []);
 
   const rawById = new Map<string, RawJobPost>();
   for (const p of rawPosts) {
@@ -744,7 +751,7 @@ export async function matchResume(
   };
   const scored: Scored[] = [];
 
-  for (const p of list.positions) {
+  for (const p of pool) {
     const rp = rawById.get(p.post_id);
     const blob = [
       p.title,
@@ -769,7 +776,7 @@ export async function matchResume(
 
   let shortlist = scored.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = pool.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],

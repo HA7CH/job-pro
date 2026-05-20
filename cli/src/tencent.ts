@@ -622,12 +622,16 @@ const CITY_VOCAB = new Set([
   "西安", "合肥", "天津", "厦门", "香港", "remote", "远程",
 ]);
 
-// Match a short vocab term against haystack with word-style boundaries when
-// the term is 1-2 chars long, so "c" matches "C++" / "C language" but NOT the
-// "c" inside "TypeScript". Longer terms keep the original substring match,
-// which is forgiving across camelCase / kebab-case variations like "FastAPI".
+// Match a vocab term against haystack with word-style boundaries for Latin
+// terms (e.g. "rust" must not fire on "Trustworthy", "lua" must not fire on
+// "evaluation"). CJK terms keep substring matching since Chinese has no
+// inter-character boundary concept and false-positive risk is much lower.
 function termMatches(haystack: string, term: string): boolean {
-  if (term.length >= 3) return haystack.includes(term);
+  // Any CJK character → substring (Chinese vocab like "大模型", "多模态")
+  if (/[一-鿿]/.test(term)) return haystack.includes(term);
+  // Latin / digits / punctuation → enforce word boundary on both sides.
+  // Allows "c++" to match "C++ developer" but not "TypeScript", and "rust"
+  // to NOT match "Trustworthy" / "Robustness".
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(^|[^a-z0-9])${escaped}(?![a-z0-9])`, "i").test(haystack);
 }
@@ -680,12 +684,83 @@ export function scoreOverlap(haystack: string, terms: string[], cities: string[]
   return { score, reasons };
 }
 
+// Terms too common to be useful as search queries — appear on most engineering
+// resumes and would just dilute fan-out with off-topic candidates. We keep
+// them for scoring (so a "Python" hit in a JD still counts), but skip them
+// when picking which keywords to fire as API queries.
+const GENERIC_SEARCH_TERMS = new Set([
+  "python", "java", "c", "c++", "cpp", "javascript", "typescript", "go", "golang",
+  "docker", "kubernetes", "k8s", "linux", "aws", "gcp", "azure", "nginx",
+  "mysql", "postgresql", "postgres", "redis", "mongodb",
+  "ai", "ml", "cv", "nlp", "算法",
+]);
+
+export function pickDistinctiveTerms(terms: string[], max: number): string[] {
+  const picked: string[] = [];
+  for (const t of terms) {
+    if (picked.length >= max) break;
+    if (GENERIC_SEARCH_TERMS.has(t.toLowerCase())) continue;
+    picked.push(t);
+  }
+  return picked;
+}
+
+// ---------- degree requirement detection ----------
+
+export type DegreeLevel = "bachelor" | "master" | "phd";
+const DEGREE_RANK: Record<DegreeLevel, number> = { bachelor: 1, master: 2, phd: 3 };
+
+/**
+ * Parse a JD's requirements text (Chinese campus recruiting) and infer the
+ * MINIMUM degree the role accepts. Returns null when nothing degree-related
+ * is detected (in which case we don't filter — assume bachelor+).
+ *
+ * Ordering matters: we check the most-permissive patterns first so
+ * "本科及以上" beats a stray "硕士" mention elsewhere in the requirements.
+ */
+export function extractJobDegreeRequirement(text: string): DegreeLevel | null {
+  if (!text) return null;
+  const t = text;
+  // Most permissive — bachelor explicitly accepted
+  if (/本科及以上|学士及以上|本科\s*同学|应届本科/.test(t)) return "bachelor";
+  // Master or PhD (the "硕士 OR 博士" pattern)
+  if (
+    /硕士及以上|硕士\s*\/\s*博士|硕士\s*[、,，]\s*博士|硕士\s*或\s*博士|硕士\s*和\s*博士|优秀硕士|硕士\s*同学|应届硕士/.test(
+      t
+    )
+  )
+    return "master";
+  // PhD only / explicitly required
+  if (/博士及以上|博士在读|博士应届|博士\s*同学|博士学位|PhD/i.test(t)) return "phd";
+  // Bare mentions — least confident, ordered by exclusivity
+  if (/博士/.test(t)) return "phd";
+  if (/硕士/.test(t)) return "master";
+  if (/本科/.test(t)) return "bachelor";
+  return null;
+}
+
+/**
+ * Returns true when a candidate's highest degree satisfies a job's minimum
+ * requirement. Both args optional — null/undefined on either side defaults
+ * to "don't filter" (true), since we'd rather show a possibly-irrelevant
+ * job than silently hide a relevant one over guessed metadata.
+ */
+export function userMeetsDegreeRequirement(
+  userDegree: DegreeLevel | undefined,
+  jobRequires: DegreeLevel | null
+): boolean {
+  if (!jobRequires) return true;
+  if (!userDegree) return true;
+  return DEGREE_RANK[userDegree] >= DEGREE_RANK[jobRequires];
+}
+
 export async function matchResume(
   text: string,
-  opts: { topN?: number; candidates?: number } = {}
+  opts: { topN?: number; candidates?: number; userDegree?: DegreeLevel } = {}
 ) {
   const topN = Math.max(1, opts.topN ?? 5);
   const candidates = Math.max(topN, opts.candidates ?? 20);
+  const userDegree = opts.userDegree;
   const { terms, cities } = extractResumeSignals(text ?? "");
 
   if (!terms.length) {
@@ -696,13 +771,37 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100 });
-  if (!list.ok) return { ok: false, message: list.message, positions: [] };
+  // Multi-query fan-out: prior versions ANDed the top-3 terms into a single
+  // keyword (e.g. "python rust lua") which gave 0–2 hits because few jobs
+  // mention all three. Now we fire one search per distinctive term in
+  // parallel and dedupe the union by post_id.
+  const queries = pickDistinctiveTerms(terms, 5);
+  if (queries.length === 0) queries.push(...terms.slice(0, 3));
+
+  const lists = await Promise.all(
+    queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100 }))
+  );
+  const seen = new Set<string>();
+  const merged: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of lists) {
+    if (!l.ok) {
+      lastErr = l.message;
+      continue;
+    }
+    for (const p of l.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      merged.push(p);
+    }
+  }
+  if (merged.length === 0) {
+    return { ok: false, message: lastErr ?? "no positions returned across any query", positions: [] };
+  }
 
   type Pre = { score: number; position: PositionSummary; reasons: string[] };
   const pre: Pre[] = [];
-  for (const p of list.positions) {
+  for (const p of merged) {
     const blob = [p.title, p.project, p.recruit_label, p.bgs, p.work_cities].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
     if (score > 0) pre.push({ score, position: p, reasons });
@@ -711,20 +810,26 @@ export async function matchResume(
 
   let shortlist = pre.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = merged.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],
     }));
   }
 
-  type Enriched = { score: number; row: PositionSummary & {
-    title_detail?: string;
-    direction?: string;
-    description?: string;
-    requirements?: string;
-    match_reasons: string[];
-  }};
+  type Enriched = {
+    score: number;
+    meets: boolean;
+    row: PositionSummary & {
+      title_detail?: string;
+      direction?: string;
+      description?: string;
+      requirements?: string;
+      match_reasons: string[];
+      degree_required: DegreeLevel | null;
+      meets_degree_requirement: boolean;
+    };
+  };
   const enriched: Enriched[] = [];
   for (const { score: baseScore, position, reasons: baseReasons } of shortlist.slice(0, candidates)) {
     const detail = await fetchPositionDetail(position.post_id);
@@ -739,8 +844,11 @@ export async function matchResume(
     const { score: extraScore, reasons: extraReasons } = scoreOverlap(jdBlob, terms, cities);
     const combined = [...new Set([...baseReasons, ...extraReasons])].slice(0, 5);
     if (!combined.length) combined.push("no specific keyword overlap — surfaced from initial keyword search");
+    const degree_required = extractJobDegreeRequirement(detail.requirements ?? "");
+    const meets = userMeetsDegreeRequirement(userDegree, degree_required);
     enriched.push({
       score: baseScore + extraScore,
+      meets,
       row: {
         ...position,
         title_detail: detail.title,
@@ -748,17 +856,32 @@ export async function matchResume(
         description: detail.description,
         requirements: detail.requirements,
         match_reasons: combined,
+        degree_required,
+        meets_degree_requirement: meets,
       },
     });
   }
-  enriched.sort((a, b) => b.score - a.score);
+  // Sort: qualifying matches first (high→low score), then unqualifying
+  // (high→low score). Doesn't drop anything when userDegree is set — we
+  // want the user to see what's out there, just clearly flagged.
+  enriched.sort((a, b) => {
+    if (a.meets !== b.meets) return a.meets ? -1 : 1;
+    return b.score - a.score;
+  });
+
+  const top = enriched.slice(0, topN);
+  const filteredOut = top.filter((e) => !e.meets).length;
 
   return {
     ok: true,
     source: "join.qq.com",
     extracted_terms: terms,
     city_preferences: cities,
-    matches: enriched.slice(0, topN).map((e) => e.row),
+    user_degree: userDegree ?? null,
+    matches: top.map((e) => e.row),
+    degree_filter_note: userDegree
+      ? `sorted by qualifying-first (your degree: ${userDegree}); ${filteredOut} of top ${top.length} require a higher degree`
+      : undefined,
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
       "The only authority on selection is HR.",

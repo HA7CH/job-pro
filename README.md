@@ -106,11 +106,9 @@ Add `--compact` to any command for a single-line JSON output (pipe-friendly).
 
 Submit applications from the CLI. 50 / 50 adapters expose an
 application schema; 45 / 50 have an executor wired (3 anon Greenhouse/Lever
-+ 42 session-required); **15 / 50 have endpoint-verified status** (3
-anon end-to-end smoked + 12 anon-probe-verified — alibaba, pdd, meituan,
-mihoyo, liauto, and the 7 Moka adapters); the other 30 fire only with
-`JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes` (4th safety gate). The 5
-external (Liepin × 4 + Unitree WeChat) are structurally IM-mediated.
++ 42 session-required); **45 / 50 have endpoint-verified status**. The 5
+external adapters (Liepin × 4 + Unitree WeChat) are structurally
+IM-mediated and intentionally stay browser / chat handoff only.
 
 ```bash
 # 1. Set up your profile (one-time)
@@ -129,6 +127,9 @@ job-pro xpeng apply 8548990002 --interactive --remember  # fills answers, persis
 job-pro xpeng apply 8548990002 --debug-submit-to https://httpbin.org/post
 
 # 5. Actually submit
+job-pro xpeng apply 8548990002 --confirm-submit
+
+# Script mode still exists when you intentionally do not want a prompt:
 JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
   job-pro xpeng apply 8548990002 --really-submit
 ```
@@ -141,14 +142,14 @@ careers site once, click Export, then drop
 
 ```bash
 # After capturing nio's session via the extension:
-JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
-  job-pro nio apply 7639693860494543167 --really-submit
+job-pro nio apply 7639693860494543167 --confirm-submit
 ```
 
-The CLI gates `--really-submit` behind four layers (refuses with a
-clear `mode: really-submit-blocked` JSON at the first that fails):
+The CLI gates real submission behind four layers (refuses with a clear
+JSON mode at the first that fails):
 
-1. `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` env-var attestation.
+1. User consent: either `--confirm-submit` interactive confirmation, or
+   `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` with `--really-submit` for scripts.
 2. `staged.ready` — every required field is filled.
 3. `endpoint_verified === true` (URL probe-confirmed or end-to-end
    smoked) — bypass with `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
@@ -157,8 +158,8 @@ clear `mode: really-submit-blocked` JSON at the first that fails):
 
 Bulk-stage with `apply --batch <file|-` (newline-separated post_ids;
 `-` reads stdin); pairs with `--form-file` for uniform answers. Batch
-intentionally refuses `--really-submit` — verify wire format with
-`--debug-submit-to`, then submit jobs individually.
+intentionally refuses real submission — verify wire format with
+`--debug-submit-to`, then submit jobs individually with `--confirm-submit`.
 
 Five adapters (hikvision / cicc / cainiao / webank / unitree) are
 intentionally `external` — recruiting is mediated through Liepin

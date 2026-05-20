@@ -95,6 +95,89 @@ Pass criteria: `ok:true`, `total >= 0`, first-row keys present when
 - huawei / pingan / nio: confirmed structurally campus-only (huawei `jobType=SOCIAL` 405; pingan `recruitType="2"` silently ignored; nio social on separate login-gated stack); `supportedScopes` excludes `"social"`.
 <!-- /WORKTREE-K:TIER2_REST -->
 
+## 1.0.94 — `apply --confirm-submit`: preview, confirm, then fire
+
+`apply` no longer makes an interactive user copy a second command just to
+move from "resume looks OK" to "submit it." New flags:
+
+* `--confirm-submit` stages the application, prints the final payload,
+  asks for one explicit confirmation, then runs the existing official-site
+  submitter for that adapter.
+* `--submit-after-confirm` is an alias for the same flow.
+* `--really-submit` still exists for scripts and keeps the
+  `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` attestation.
+
+Batch real submission remains refused by design; use `--debug-submit-to`
+for batch wire-format checks, then submit individual jobs after preview.
+
+## 1.0.93 — `match` actually works: docx/pdf/json resume input, fixed false positives, degree-aware sort
+
+`job-pro <co> match` used to require a plain-text resume on stdin and
+silently fell apart in three places that, together, made it unusable
+for real users with real CVs:
+
+**Resume input (was: only stdin/.txt)**
+
+* New flag `--resume <path>` reads `.docx` (via mammoth), `.pdf`
+  (via pdf-parse with poppler fallback), `.json` (semantic flatten
+  of the HA7CH/Xihang and jsonresume.org shapes, with generic
+  string-leaf walk for unknown layouts), `.txt` / `.md` (raw).
+* `profile.resume_path` is now used as fallback when neither
+  positional arg nor stdin nor `--resume` is given. The field
+  doubles as the apply-time attachment path and the match-time
+  parsing source.
+* `mammoth` and `pdf-parse` added as runtime deps. PDF extraction
+  now runs both pdf-parse and poppler's `pdftotext` in parallel
+  and keeps whichever yielded more text — pdf-parse silently returns
+  only PDF section headers on Word-exported PDFs with AcroForm fields,
+  which used to manifest as a confident `matches: []`.
+
+**Bug 1 — false-positive skills (was: rust/lua/scala/ios in every CV)**
+
+`termMatches` did a bare `includes` for 3+ char Latin vocab. Result:
+`rust` matched "Trustworthy", `lua` matched "evaluation", `scala`
+matched "scalable", `ios` matched "scenarios". Those polluted
+`extracted_terms` and, through Bug 2 below, the search query.
+
+Fix: enforce word-boundary regex for all Latin terms regardless of
+length. CJK terms (e.g. `大模型`, `多模态`) keep substring matching
+since Chinese has no inter-character boundary concept.
+
+**Bug 2 — search-query recall (was: 0–2 hits from 230-job pools)**
+
+`matchResume` ANDed the top-3 extracted terms into a single keyword
+(e.g. `"python rust lua"`), which Tencent's `searchPositions` treats
+as conjunctive: jobs must mention all three. With Bug 1 polluting
+top-3, the query nearly always returned 0–2 results.
+
+Fix: fan out one search per *distinctive* term (skipping
+`GENERIC_SEARCH_TERMS` like python/docker/linux/ai/ml — common to
+every engineering CV and useless for narrowing), merge the union by
+`post_id`, then score the full pool. Currently wired only on tencent;
+the other 19 adapters' `matchResume` bodies are copy-pasted and still
+AND-join — propagating is deferred.
+
+**Degree-aware sort (was: 10/10 青云博士岗 for bachelor candidates)**
+
+`ResumeProfile` gains optional `degree` (`"bachelor"|"master"|"phd"`)
+and `graduation_year`. `profile lint` validates both when present.
+`matchResume` accepts `userDegree`, detects each JD's minimum degree
+requirement from Chinese requirements text (most-permissive pattern
+wins: `本科及以上` → bachelor, `硕士/博士` → master, `博士在读` → phd),
+annotates every returned row with `degree_required` +
+`meets_degree_requirement`, and sorts qualifying matches first
+(high→low score) then non-qualifying. Nothing is silently dropped — the
+top-level response gains `degree_filter_note` like "8 of top 10
+require a higher degree" so the user sees the full picture.
+
+**New test surface**
+
+`pnpm test:match` (21 assertions): word-boundary regressions on the
+classic decoy substrings, fan-out recall ≥ 8 matches on a synthetic
+AI-engineer CV, JD degree detection across 5 phrase variants,
+`userMeetsDegreeRequirement` across all 3 levels + undefined edges,
+end-to-end sort-order verification.
+
 ## 1.0.92 — CDP walker handles native \`<select>\` + reports missed fields
 
 Greenhouse boards have many \`multi_value_single_select\` questions

@@ -57,7 +57,7 @@
 //   work_cities    ← item.workLocations.join(" / ")
 //   apply_url      ← https://campus-talent.alibaba.com/campus/positionDetail?positionId=<id>
 
-import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
 import type { PositionScope } from "./adapter.js";
 export { extractResumeSignals, scoreOverlap, checkResume };
 
@@ -613,19 +613,29 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100 });
-  if (!list.ok) {
-    return {
-      ok: false as const,
-      message: (list as { message?: string }).message ?? "search failed",
-      positions: [],
-    };
+  const queries = pickDistinctiveTerms(terms, 3);
+  if (!queries.length) queries.push(terms[0] ?? "");
+  const lists = await Promise.all(queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100 })));
+  const seen = new Set<string>();
+  const pool: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of lists) {
+    if (!l.ok) { lastErr = (l as { message?: string }).message; continue; }
+    for (const p of l.positions) {
+      if (!seen.has(p.post_id)) { seen.add(p.post_id); pool.push(p); }
+    }
+  }
+  if (!pool.length) {
+    const broad = await searchPositions({ page: 1, pageSize: 100 });
+    if (broad.ok) pool.push(...broad.positions);
+  }
+  if (!pool.length) {
+    return { ok: false as const, message: lastErr ?? "no positions returned", positions: [] };
   }
 
   type Pre = { score: number; position: PositionSummary; reasons: string[] };
   const pre: Pre[] = [];
-  for (const p of list.positions) {
+  for (const p of pool) {
     const blob = [p.title, p.project, p.recruit_label, p.bgs, p.work_cities].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
     if (score > 0) pre.push({ score, position: p, reasons });
@@ -634,7 +644,7 @@ export async function matchResume(
 
   let shortlist = pre.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = pool.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],

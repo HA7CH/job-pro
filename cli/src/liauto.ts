@@ -87,7 +87,7 @@
 //   work_cities   ← item.location_title
 //   apply_url     ← https://www.lixiang.com/job/detail/<id>.html
 
-import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
@@ -485,15 +485,29 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-
-  // Fetch campus + intern listings with keyword filter
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100, campusOnly: true });
-  if (!list.ok) {
+  const queries = pickDistinctiveTerms(terms, 3);
+  if (!queries.length) queries.push(terms[0] ?? "");
+  const lists = await Promise.all(
+    queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100, campusOnly: true }))
+  );
+  const seen = new Set<string>();
+  const pool: PositionSummary[] = [];
+  let lastErr: string | undefined;
+  for (const l of lists) {
+    if (!l.ok) { lastErr = l.message; continue; }
+    for (const p of l.positions) {
+      if (!seen.has(p.post_id)) { seen.add(p.post_id); pool.push(p); }
+    }
+  }
+  if (!pool.length) {
+    const broad = await searchPositions({ page: 1, pageSize: 100, campusOnly: true });
+    if (broad.ok) pool.push(...broad.positions);
+  }
+  if (!pool.length) {
     return {
       ok: false as const,
       source: "www.lixiang.com",
-      message: list.message,
+      message: lastErr ?? "no positions returned",
       positions: [] as PositionSummary[],
     };
   }
@@ -501,7 +515,7 @@ export async function matchResume(
   type Scored = { score: number; position: PositionSummary; reasons: string[] };
   const scored: Scored[] = [];
 
-  for (const p of list.positions) {
+  for (const p of pool) {
     const blob = [p.title, p.project, p.recruit_label, p.work_cities].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
     if (score > 0) scored.push({ score, position: p, reasons });
@@ -511,7 +525,7 @@ export async function matchResume(
   let shortlist = scored.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
     // Fall back: return the first N positions regardless of score
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = pool.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],
@@ -531,7 +545,6 @@ export async function matchResume(
     source: "www.lixiang.com",
     extracted_terms: terms,
     city_preferences: cities,
-    keyword_used: keyword,
     matches,
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +

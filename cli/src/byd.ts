@@ -489,13 +489,17 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
   }
   scored.sort((a, b) => b.score - a.score);
 
+  const matches = scored.length
+    ? scored.slice(0, topN).map((s) => s.position)
+    : all.positions.slice(0, topN);
+
   return {
     ok: true as const,
     source: SOURCE,
     extracted_terms: terms,
     city_preferences: cities,
     candidate_pool: all.positions.length,
-    matches: scored.slice(0, topN).map((s) => s.position),
+    matches,
   };
 }
 

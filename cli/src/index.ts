@@ -69,7 +69,9 @@ import {
   promptUnansweredFields,
   formatStaged,
   type ApplyFormSchema,
+  type CapturedSession,
   type ResumeProfile,
+  type StagedApplication,
 } from "./apply.js";
 import { createInterface } from "node:readline";
 import {
@@ -257,10 +259,11 @@ PHASE 2 (auto-apply) — 50/50 schema-ok, **45/50 endpoint-verified**:
   ✅ cdp-real-browser (1)  — lilith (puppeteer for ByteDance _signature bypass).
   ⛔ external (5)          — hikvision / cicc / cainiao / webank (Liepin chat),
                               unitree (WeChat QR). Structurally non-API.
-\`apply <postId>\` dry-runs the staged POST. \`--really-submit\` runs the
-4-layer safety gate (env attest + staged.ready + endpoint_verified +
-session<30d). Run \`job-pro list\` for the ✓ column or \`job-pro recon\`
-for the live probe matrix. See docs/auto-apply.md.
+\`apply <postId>\` dry-runs the staged POST. \`--confirm-submit\` previews
+the final payload, asks once, then fires the right official-site submitter.
+\`--really-submit\` remains available for scripts via env attestation. Run
+\`job-pro list\` for the ✓ column or \`job-pro recon\` for the live probe
+matrix. See docs/auto-apply.md.
 
 VERBS (same surface for every company)
   search <kw>                       search openings (free text)
@@ -274,9 +277,12 @@ VERBS (same surface for every company)
   notices                           list official announcements (where supported)
   notice <id>                       show one announcement's content (tencent only)
   flow <question>                   answer using best-matching notices (tencent only)
-  match <resume-text-or-->          rank jobs by overlap with resume text
+  match [resume-text-or-]           rank jobs by overlap with resume text
+                                    --resume <path>            read .docx / .pdf / .json / .txt
                                     pass "-" to read resume from stdin
-  resume-check <resume-text-or-->   structural sanity check on a resume
+                                    omit args to use profile.resume_path
+  resume-check [resume-text-or-]    structural sanity check on a resume
+                                    --resume <path>            same format support as match
   apply <post_id>                   stage an application (Phase 2 dry-run)
                                     --schema                   dump raw schema (no profile needed)
                                     --print-form               emit a fillable JSON template
@@ -286,6 +292,8 @@ VERBS (same surface for every company)
                                     --batch <file|->           apply to many post_ids (one/line)
                                     --debug-submit-to <url>    verify wire format
                                     --debug-submit             ↑ shorthand → httpbin.org/post
+                                    --confirm-submit           preview, ask once, then submit
+                                    --submit-after-confirm     alias for --confirm-submit
                                     --really-submit            actually fire (env-gated)
                                     --via-cdp                  drive a puppeteer browser through
                                                                the SPA's apply form (DOM-based,
@@ -307,6 +315,8 @@ EXAMPLES
   job-pro tencent notices
   job-pro tencent flow "腾讯2026实习什么时候开始投递" --question-time 2026-05-13
   cat my-resume.md | job-pro tencent match -
+  job-pro tencent match --resume ~/cv.docx --top-n 10
+  job-pro tencent match --resume ~/resume.json --top-n 10
   job-pro tencent memory set "stack=Go,Python" "target_city=深圳"
   job-pro bytedance memory event applied "ByteDance 前端 7638940721068099893"
 
@@ -418,8 +428,15 @@ function emit(value: unknown, compact: boolean) {
   }
 }
 
-function readResumeArg(arg: string | undefined): string {
-  if (!arg) die("expected resume text or '-' for stdin");
+async function readResumeArg(
+  arg: string | undefined,
+  opts: { resumePathFlag?: string; allowProfileFallback?: boolean } = {}
+): Promise<string> {
+  // 1. --resume <path> flag (highest priority)
+  if (opts.resumePathFlag) {
+    return await readResumeByPath(opts.resumePathFlag);
+  }
+  // 2. positional "-" → stdin
   if (arg === "-") {
     try {
       return readFileSync(0, "utf8");
@@ -427,12 +444,73 @@ function readResumeArg(arg: string | undefined): string {
       die("could not read resume text from stdin");
     }
   }
-  // if it looks like a file path that exists, read it; otherwise treat as
-  // the resume text itself
+  // 3. positional path that exists → parse by extension
+  if (arg) {
+    try {
+      statSync(arg);
+      return await readResumeByPath(arg);
+    } catch {
+      return arg; // not a file → treat as literal resume text
+    }
+  }
+  // 4. fallback: profile.resume_path
+  if (opts.allowProfileFallback) {
+    const prof = loadProfileRaw();
+    if (prof.ok && prof.profile?.resume_path) {
+      return await readResumeByPath(prof.profile.resume_path);
+    }
+  }
+  die(
+    "expected resume input. Pass --resume <path-to-cv.docx|pdf|json|txt> " +
+      "or pipe text via '-', or set profile.resume_path."
+  );
+}
+
+async function readResumeByPath(path: string): Promise<string> {
   try {
-    return readFileSync(arg, "utf8");
-  } catch {
-    return arg;
+    const { readResumeFromPath } = await import("./resume.js");
+    const parsed = await readResumeFromPath(path);
+    if (!parsed.text || parsed.text.trim().length < 20) {
+      die(
+        `parsed ${parsed.source} resume at ${path} is empty or too short ` +
+          `(${parsed.text?.length ?? 0} chars). Confirm the file is a valid resume.`
+      );
+    }
+    return parsed.text;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    die(`failed to read resume from ${path}: ${msg}`);
+  }
+}
+
+async function confirmRealApplicationSubmit(opts: {
+  company: string;
+  postId: string;
+  staged: StagedApplication;
+  session: CapturedSession | null;
+}): Promise<boolean> {
+  console.log(formatStaged(opts.staged));
+  if (opts.session) {
+    console.log(
+      `\nSession captured (~/.jobpro/${opts.company}.session.json): ` +
+        `${opts.session.cookies.length} cookies + ${Object.keys(opts.session.headers).length} auth headers.`
+    );
+  }
+  console.log(
+    `\nThis will submit a real application to ${opts.staged.submit_endpoint ?? opts.staged.apply_url}.`
+  );
+  console.log(
+    `Confirm the resume and answers above are OK, then type \`submit\` to continue.`
+  );
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(`Submit ${opts.company} ${opts.postId}? `, resolve);
+    });
+    return answer.trim().toLowerCase() === "submit";
+  } finally {
+    rl.close();
   }
 }
 
@@ -594,23 +672,43 @@ async function runCompany(
   if (verb === "match") {
     const { args: a, value: topN } = popFlagValue(args, "--top-n");
     const { args: a2, value: candidates } = popFlagValue(a, "--candidates");
-    const text = readResumeArg(a2[0]);
+    const { args: a3, value: resumePath } = popFlagValue(a2, "--resume");
+    const text = await readResumeArg(a3[0], {
+      resumePathFlag: resumePath,
+      allowProfileFallback: true,
+    });
+    // Pull degree from profile (no flag override yet — keeps things simple).
+    // Anything not in {bachelor, master, phd} is silently dropped, so a typo
+    // never breaks the call.
+    const profRaw = loadProfileRaw();
+    const rawDegree = profRaw.ok ? profRaw.profile?.degree : undefined;
+    const userDegree =
+      rawDegree === "bachelor" || rawDegree === "master" || rawDegree === "phd"
+        ? rawDegree
+        : undefined;
     return emit(
       await adapter.matchResume(text, {
         topN: topN ? Number(topN) : undefined,
         candidates: candidates ? Number(candidates) : undefined,
+        userDegree,
       }),
       compact
     );
   }
 
   if (verb === "resume-check") {
-    const text = readResumeArg(args[0]);
+    const { args: a, value: resumePath } = popFlagValue(args, "--resume");
+    const text = await readResumeArg(a[0], {
+      resumePathFlag: resumePath,
+      allowProfileFallback: true,
+    });
     return emit(adapter.checkResume(text), compact);
   }
 
   if (verb === "apply") {
     const reallySubmit = args.includes("--really-submit");
+    const confirmSubmit =
+      args.includes("--confirm-submit") || args.includes("--submit-after-confirm");
     const viaCdp = args.includes("--via-cdp");
     const printForm = args.includes("--print-form");
     const schemaOnly = args.includes("--schema");
@@ -629,11 +727,11 @@ async function runCompany(
     // non-`#`-prefixed line is a post_id. Output is a JSON array of
     // { post_id, result } so downstream tooling can iterate.
     if (batchPath) {
-      if (reallySubmit) {
+      if (reallySubmit || confirmSubmit) {
         die(
-          `--batch + --really-submit is intentionally refused. Submitting to ` +
+          `--batch + real submission is intentionally refused. Submitting to ` +
             `multiple jobs at once is the exact failure mode this CLI is designed to ` +
-            `prevent. Drop --really-submit and use --debug-submit-to <url> for batch ` +
+            `prevent. Drop the real-submit flag and use --debug-submit-to <url> for batch ` +
             `verification, or run apply one job at a time.`
         );
       }
@@ -717,7 +815,7 @@ async function runCompany(
     void aBatch;
 
     const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--schema | --print-form | --form-file <path> | --interactive [--remember] | --batch <file>] [--debug-submit-to <url> | --really-submit]`);
+    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--schema | --print-form | --form-file <path> | --interactive [--remember] | --batch <file>] [--debug-submit-to <url> | --confirm-submit | --really-submit]`);
 
     const fetchSchema = adapter.fetchApplicationSchema;
     if (typeof fetchSchema !== "function") {
@@ -873,53 +971,39 @@ async function runCompany(
       return Math.floor((Date.now() - ts) / 86_400_000);
     }
 
-    // --really-submit: actually hit the upstream endpoint. Guarded by both
-    // an env-var attestation and (for non-anon adapters) a session.json.
-    if (reallySubmit) {
-      const understood = process.env.JOB_PRO_I_UNDERSTAND_REAL_SUBMIT === "yes";
-      if (!understood) {
-        return emit(
-          {
-            ok: false,
-            source: company,
-            post_id: postId,
-            mode: "really-submit-blocked",
-            staged,
-            message:
-              `--really-submit is gated by an env-var attestation. To unlock, set ` +
-              `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes in your shell. This submission will ` +
-              `POST a real application to ${staged.submit_endpoint}; doing so without a ` +
-              `valid resume / answers is spam against the company's recruiters.`,
-          },
-          compact
-        );
-      }
+    // Real submit: actually hit the upstream endpoint. `--confirm-submit`
+    // gates it through an interactive preview/confirmation; `--really-submit`
+    // gates it through an env-var attestation for scripts. Non-anon
+    // adapters still require a captured session.json.
+    if (reallySubmit || confirmSubmit) {
+      const blockedMode = confirmSubmit ? "confirm-submit-blocked" : "really-submit-blocked";
       if (!staged.ready) {
         return emit(
           {
             ok: false,
             source: company,
             post_id: postId,
-            mode: "really-submit-blocked",
+            mode: blockedMode,
             staged,
             message: `${staged.unanswered_required.length} required field(s) still unanswered; refusing to submit incomplete application`,
           },
           compact
         );
       }
+      const kind = (sr.schema.submit_kind ?? "multipart-anon");
       // Speculative-endpoint gate (4th safety layer). 19 of 22 bespoke
       // multipart-session endpoints returned 404 on no-auth probe — the
       // inferred URLs are wrong guesses. Refusing by default prevents
       // accidental fires against broken endpoints; users who *want* to
       // shake out what the real endpoint should be opt in via env.
       const allowSpeculative = process.env.JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT === "yes";
-      if (staged.submit_kind !== "external" && staged.submit_kind !== "multipart-anon" && staged.endpoint_verified !== true && !allowSpeculative) {
+      if (kind !== "external" && staged.endpoint_verified !== true && !allowSpeculative) {
         return emit(
           {
             ok: false,
             source: company,
             post_id: postId,
-            mode: "really-submit-blocked",
+            mode: blockedMode,
             staged,
             message:
               `submit_endpoint for ${company} is speculative — inferred from JS-bundle recon, ` +
@@ -930,21 +1014,13 @@ async function runCompany(
           compact
         );
       }
-      // Submission flow selection by submit_kind. Only the generic
-      // multipart families are wired to actually fire today; everything
-      // else gets a useful refusal message.
-      const kind = (sr.schema.submit_kind ?? "multipart-anon");
-      const isAnonMultipart = kind === "multipart-anon";
-      const isSessionMultipart = kind === "multipart-session";
-      const isGenericMultipart = isAnonMultipart || isSessionMultipart;
-
       if (kind === "external") {
         return emit(
           {
             ok: false,
             source: company,
             post_id: postId,
-            mode: "really-submit-external",
+            mode: confirmSubmit ? "confirm-submit-external" : "really-submit-external",
             staged,
             submit_kind: kind,
             apply_url: staged.apply_url,
@@ -956,13 +1032,11 @@ async function runCompany(
           compact
         );
       }
-      // Family executors: each takes (staged, session, target) and returns
-      // a MultiStepResult. All gate on session.json existing.
-      // --via-cdp forces the puppeteer DOM-driven path for any adapter,
-      // bypassing the API endpoint and any body-shape uncertainty. The
-      // CDP executor walks the SPA's apply form like a human: click
-      // "投递", fill name/email/phone, upload resume, click submit.
-      // Slower + needs Chrome, but reliable when API is uncertain.
+      // Submission flow selection by submit_kind. Generic multipart families
+      // use submitApplication; proprietary families use a dedicated executor.
+      const isAnonMultipart = kind === "multipart-anon";
+      const isSessionMultipart = kind === "multipart-session";
+      const isGenericMultipart = isAnonMultipart || isSessionMultipart;
       const familyExecutor = viaCdp ? executeCdpRealBrowser :
         kind === "feishu-3-step" ? executeFeishu3Step :
         kind === "moka-aes" ? executeMokaApply :
@@ -970,6 +1044,29 @@ async function runCompany(
         kind === "beisen-italent" ? executeBeisenITalent :
         kind === "cdp-real-browser" ? executeCdpRealBrowser :
         null;
+
+      if (!familyExecutor && !isGenericMultipart) {
+        return emit(
+          {
+            ok: false,
+            source: company,
+            post_id: postId,
+            mode: blockedMode,
+            staged,
+            submit_kind: kind,
+            submit_notes: sr.schema.submit_notes,
+            message:
+              `submit_kind="${kind}" is unknown — no wired executor. The 7 ` +
+              `current families are: multipart-anon, multipart-session, ` +
+              `feishu-3-step, moka-aes, beisen-wecruit, beisen-italent, ` +
+              `cdp-real-browser. To add a new family, wire an executor in ` +
+              `cli/src/apply.ts. Use --debug-submit-to <url> in the meantime ` +
+              `to verify the wire format you'd want.`,
+          },
+          compact
+        );
+      }
+
       if (familyExecutor) {
         // --via-cdp on multipart-anon (xpeng/weride/hoyoverse) doesn't
         // need a session — Greenhouse/Lever forms accept anon submits.
@@ -981,7 +1078,7 @@ async function runCompany(
               ok: false,
               source: company,
               post_id: postId,
-              mode: "really-submit-blocked",
+              mode: blockedMode,
               staged,
               submit_kind: kind,
               message:
@@ -999,7 +1096,7 @@ async function runCompany(
               ok: false,
               source: company,
               post_id: postId,
-              mode: "really-submit-blocked",
+              mode: blockedMode,
               staged,
               submit_kind: kind,
               session_age_days: age,
@@ -1012,57 +1109,24 @@ async function runCompany(
             compact
           );
         }
-        const result = await familyExecutor(staged, session, { kind: "upstream" });
-        if (result.ok) {
-          memoryEvent("applied", `${company} ${postId} — ${staged.job_title}`);
+      } else if (!isAnonMultipart) {
+        if (!session) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: blockedMode,
+              staged,
+              message:
+                `no captured session at ~/.jobpro/${company}.session.json. Run ` +
+                `\`job-pro extension\` for the bundled MV3 path + Chrome install ` +
+                `walkthrough; log into the careers site, click Export, then ` +
+                `mv ~/Downloads/jobpro/${company}.session.json ~/.jobpro/`,
+            },
+            compact
+          );
         }
-        return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: true, result }, compact);
-      }
-      if (!isGenericMultipart) {
-        // Reachable only if a schema returns a SubmitKind that isn't in the
-        // current taxonomy (multipart-anon/session/feishu-3-step/moka-aes/
-        // beisen-wecruit/beisen-italent/cdp-real-browser/external). The
-        // SubmitKind type permits `(string & {})` extensibility, so a future
-        // contributor adding a new family without wiring it would land here.
-        return emit(
-          {
-            ok: false,
-            source: company,
-            post_id: postId,
-            mode: "really-submit-blocked",
-            staged,
-            submit_kind: kind,
-            submit_notes: sr.schema.submit_notes,
-            message:
-              `submit_kind="${kind}" is unknown — no wired executor. The 7 ` +
-              `current families are: multipart-anon, multipart-session, ` +
-              `feishu-3-step, moka-aes, beisen-wecruit, beisen-italent, ` +
-              `cdp-real-browser. To add a new family, wire an executor in ` +
-              `cli/src/apply.ts. Use --debug-submit-to <url> in the meantime ` +
-              `to verify the wire format you'd want.`,
-          },
-          compact
-        );
-      }
-      // Non-anon multipart families need session.json.
-      if (!isAnonMultipart && !session) {
-        return emit(
-          {
-            ok: false,
-            source: company,
-            post_id: postId,
-            mode: "really-submit-blocked",
-            staged,
-            message:
-              `no captured session at ~/.jobpro/${company}.session.json. Run ` +
-              `\`job-pro extension\` for the bundled MV3 path + Chrome install ` +
-              `walkthrough; log into the careers site, click Export, then ` +
-              `mv ~/Downloads/jobpro/${company}.session.json ~/.jobpro/`,
-          },
-          compact
-        );
-      }
-      if (!isAnonMultipart) {
         const age = sessionAgeDays(session);
         if (age !== null && age > maxAgeDays && !allowStaleSession) {
           return emit(
@@ -1070,7 +1134,7 @@ async function runCompany(
               ok: false,
               source: company,
               post_id: postId,
-              mode: "really-submit-blocked",
+              mode: blockedMode,
               staged,
               submit_kind: kind,
               session_age_days: age,
@@ -1082,11 +1146,98 @@ async function runCompany(
           );
         }
       }
+
+      if (confirmSubmit) {
+        if (compact) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: blockedMode,
+              staged,
+              message:
+                `--confirm-submit is interactive and cannot run with --compact. ` +
+                `Drop --compact, or use JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes with --really-submit for scripts.`,
+            },
+            compact
+          );
+        }
+        if (!process.stdin.isTTY) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: blockedMode,
+              staged,
+              message:
+                `--confirm-submit needs an interactive terminal for the final consent prompt. ` +
+                `Use --really-submit with JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes in non-interactive scripts.`,
+            },
+            compact
+          );
+        }
+        const confirmed = await confirmRealApplicationSubmit({
+          company,
+          postId,
+          staged,
+          session,
+        });
+        if (!confirmed) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: "confirm-submit-cancelled",
+              staged,
+              message: "submission cancelled by user",
+            },
+            compact
+          );
+        }
+      } else {
+        const understood = process.env.JOB_PRO_I_UNDERSTAND_REAL_SUBMIT === "yes";
+        if (!understood) {
+          return emit(
+            {
+              ok: false,
+              source: company,
+              post_id: postId,
+              mode: "really-submit-blocked",
+              staged,
+              message:
+                `--really-submit is gated by an env-var attestation. To unlock, set ` +
+                `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes in your shell. This submission will ` +
+                `POST a real application to ${staged.submit_endpoint}; doing so without a ` +
+                `valid resume / answers is spam against the company's recruiters. For an interactive ` +
+                `one-shot flow, use --confirm-submit instead.`,
+            },
+            compact
+          );
+        }
+      }
+
+      // Family executors: each takes (staged, session, target) and returns
+      // a MultiStepResult. All gate on session.json existing.
+      // --via-cdp forces the puppeteer DOM-driven path for any adapter,
+      // bypassing the API endpoint and any body-shape uncertainty. The
+      // CDP executor walks the SPA's apply form like a human: click
+      // "投递", fill name/email/phone, upload resume, click submit.
+      // Slower + needs Chrome, but reliable when API is uncertain.
+      if (familyExecutor) {
+        const result = await familyExecutor(staged, session, { kind: "upstream" });
+        if (result.ok) {
+          memoryEvent("applied", `${company} ${postId} — ${staged.job_title}`);
+        }
+        return emit({ mode: confirmSubmit ? "confirm-submit" : "really-submit", staged, submit_kind: kind, session_used: !!session, result }, compact);
+      }
       const result = await submitApplication(staged, { kind: "upstream" }, { session });
       if (result.ok) {
         memoryEvent("applied", `${company} ${postId} — ${staged.job_title}`);
       }
-      return emit({ mode: "really-submit", staged, submit_kind: kind, session_used: !!session, result }, compact);
+      return emit({ mode: confirmSubmit ? "confirm-submit" : "really-submit", staged, submit_kind: kind, session_used: !!session, result }, compact);
     }
 
     // Default: dry-run print, no network.
@@ -1116,7 +1267,8 @@ async function runCompany(
       console.log(
         `\nDry-run complete. To actually submit:\n` +
           `  • --debug-submit-to https://httpbin.org/post  — verify wire format\n` +
-          `  • JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes job-pro ${company} apply ${postId} --really-submit\n` +
+          `  • job-pro ${company} apply ${postId} --confirm-submit  — preview, confirm, submit\n` +
+          `  • JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes job-pro ${company} apply ${postId} --really-submit  — script mode\n` +
           (isAnon
             ? `  ${company} is Greenhouse/Lever (anonymous submission, no session needed).\n`
             : `  ${company} needs ~/.jobpro/${company}.session.json — capture via the browser extension.\n`)
@@ -2033,6 +2185,28 @@ Or copy the path to clipboard (macOS):
         if (!/\.(pdf|docx?|md|txt|rtf)$/i.test(lower))
           findings.push({ level: "WARN", check: "resume_path", message: `unusual extension: ${rp} (most ATS expect .pdf or .docx)` });
         else findings.push({ level: "PASS", check: "resume_path", message: rp });
+      }
+      // degree (optional — only validate when present)
+      if (p.degree !== undefined) {
+        const allowed = ["bachelor", "master", "phd"];
+        if (!allowed.includes(p.degree))
+          findings.push({
+            level: "FAIL",
+            check: "degree",
+            message: `"${p.degree}" not one of: ${allowed.join(" / ")}`,
+          });
+        else findings.push({ level: "PASS", check: "degree", message: p.degree });
+      }
+      // graduation_year (optional — basic sanity)
+      if (p.graduation_year !== undefined) {
+        const y = Number(p.graduation_year);
+        if (!Number.isInteger(y) || y < 1950 || y > 2100)
+          findings.push({
+            level: "FAIL",
+            check: "graduation_year",
+            message: `"${p.graduation_year}" not a plausible year (1950–2100)`,
+          });
+        else findings.push({ level: "PASS", check: "graduation_year", message: String(y) });
       }
       // custom
       const customCount = Object.keys(p.custom ?? {}).length;

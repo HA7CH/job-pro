@@ -169,19 +169,26 @@ your chosen echo server.
 ## Stage 6 — Actually submit
 
 ```bash
+$ job-pro xpeng apply 8548990002 --form-file /tmp/form.json --confirm-submit
+
+# Script mode is still available when you intentionally want no prompt:
 $ JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \
     job-pro xpeng apply 8548990002 --form-file /tmp/form.json --really-submit
 ```
 
-Three gates fire before any HTTP request:
+Four gates fire before any HTTP request:
 
-1. `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` env attestation.
+1. User consent: either type `submit` in the `--confirm-submit` prompt,
+   or set `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes` for script mode.
 2. `staged.ready` — every required field has a value.
-3. For non-anon adapters (everyone except Greenhouse/Lever), a captured
+3. `endpoint_verified === true` unless you explicitly set
+   `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes` while probing.
+4. For non-anon adapters (everyone except Greenhouse/Lever), a captured
    `~/.jobpro/<adapter>.session.json` from the browser extension.
 
 Missing any of those, the CLI returns `mode: "really-submit-blocked"`
-with a pointed remediation message instead of firing anything.
+or `mode: "confirm-submit-blocked"` with a pointed remediation message
+instead of firing anything.
 
 ## Stage 7 — Log it
 
