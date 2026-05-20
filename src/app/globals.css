@@ -274,11 +274,34 @@ button {
   font-size: 0.75rem;
   line-height: 1.5;
   color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.companion-text {
+  flex: 1;
+  min-width: 0;
 }
 .companion a {
   color: var(--foreground);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.companion-wechat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  padding: 0.1rem;
+  margin-left: auto;
+  transition: color 0.14s ease;
+}
+.companion-wechat:hover {
+  color: var(--foreground);
+}
+.companion-wechat svg {
+  width: 1rem;
+  height: 1rem;
 }
 
 /* ── company table (no dividers, tight rows) ── */
@@ -426,6 +449,70 @@ button {
 
 .link-row a.link-right {
   margin-left: auto;
+}
+
+/* ── WeChat QR modal ── */
+
+.wechat-overlay {
+  position: fixed;
+  inset: 0;
+  background: oklch(0 0 0 / 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 50;
+  animation: wechat-fade 0.14s ease;
+}
+
+@keyframes wechat-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.wechat-card {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  max-width: 22rem;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.875rem;
+  box-shadow: 0 10px 30px oklch(0 0 0 / 0.18);
+}
+
+.wechat-title {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+.wechat-qr {
+  width: 100%;
+  max-width: 16rem;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
+.wechat-hint {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  margin: 0;
+  text-align: center;
+}
+
+.wechat-hint a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* ── responsive (sub-560px) ── */

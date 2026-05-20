@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
 type Status = "live" | "building" | "none";
@@ -390,6 +390,7 @@ function statusClass(kind: Status): string {
 
 export default function Home() {
   const [copied, setCopied] = useState(false);
+  const [wechatOpen, setWechatOpen] = useState(false);
 
   async function copyPrompt() {
     try {
@@ -400,6 +401,15 @@ export default function Home() {
       // ignore — older browsers
     }
   }
+
+  useEffect(() => {
+    if (!wechatOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setWechatOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [wechatOpen]);
 
   return (
     <main className="page">
@@ -428,11 +438,23 @@ export default function Home() {
       </section>
 
       <p className="companion">
-        Pairs with{" "}
-        <a href="https://cv.ha7ch.com" target="_blank" rel="noopener noreferrer">
-          cv.ha7ch.com
-        </a>
-        {" "}— draft the resume you paste above.
+        <span className="companion-text">
+          Pairs with{" "}
+          <a href="https://cv.ha7ch.com" target="_blank" rel="noopener noreferrer">
+            cv.ha7ch.com
+          </a>
+          {" "}— draft the resume you paste above.
+        </span>
+        <button
+          type="button"
+          onClick={() => setWechatOpen(true)}
+          aria-label="WeChat group (bug reports & chat)"
+          className="companion-wechat"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213c0 .163.13.295.29.295a.32.32 0 0 0 .166-.054l1.903-1.114a.864.864 0 0 1 .717-.098a10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.81-.05c-.857-2.578.157-4.972 1.932-6.446c1.703-1.415 3.882-1.98 5.853-1.838c-.576-3.583-4.196-6.348-8.594-6.348M5.785 5.991c.642 0 1.162.529 1.162 1.18c0 .65-.52 1.178-1.162 1.178s-1.162-.528-1.162-1.179c0-.65.52-1.179 1.162-1.179m5.813 0c.642 0 1.162.529 1.162 1.18c0 .65-.52 1.178-1.162 1.178s-1.162-.528-1.162-1.179c0-.65.52-1.179 1.162-1.179m5.34 2.867c-1.797-.052-3.746.512-5.28 1.786c-1.72 1.428-2.687 3.72-1.78 6.22c.942 2.453 3.666 4.229 6.884 4.229c.826 0 1.622-.12 2.361-.336a.72.72 0 0 1 .598.082l1.584.926a.27.27 0 0 0 .14.047c.134 0 .24-.111.24-.247c0-.06-.023-.12-.038-.177c-.004-.005-.156-.586-.32-1.214a.5.5 0 0 1-.023-.156a.5.5 0 0 1 .192-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983a.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982m5.107 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983a.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982" />
+          </svg>
+        </button>
       </p>
 
       <section className="company-table" aria-labelledby="table-title">
@@ -535,6 +557,39 @@ JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes \\
           ha7ch.com
         </a>
       </p>
+
+      {wechatOpen && (
+        <div
+          className="wechat-overlay"
+          onClick={() => setWechatOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="WeChat group QR code"
+        >
+          <div
+            className="wechat-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="wechat-title">Job Pro 交流群 · bug 反馈</p>
+            <img
+              src="/wechat-group.jpg"
+              alt="WeChat group QR code for Job Pro"
+              className="wechat-qr"
+            />
+            <p className="wechat-hint">
+              微信扫码加群。二维码过期后{" "}
+              <a
+                href="https://github.com/HA7CH/job-pro/issues/new"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                开个 issue
+              </a>{" "}
+              提醒更新。
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
