@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cli/package.json"
+  workflow_dispatch:
+
+jobs:
+  publish-cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci
+      - name: Compare local vs NPM version
+        id: vercheck
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          NPM_VERSION=$(npm view "$PKG_NAME" version 2>/dev/null || echo "0.0.0")
+          echo "name=$PKG_NAME"       >> "$GITHUB_OUTPUT"
+          echo "local=$PKG_VERSION"   >> "$GITHUB_OUTPUT"
+          echo "remote=$NPM_VERSION"  >> "$GITHUB_OUTPUT"
+          if [ "$PKG_VERSION" = "$NPM_VERSION" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish to NPM
+        if: steps.vercheck.outputs.skip == 'false'
+        run: |
+          echo "Publishing ${{ steps.vercheck.outputs.name }}@${{ steps.vercheck.outputs.local }} (NPM has ${{ steps.vercheck.outputs.remote }})"
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Skip notice
+        if: steps.vercheck.outputs.skip == 'true'
+        run: echo "Version ${{ steps.vercheck.outputs.local }} already on NPM, skipping."
