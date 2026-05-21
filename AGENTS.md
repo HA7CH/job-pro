@@ -1,4 +1,4 @@
-# job-pro — Claude Code Instructions
+# job-pro — Agent Instructions
 
 ## 每次完成代码更新后，必须同步更新以下两个文档
 
