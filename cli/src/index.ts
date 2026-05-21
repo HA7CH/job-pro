@@ -73,7 +73,6 @@ import {
   type ResumeProfile,
   type StagedApplication,
 } from "./apply.js";
-import { executeTencentStructuredFill } from "./tencent-structured-fill.js";
 import { createInterface } from "node:readline";
 import {
   memoryList,
@@ -946,7 +945,10 @@ async function runCompany(
       const kindForDebug = sr.schema.submit_kind ?? "multipart-anon";
       // --via-cdp + schema.structured_fill marker → adapter-specific structured-form executor.
       const useTencentStructuredDebug = viaCdp && staged.structured_fill?.adapter === "tencent";
-      const debugExecutor = useTencentStructuredDebug ? executeTencentStructuredFill :
+      const tencentDebugExecutor = useTencentStructuredDebug
+        ? (await import("./tencent-structured-fill.js")).executeTencentStructuredFill
+        : null;
+      const debugExecutor = tencentDebugExecutor ? tencentDebugExecutor :
         viaCdp ? executeCdpRealBrowser :
         kindForDebug === "feishu-3-step" ? executeFeishu3Step :
         kindForDebug === "moka-aes" ? executeMokaApply :
@@ -1047,7 +1049,10 @@ async function runCompany(
       // intentionally does NOT submit, since structured-form posts are too coupled to per-field validation
       // for blind --really-submit gating.
       const useTencentStructured = viaCdp && staged.structured_fill?.adapter === "tencent";
-      const familyExecutor = useTencentStructured ? executeTencentStructuredFill :
+      const tencentStructuredExecutor = useTencentStructured
+        ? (await import("./tencent-structured-fill.js")).executeTencentStructuredFill
+        : null;
+      const familyExecutor = tencentStructuredExecutor ? tencentStructuredExecutor :
         viaCdp ? executeCdpRealBrowser :
         kind === "feishu-3-step" ? executeFeishu3Step :
         kind === "moka-aes" ? executeMokaApply :

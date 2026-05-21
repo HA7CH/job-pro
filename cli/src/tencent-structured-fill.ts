@@ -1,33 +1,7 @@
-// Tencent `saveResumeInfo` structured-field filler.
-//
-// Background. The Tencent campus form at join.qq.com/resumeedit.html has
-// TWO independent stores:
-//   1. The PDF resume blob — bound to the post via POST /api/v1/resume/bindResume.
-//      This is what apply.ts has handled since 1.0.x via `submit_kind: "multipart-session"`.
-//   2. The structured candidate profile (教育经历 / 实习经历 / 项目经历 / 技能 /
-//      意向信息) — saved via POST /api/v1/resume/saveResumeInfo and reflected
-//      on every other Tencent post's resumeedit page.
-//
-// Until this module, store (2) was never auto-filled — bindResume succeeded
-// but the user opened the resumeedit page to a stale (or empty) structured
-// profile. Reviewing dozens of empty / 5-years-old fields is what made the
-// old `--via-cdp` flow feel half-finished.
-//
-// This module fills store (2) by driving the SPA's DOM directly — Vue +
-// Element Plus controlled inputs, repeatable sections (添加学历/添加实习/
-// 添加项目), `el-select` (hidden-but-clickable options) and skipping the
-// 3 `el-cascader` city fields (lazy-loaded, intentionally manual).
-//
-// Out-of-scope for this PR:
-//   * Raw HTTP to saveResumeInfo — body shape is unverified; we let the
-//     SPA's own fetch carry the changes via Vue state.
-//   * Cascader autofill (current_city, two study_locations) — graceful skip.
-//   * `--really-submit` (final 提交简历 click) — the user reviews + clicks.
-//   * Generalising the DOM walker to other Element-Plus adapters — Tencent-
-//     specific for now; a follow-up can extract the helpers if mihoyo /
-//     other EP-using adapters need them.
+// Tencent `saveResumeInfo` structured-field filler. Drives the resumeedit
+// SPA DOM (Vue + Element Plus) to populate education / internship /
+// project / skills / intent. Cascader city fields stay manual.
 
-import { existsSync } from "node:fs";
 import type { CapturedSession, StagedApplication } from "./apply.js";
 import type { SubmitTarget, FeishuStepLog, MultiStepResult } from "./apply.js";
 import { loadProfile } from "./apply.js";
@@ -41,7 +15,7 @@ import { withPage, injectCookies } from "./cdp.js";
 // (better than nothing).
 
 export interface ProfileEducation {
-  level?: "本科" | "硕士研究生" | "博士研究生" | "高中" | "大专" | string;
+  level?: "本科" | "硕士研究生" | "博士研究生" | "高中" | "大专";
   school?: string;
   department?: string;
   major?: string;
@@ -50,7 +24,7 @@ export interface ProfileEducation {
   city?: string;           // skipped (cascader); kept for future use.
   gpa?: string;            // optional, written into GPA-GPA input.
   gpa_base?: string;       // optional, written into GPA-BASE input.
-  rank?: "前5%" | "前10%" | "前20%" | "其他" | string;
+  rank?: string;
 }
 
 export interface ProfileInternship {
@@ -98,19 +72,6 @@ export interface StructuredProfileExtras {
   projects?: ProfileProject[];
   skills?: ProfileSkills;
   intent?: ProfileIntent;
-}
-
-// ---------- structured_fill schema marker ----------
-//
-// Lives on ApplyFormSchema.structured_fill so the dispatcher can route to
-// this executor when --via-cdp is requested for a Tencent post. Other
-// adapters can declare their own marker in a follow-up PR — we don't
-// generalise yet.
-
-export interface StructuredFillSpec {
-  adapter: "tencent";
-  /** True iff cascader fields are intentionally skipped. Forwarded to step-log. */
-  cascader_skip?: boolean;
 }
 
 // ---------- the executor ----------
@@ -173,24 +134,14 @@ export async function executeTencentStructuredFill(
     intent: profile.intent,
   };
 
-  // PDF path for the bindResume step (optional — if missing we still fill).
-  const resumeField = staged.staged.find((f) => f.name === "resume");
-  const resumePath = resumeField?.value && existsSync(resumeField.value) ? resumeField.value : null;
-
   const r = await withPage(async (page) => {
     await page.goto(editUrl, { waitUntil: "networkidle2", timeout: 30000 });
     steps.push({ step: "navigate", url: page.url(), status: 200, ok: true, message: `loaded ${page.url()}` });
 
-    // Wait for the SPA form to mount — we look for the "教育经历" section
-    // header which is rendered as plain text by the SPA on every resumeedit
-    // load (logged-in or not). If we never see it, the user probably isn't
-    // logged in and the SPA bounced to the homepage.
-    try {
-      await page.waitForSelector("body", { timeout: 5000 });
-    } catch {
-      steps.push({ step: "wait-form", url: page.url(), status: 0, ok: false, message: "form root never rendered" });
-      return { kind: "no-form" as const };
-    }
+    // SPA form-mount gate: look for the "教育经历" section header (rendered
+    // as plain text on every successful resumeedit load) and the school
+    // input. If neither shows up, the user isn't logged in and the SPA
+    // bounced to the homepage.
     const formLoaded: boolean = await page.evaluate(() => {
       return document.body.innerText.includes("教育经历") && !!document.querySelector('input[placeholder="请输入学校名称"]');
     });
@@ -205,12 +156,6 @@ export async function executeTencentStructuredFill(
       return { kind: "debug" as const };
     }
 
-    // -----------------------------------------------------------------
-    // Fill the structured fields. All DOM work happens in one big
-    // page.evaluate so we don't pay 25× round-trip cost — the helpers
-    // (native setter, el-select hidden click, section locator) are
-    // defined inline inside the page context.
-    // -----------------------------------------------------------------
     const fillResult: {
       filled: string[];
       skipped: string[];
@@ -247,23 +192,39 @@ export async function executeTencentStructuredFill(
       function sleep(ms: number): Promise<void> {
         return new Promise((r) => setTimeout(r, ms));
       }
-      async function pickElSelect(inputPlaceholder: string, optionText: string): Promise<boolean> {
-        const inp = document.querySelector<HTMLInputElement>(`input[placeholder="${inputPlaceholder}"]`);
+      async function waitFor(pred: () => boolean, timeoutMs = 1500, stepMs = 25): Promise<boolean> {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+          if (pred()) return true;
+          await sleep(stepMs);
+        }
+        return pred();
+      }
+      async function pickElSelect(inputPlaceholder: string, optionText: string, root: ParentNode = document): Promise<boolean> {
+        const inp = root.querySelector<HTMLInputElement>(`input[placeholder="${inputPlaceholder}"]`);
         if (!inp) return false;
         const wrap = (inp.closest(".el-select") as HTMLElement) ?? inp.parentElement;
         if (!wrap) return false;
         ["mousedown", "mouseup", "click"].forEach((t) => wrap.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })));
-        await sleep(200);
-        const dropdowns = Array.from(document.querySelectorAll<HTMLElement>(".el-select-dropdown"));
-        const target = dropdowns.find((dd) => {
-          const items = Array.from(dd.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).map((li) => li.textContent?.trim() ?? "");
-          return items.includes(optionText);
-        });
+        // Dropdowns attach to <body>, so discovery is always document-scoped.
+        const findTarget = (): HTMLElement | null => {
+          const dropdowns = Array.from(document.querySelectorAll<HTMLElement>(".el-select-dropdown"));
+          return dropdowns.find((dd) => {
+            const items = Array.from(dd.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).map((li) => li.textContent?.trim() ?? "");
+            return items.includes(optionText);
+          }) ?? null;
+        };
+        await waitFor(() => findTarget() !== null, 800);
+        const target = findTarget();
         if (!target) return false;
         const item = Array.from(target.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).find((li) => (li.textContent?.trim() ?? "") === optionText);
         if (!item) return false;
         ["mousedown", "mouseup", "click"].forEach((t) => item.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })));
-        await sleep(200);
+        // Settle: wait until the dropdown closes (Element Plus removes/hides it post-click).
+        await waitFor(() => {
+          const dd = Array.from(document.querySelectorAll<HTMLElement>(".el-select-dropdown")).find((d) => d === target);
+          return !dd || dd.style.display === "none" || !dd.isConnected;
+        }, 400);
         return true;
       }
       async function pickElSelectMulti(inputPlaceholder: string, optionTexts: string[]): Promise<string[]> {
@@ -272,24 +233,33 @@ export async function executeTencentStructuredFill(
         const wrap = (inp.closest(".el-select") as HTMLElement) ?? inp.parentElement;
         if (!wrap) return [];
         ["mousedown", "mouseup", "click"].forEach((t) => wrap.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })));
-        await sleep(200);
-        const dropdowns = Array.from(document.querySelectorAll<HTMLElement>(".el-select-dropdown"));
-        const target = dropdowns.find((dd) => {
-          const items = Array.from(dd.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).map((li) => li.textContent?.trim() ?? "");
-          return optionTexts.every((o) => items.includes(o));
-        });
+        const findTarget = (): HTMLElement | null => {
+          const dropdowns = Array.from(document.querySelectorAll<HTMLElement>(".el-select-dropdown"));
+          return dropdowns.find((dd) => {
+            const items = Array.from(dd.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).map((li) => li.textContent?.trim() ?? "");
+            return optionTexts.every((o) => items.includes(o));
+          }) ?? null;
+        };
+        await waitFor(() => findTarget() !== null, 800);
+        const target = findTarget();
         if (!target) return [];
         const picked: string[] = [];
         for (const opt of optionTexts) {
           const item = Array.from(target.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).find((li) => (li.textContent?.trim() ?? "") === opt);
           if (item) {
+            const beforeSelected = item.classList.contains("selected") || item.classList.contains("is-selected") || item.getAttribute("aria-selected") === "true";
             ["mousedown", "mouseup", "click"].forEach((t) => item.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })));
             picked.push(opt);
-            await sleep(150);
+            await waitFor(() => {
+              const sel = item.classList.contains("selected") || item.classList.contains("is-selected") || item.getAttribute("aria-selected") === "true";
+              return sel !== beforeSelected;
+            }, 300);
           }
         }
         document.body.click();
-        await sleep(150);
+        await waitFor(() => {
+          return !target.isConnected || target.style.display === "none";
+        }, 300);
         return picked;
       }
       function isolatedContainerFor(input: HTMLElement, placeholderSelector: string): HTMLElement | null {
@@ -363,10 +333,11 @@ export async function executeTencentStructuredFill(
           for (let i = 0; i < s.educations.length; i++) {
             const edu = s.educations[i];
             if (i > 0) {
+              const beforeCount = document.querySelectorAll('input[placeholder="请输入学校名称"]').length;
               const addBtn = Array.from(document.querySelectorAll("button")).find((b) => (b.textContent ?? "").trim().includes("添加学历"));
               if (!addBtn) { skipped.push(`education[${i}] (no 添加学历 button)`); continue; }
               addBtn.click();
-              await sleep(300);
+              await waitFor(() => document.querySelectorAll('input[placeholder="请输入学校名称"]').length > beforeCount, 1500);
             }
             const schools = Array.from(document.querySelectorAll<HTMLInputElement>('input[placeholder="请输入学校名称"]'));
             const slot = schools[i];
@@ -387,25 +358,8 @@ export async function executeTencentStructuredFill(
               if (edu.start) setNative(dateInps[0], edu.start);
               if (edu.end) setNative(dateInps[1], edu.end);
             }
-            // Degree (学历) dropdown — open the section's el-select and click the hidden option.
             if (edu.level) {
-              const xueliInp = container.querySelector<HTMLInputElement>('input[placeholder="请选择学历"]');
-              if (xueliInp) {
-                const w = (xueliInp.closest(".el-select") as HTMLElement) ?? xueliInp.parentElement;
-                if (w) {
-                  ["mousedown", "mouseup", "click"].forEach((t) => w.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })));
-                  await sleep(220);
-                  const dds = Array.from(document.querySelectorAll<HTMLElement>(".el-select-dropdown"));
-                  const dd = dds.find((d) => Array.from(d.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).some((li) => (li.textContent?.trim() ?? "") === (edu.level as string)));
-                  if (dd) {
-                    const item = Array.from(dd.querySelectorAll<HTMLElement>(".el-select-dropdown__item")).find((li) => (li.textContent?.trim() ?? "") === (edu.level as string));
-                    if (item) {
-                      ["mousedown", "mouseup", "click"].forEach((t) => item.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })));
-                      await sleep(200);
-                    }
-                  }
-                }
-              }
+              await pickElSelect("请选择学历", edu.level as string, container);
             }
             filled.push(`education[${i}]=${edu.school ?? "?"}`);
           }
@@ -413,13 +367,6 @@ export async function executeTencentStructuredFill(
 
         // ----- internships -----
         if (s.internships && s.internships.length > 0) {
-          // We never touch existing internship rows the user already cleaned up
-          // in the SPA — we only ADD. So fast-forward past any existing rows
-          // and click 添加实习经历 for each profile internship.
-          //
-          // Strategy: overwrite if there's exactly 1 existing row AND it's empty.
-          // Otherwise append. (Tencent's SPA pre-populates 1 empty row on a
-          // brand-new profile.)
           const startCount = document.querySelectorAll('input[placeholder="请输入实习公司"]').length;
           const shouldOverwriteFirst = startCount === 1 && (() => {
             const first = document.querySelector<HTMLInputElement>('input[placeholder="请输入实习公司"]');
@@ -428,10 +375,11 @@ export async function executeTencentStructuredFill(
           for (let i = 0; i < s.internships.length; i++) {
             const it = s.internships[i];
             if (!(i === 0 && shouldOverwriteFirst)) {
+              const beforeCount = document.querySelectorAll('input[placeholder="请输入实习公司"]').length;
               const addBtn = Array.from(document.querySelectorAll("button")).find((b) => (b.textContent ?? "").trim().includes("添加实习经历"));
               if (!addBtn) { skipped.push(`internship[${i}] (no add button)`); continue; }
               addBtn.click();
-              await sleep(300);
+              await waitFor(() => document.querySelectorAll('input[placeholder="请输入实习公司"]').length > beforeCount, 1500);
             }
             const companies = Array.from(document.querySelectorAll<HTMLInputElement>('input[placeholder="请输入实习公司"]'));
             const slot = companies[companies.length - 1];
@@ -458,10 +406,9 @@ export async function executeTencentStructuredFill(
 
         // ----- projects -----
         if (s.projects && s.projects.length > 0) {
-          // Mirror the internships pattern. Projects on Tencent have a
-          // "请输入项目名称（含校园实践）" placeholder that is also used by
-          // the 作品集 (作品链接) section — exclude that by scoping to
-          // ancestors that include "项目经历-" and don't include "作品链接".
+          // The 请输入项目名称 placeholder is also used by the 作品集 (作品链接)
+          // section — exclude that by scoping to ancestors that include
+          // "项目经历-" and don't include "作品链接".
           function projectSlots(): HTMLInputElement[] {
             return Array.from(document.querySelectorAll<HTMLInputElement>('input[placeholder*="请输入项目名称"]')).filter((inp) => {
               let p: HTMLElement | null = inp.parentElement;
@@ -479,10 +426,11 @@ export async function executeTencentStructuredFill(
           for (let i = 0; i < s.projects.length; i++) {
             const p = s.projects[i];
             if (!(i === 0 && shouldOverwriteFirst)) {
+              const beforeCount = projectSlots().length;
               const addBtn = Array.from(document.querySelectorAll("button")).find((b) => (b.textContent ?? "").trim().includes("添加项目经历"));
               if (!addBtn) { skipped.push(`project[${i}] (no add button)`); continue; }
               addBtn.click();
-              await sleep(300);
+              await waitFor(() => projectSlots().length > beforeCount, 1500);
             }
             const slots = projectSlots();
             const slot = slots[slots.length - 1];
@@ -539,26 +487,14 @@ export async function executeTencentStructuredFill(
       })();
     }, structured, profile.email, profile.phone);
 
+    const fillOk = fillResult.errors.length === 0 && fillResult.filled.length > 0;
     steps.push({
       step: "fill-structured",
       url: page.url(),
-      status: fillResult.errors.length === 0 ? 200 : 207,
-      ok: fillResult.errors.length === 0,
-      message: `filled ${fillResult.filled.length} fields; skipped ${fillResult.skipped.length}${fillResult.errors.length > 0 ? `; errors=${fillResult.errors.join(",")}` : ""}`,
+      status: fillResult.errors.length === 0 ? (fillOk ? 200 : 204) : 207,
+      ok: fillOk,
+      message: `filled ${fillResult.filled.length} fields; skipped ${fillResult.skipped.length}${fillResult.errors.length > 0 ? `; errors=${fillResult.errors.join(",")}` : ""}${fillResult.filled.length === 0 ? "; nothing filled (selectors likely stale)" : ""}`,
     });
-
-    // -----------------------------------------------------------------
-    // Optional second phase: bindResume (PDF attach). We don't fire it
-    // here — the SPA's own "更新" / "上传简历" button already handles PDF
-    // re-upload, and the existing multipart-session executor in apply.ts
-    // covers the bindResume call for users who want raw HTTP. This
-    // executor's job is the structured form; the PDF flow already works.
-    // We screenshot the result so the user can verify before reviewing
-    // the actual page.
-    // -----------------------------------------------------------------
-    if (resumePath) {
-      steps.push({ step: "resume-bind", url: page.url(), status: 0, ok: true, message: `resume PDF attached separately; bindResume not re-fired from this executor` });
-    }
 
     return { kind: "filled" as const, fillResult };
   });
@@ -575,10 +511,10 @@ export async function executeTencentStructuredFill(
   }
   const fr = v.fillResult!;
   return {
-    ok: fr.errors.length === 0,
+    ok: fr.errors.length === 0 && fr.filled.length > 0,
     posted_to: editUrl,
     message:
-      `structured fill complete — filled ${fr.filled.length}, skipped ${fr.skipped.length}, errors ${fr.errors.length}. ` +
+      `structured fill ${fr.filled.length > 0 ? "complete" : "no-op"} — filled ${fr.filled.length}, skipped ${fr.skipped.length}, errors ${fr.errors.length}. ` +
       `Review at ${editUrl} and click 提交简历 when ready. ` +
       `Manual fields (el-cascader): 当前所处地 + 每段教育的目前就读地.`,
     steps,

@@ -246,7 +246,7 @@ export type SubmitKind =
  * Element-Plus-specific; generalisation is a follow-up.
  */
 export interface StructuredFillSpec {
-  adapter: "tencent" | (string & {});
+  adapter: "tencent";
   /** True iff cascader fields are intentionally skipped (manual). */
   cascader_skip?: boolean;
 }
