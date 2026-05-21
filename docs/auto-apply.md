@@ -320,3 +320,69 @@ explanation (no public social-hire API; some are WeChat-only or
 recruiter-IM-mediated). Greenhouse / Lever boards (`xpeng`, `weride`,
 `hoyoverse`) declare `["social","all"]` (US/intl arm hires are social by
 convention).
+
+## Tencent structured fill (`--via-cdp`)
+
+Most adapters in this CLI stop at "attach the PDF resume to a specific
+post" — for the 20 `multipart-session` adapters, the PDF is the *only*
+artifact bound to the post (`POST .../bindResume`, `POST .../applyJob`,
+etc.). The candidate's structured profile (educations[] / internships[]
+/ projects[] / skills / intent) lives behind a separate endpoint that
+the SPA writes to as the user edits it (`POST .../saveResumeInfo` on
+Tencent's `join.qq.com`).
+
+Result: if a candidate's saved structured profile is empty or stale,
+`apply --really-submit` succeeds but the resulting HR-side view is a
+near-empty form with just the freshly-attached PDF. The PDF carries the
+content; the structured DB row is the wasteland.
+
+**Tencent only**, starting in 1.1.4: when you pass `--via-cdp` on a
+Tencent post, the adapter:
+
+1. Injects `~/.jobpro/tencent.session.json` cookies into the puppeteer
+   browser (same as `executeCdpRealBrowser`).
+2. Navigates to `resumeedit.html?postid=<id>` and waits for the SPA's
+   structured form to mount.
+3. Drives every supported field via the DOM — native value setter +
+   `input`/`change` events for Element-Plus `<el-input>`; click on the
+   hidden `.el-select-dropdown__item` for `<el-select>` (single +
+   multi); `添加学历`/`添加实习经历`/`添加项目经历` button click + new
+   slot locate-by-placeholder for repeatable sections.
+4. **Stops before submission.** The user reviews the populated form in
+   the puppeteer Chrome window (or copies the values to their own
+   logged-in browser if they prefer) and clicks 提交简历 themselves.
+
+Trigger:
+
+    job-pro tencent apply <postId> --via-cdp
+
+Profile keys consumed (all optional; see `examples/profile.example.json`):
+
+    educations[]  { level, school, department, major, start, end, gpa?, gpa_base?, rank? }
+    internships[] { company, role, start, end, ongoing?, description }
+    projects[]    { name, role, start, end, ongoing?, description, link? }
+    skills        { languages[], ai_skills, extra, homepage, english? }
+    intent        { cities[], bgs[], interview_city, earliest_start,
+                    duration, days_per_week, accept_other_cities? }
+
+Three fields stay manual — they're `<el-cascader>` widgets with lazy-
+loaded country→province→city trees, and the timing/state machine is too
+brittle to drive reliably end-to-end:
+
+* `当前所处地` (basic info → current city)
+* `目前就读地` per education row (study city)
+
+The adapter emits an explicit `skipped` entry for each — open the form,
+click those three picker buttons, you're done in 10 seconds.
+
+Why this is Tencent-only for now: the DOM walker assumes Vue +
+Element Plus selectors (`.el-select`, `.el-select-dropdown__item`,
+`.el-cascader`). Bytedance uses Arco-Design, Alibaba uses Ant-Design;
+their selectors differ. A follow-up PR can extract the walker into a
+per-design-system helper if a second adapter (likely mihoyo, also EP)
+wants it.
+
+Why no `--really-submit`: the final 提交简历 click on Tencent fires
+client-side validation that's too coupled to per-field semantics to gate
+blindly. The structured fill is "review-and-submit" by design — the
+fill costs the candidate ~5 seconds of review and 1 click.

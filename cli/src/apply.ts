@@ -87,6 +87,19 @@ export interface ResumeProfile {
   graduation_year?: number;
   /** Free-form passthroughs — keys are matched against per-question `name` fields. */
   custom?: Record<string, string>;
+  /**
+   * Structured candidate profile for adapters that drive a "saveResumeInfo"-
+   * style structured form via the DOM walker (currently Tencent only — see
+   * tencent-structured-fill.ts). All keys optional; the executor fills what
+   * the user provides and leaves the rest untouched. Shape lives in
+   * tencent-structured-fill.ts (StructuredProfileExtras) — kept opaque here
+   * so apply.ts has no inverse dep on the adapter-specific module.
+   */
+  educations?: unknown[];
+  internships?: unknown[];
+  projects?: unknown[];
+  skills?: Record<string, unknown>;
+  intent?: Record<string, unknown>;
 }
 
 const TEMPLATE: ResumeProfile = {
@@ -220,6 +233,24 @@ export type SubmitKind =
   | "external"              // Open apply_url in a browser (Liepin IM-mediated, WeChat-only, …)
   | (string & {});
 
+/**
+ * Marker that pivots the dispatcher from generic multipart submission to a
+ * per-adapter "drive the SPA's structured form" executor. Set by adapters
+ * whose upstream stores the candidate's structured profile (educations[] /
+ * internships[] / projects[] / …) on a separate endpoint from the resume
+ * PDF attach.
+ *
+ * Currently only Tencent (`join.qq.com saveResumeInfo`) declares this — see
+ * tencent-structured-fill.ts. Other multipart-session adapters (bytedance /
+ * alibaba / …) likely have a parallel gap but the DOM walker is
+ * Element-Plus-specific; generalisation is a follow-up.
+ */
+export interface StructuredFillSpec {
+  adapter: "tencent" | (string & {});
+  /** True iff cascader fields are intentionally skipped (manual). */
+  cascader_skip?: boolean;
+}
+
 export interface ApplyFormSchema {
   /** Always present so dry-run output identifies which company. */
   source: string;
@@ -249,6 +280,8 @@ export interface ApplyFormSchema {
    * `--really-submit` requires `true` OR `JOB_PRO_ALLOW_SPECULATIVE_ENDPOINT=yes`.
    */
   endpoint_verified?: boolean;
+  /** Per-adapter marker telling the dispatcher to use a structured-fill executor. */
+  structured_fill?: StructuredFillSpec;
   questions: ApplyQuestion[];
 }
 
@@ -274,6 +307,8 @@ export interface StagedApplication {
   submit_notes?: string;
   /** Mirrors ApplyFormSchema.endpoint_verified (whether endpoint is known-good). */
   endpoint_verified?: boolean;
+  /** Forwarded from ApplyFormSchema.structured_fill — drives dispatcher routing. */
+  structured_fill?: StructuredFillSpec;
   staged: StagedField[];
   unanswered_required: StagedField[];
   /** Set to true when every required field is filled. */
@@ -313,6 +348,7 @@ export function stageApplication(schema: ApplyFormSchema, profile: ResumeProfile
     submit_kind: schema.submit_kind,
     submit_notes: schema.submit_notes,
     endpoint_verified: schema.endpoint_verified,
+    structured_fill: schema.structured_fill,
     staged,
     unanswered_required,
     ready: unanswered_required.length === 0,
@@ -623,6 +659,8 @@ export interface BespokeApplySchemaConfig {
   submitNotes?: string;
   /** Set true when the endpoint URL is verified to exist (anon probe ≠ 404). */
   endpointVerified?: boolean;
+  /** Per-adapter structured-fill marker forwarded into the schema. */
+  structuredFill?: StructuredFillSpec;
   extraQuestions?: ApplyQuestion[];
 }
 
@@ -643,6 +681,7 @@ export function buildBespokeApplySchema(cfg: BespokeApplySchemaConfig): ApplyFor
     submit_kind: cfg.submitKind ?? "multipart-session",
     submit_notes: cfg.submitNotes,
     endpoint_verified: cfg.endpointVerified,
+    structured_fill: cfg.structuredFill,
     questions: [...standard, ...(cfg.extraQuestions ?? [])],
   };
 }
@@ -849,7 +888,7 @@ async function buildMultipartForm(staged: StagedApplication): Promise<FormData> 
 // JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes, AND (c) own the candidate
 // account being used. The CLI never logs in for the user.
 
-interface FeishuStepLog {
+export interface FeishuStepLog {
   step: string;
   url: string;
   status: number;
@@ -857,7 +896,7 @@ interface FeishuStepLog {
   message: string;
 }
 
-interface MultiStepResult extends SubmitResult {
+export interface MultiStepResult extends SubmitResult {
   steps?: FeishuStepLog[];
 }
 
