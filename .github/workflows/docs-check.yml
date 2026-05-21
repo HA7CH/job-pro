@@ -1,0 +1,77 @@
+name: docs-check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "cli/package.json"
+
+jobs:
+  check-docs:
+    name: Check changelog + devlog updated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from this PR
+        id: pr_version
+        run: |
+          VERSION=$(node -p "require('./cli/package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "PR version: $VERSION"
+
+      - name: Get version from main branch
+        id: main_version
+        run: |
+          git fetch origin main
+          VERSION=$(git show origin/main:cli/package.json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "main version: $VERSION"
+
+      - name: Check if version changed
+        id: version_changed
+        run: |
+          if [ "${{ steps.pr_version.outputs.version }}" != "${{ steps.main_version.outputs.version }}" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed: ${{ steps.main_version.outputs.version }} → ${{ steps.pr_version.outputs.version }}"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged, skipping docs check."
+          fi
+
+      - name: Check docs exist for new version
+        if: steps.version_changed.outputs.changed == 'true'
+        run: |
+          VERSION="${{ steps.pr_version.outputs.version }}"
+          CHANGELOG="docs/changelog/v${VERSION}.md"
+          DEVLOG="docs/devlog/v${VERSION}.md"
+          MISSING=()
+
+          if [ ! -f "$CHANGELOG" ]; then
+            MISSING+=("$CHANGELOG")
+          fi
+          if [ ! -f "$DEVLOG" ]; then
+            MISSING+=("$DEVLOG")
+          fi
+
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo ""
+            echo "❌ 版本号已更新到 v${VERSION}，但以下文档缺失："
+            for f in "${MISSING[@]}"; do
+              echo "   - $f"
+            done
+            echo ""
+            echo "请在本 PR 中补充以下文件："
+            echo "  📄 docs/changelog/v${VERSION}.md  （给用户看的更新说明，非技术语言）"
+            echo "  🔧 docs/devlog/v${VERSION}.md     （给开发者看的技术日志）"
+            echo ""
+            echo "文件格式参考：docs/changelog/v1.0.93.md 和 docs/devlog/v1.0.93.md"
+            echo "详细规则见：docs/README.md 和 CLAUDE.md"
+            exit 1
+          else
+            echo "✅ docs/changelog/v${VERSION}.md — 存在"
+            echo "✅ docs/devlog/v${VERSION}.md     — 存在"
+            echo "文档检查通过。"
+          fi
