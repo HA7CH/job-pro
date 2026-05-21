@@ -8,5 +8,56 @@
   "custom": {
     "linkedin_url": "https://www.linkedin.com/in/jian-zhang",
     "_comment": "Per-question answers go here, keyed by the field 'name' from the schema. Run `job-pro <co> apply <id> --print-form` to see which keys a specific job needs."
+  },
+  "_structured_comment": "The keys below are consumed by adapters that drive a 'structured profile' SPA form via puppeteer (currently Tencent via --via-cdp; see docs/auto-apply.md → 'Tencent structured fill'). Leave them out if you only need the PDF-attach path; they're additive.",
+  "educations": [
+    {
+      "level": "硕士研究生",
+      "school": "Harvard University",
+      "department": "Graduate School of Design",
+      "major": "Master in Design Engineering (MDE)",
+      "start": "2026-09-01",
+      "end": "2028-07-01"
+    },
+    {
+      "level": "本科",
+      "school": "Queen Mary University of London",
+      "department": "School of Electronic Engineering and Computer Science",
+      "major": "BSc Telecommunications Engineering and Management",
+      "start": "2019-09-01",
+      "end": "2023-07-01"
+    }
+  ],
+  "internships": [
+    {
+      "company": "Tencent",
+      "role": "PCG · Platform for AI Teams, Full-Stack Engineer Intern (PM-equivalent)",
+      "start": "2021-04-23",
+      "end": "2022-10-01",
+      "description": "Built an internal AI-team-facing platform; co-designed parameter-tuning UI with algorithm researchers."
+    }
+  ],
+  "projects": [
+    {
+      "name": "Proactive AI for Collaborative Writing (CHI 2026)",
+      "role": "Lead researcher",
+      "start": "2025-01-01",
+      "end": "2026-04-30",
+      "description": "Wizard-of-Oz experimental platform; accepted at ACM CHI 2026 Papers."
+    }
+  ],
+  "skills": {
+    "languages": ["TypeScript", "Python", "JavaScript"],
+    "ai_skills": "LLM product design + evaluation; Prompt engineering; OpenAI / Anthropic / LangChain integration.",
+    "extra": "Self-evaluation, hobbies, additional info. ≤500 characters for Tencent.",
+    "homepage": "https://www.example.tech"
+  },
+  "intent": {
+    "cities": ["北京", "上海", "深圳总部"],
+    "bgs": ["CSIG云与智慧产业事业群"],
+    "interview_city": "远程面试",
+    "earliest_start": "2026-06-01",
+    "duration": "3个月",
+    "days_per_week": "5天"
   }
 }

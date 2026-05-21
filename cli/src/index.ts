@@ -943,7 +943,13 @@ async function runCompany(
       // debug mode just navigates the apply_url and pauses for 3s without
       // submitting — useful to verify the SPA loads correctly).
       const kindForDebug = sr.schema.submit_kind ?? "multipart-anon";
-      const debugExecutor = viaCdp ? executeCdpRealBrowser :
+      // --via-cdp + schema.structured_fill marker → adapter-specific structured-form executor.
+      const useTencentStructuredDebug = viaCdp && staged.structured_fill?.adapter === "tencent";
+      const tencentDebugExecutor = useTencentStructuredDebug
+        ? (await import("./tencent-structured-fill.js")).executeTencentStructuredFill
+        : null;
+      const debugExecutor = tencentDebugExecutor ? tencentDebugExecutor :
+        viaCdp ? executeCdpRealBrowser :
         kindForDebug === "feishu-3-step" ? executeFeishu3Step :
         kindForDebug === "moka-aes" ? executeMokaApply :
         kindForDebug === "beisen-wecruit" ? executeBeisenWecruit :
@@ -1037,7 +1043,17 @@ async function runCompany(
       const isAnonMultipart = kind === "multipart-anon";
       const isSessionMultipart = kind === "multipart-session";
       const isGenericMultipart = isAnonMultipart || isSessionMultipart;
-      const familyExecutor = viaCdp ? executeCdpRealBrowser :
+      // --via-cdp + schema.structured_fill marker → adapter-specific structured-form executor.
+      // Currently only Tencent declares structured_fill; the executor lives in tencent-structured-fill.ts.
+      // The user reviews the populated SPA page themselves and clicks 提交简历 manually — this executor
+      // intentionally does NOT submit, since structured-form posts are too coupled to per-field validation
+      // for blind --really-submit gating.
+      const useTencentStructured = viaCdp && staged.structured_fill?.adapter === "tencent";
+      const tencentStructuredExecutor = useTencentStructured
+        ? (await import("./tencent-structured-fill.js")).executeTencentStructuredFill
+        : null;
+      const familyExecutor = tencentStructuredExecutor ? tencentStructuredExecutor :
+        viaCdp ? executeCdpRealBrowser :
         kind === "feishu-3-step" ? executeFeishu3Step :
         kind === "moka-aes" ? executeMokaApply :
         kind === "beisen-wecruit" ? executeBeisenWecruit :

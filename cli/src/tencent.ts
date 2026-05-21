@@ -1052,7 +1052,8 @@ export async function fetchApplicationSchema(postId: string): Promise<
       submitKind: "multipart-session",
       endpointVerified: true,
       submitNotes:
-        "Tencent join.qq.com — POST /api/v1/resume/bindResume with session cookie + CSRF. Endpoint extracted from join.qq.com's p_zh-cn_post_detail.build.js bundle (sibling action endpoints /openResume, /saveResumeInfo, /uploadFile all probed → 200 + {message:\"未登录或登录已过期\",status:401}). bindResume is the route that binds a saved resume to a specific post = the apply action. Body shape still needs validation against a real candidate session.",
+        "Tencent join.qq.com — POST /api/v1/resume/bindResume with session cookie + CSRF. Endpoint extracted from join.qq.com's p_zh-cn_post_detail.build.js bundle (sibling action endpoints /openResume, /saveResumeInfo, /uploadFile all probed → 200 + {message:\"未登录或登录已过期\",status:401}). bindResume is the route that binds a saved resume to a specific post = the apply action. With --via-cdp, the structured profile (educations/internships/projects/skills/intent) is also driven via the DOM walker (see tencent-structured-fill.ts). 3 el-cascader city fields (当前所处地 + 2× 目前就读地) stay manual.",
+      structuredFill: { adapter: "tencent", cascader_skip: true },
     }),
   };
 }

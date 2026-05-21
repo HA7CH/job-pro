@@ -4,6 +4,65 @@ Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
 This file is the human-readable narrative of how we got here, not a
 mechanical diff log — for that, `git log --oneline cli/`.
 
+## 1.1.4 — Tencent structured fill (`saveResumeInfo`)
+
+The 20 `multipart-session` adapters all share a gap that's been silent
+until now: they only attach the PDF resume to a post (`bindResume` and
+its variants). The candidate's *structured profile* — educations[] /
+internships[] / projects[] / skills / intent — lives on a sibling
+endpoint that's been entirely untouched. Result: applying succeeded but
+the HR view showed the candidate's structured profile from years ago
+(or empty).
+
+This release fixes it for Tencent (`join.qq.com`). When you pass
+`--via-cdp` on a Tencent post, the adapter now drives the SPA's
+structured form via the DOM — Element-Plus `el-input` / `el-select`
+(single + multi) / `el-textarea`, plus the repeatable
+`添加学历` / `添加实习经历` / `添加项目经历` sections. The user reviews
+the populated form and clicks 提交简历 themselves (no
+`--really-submit` for this path — structured-form validation is too
+coupled to per-field semantics to gate blindly).
+
+Three `el-cascader` city pickers stay manual (`当前所处地` + each
+education's `目前就读地`); the timing/state machine on those is too
+brittle to drive reliably. The adapter emits an explicit `skipped`
+step-log entry for each, and the user clicks them in 10 seconds.
+
+New keys (all optional) on `profile.json`:
+
+* `educations[]`  — `{ level, school, department, major, start, end,
+  gpa?, gpa_base?, rank? }`
+* `internships[]` — `{ company, role, start, end, ongoing?, description }`
+* `projects[]`    — `{ name, role, start, end, ongoing?, description,
+  link? }`
+* `skills`        — `{ languages[], ai_skills, extra, homepage }`
+* `intent`        — `{ cities[], bgs[], interview_city, earliest_start,
+  duration, days_per_week, accept_other_cities? }`
+
+See `examples/profile.example.json` and `docs/auto-apply.md →
+"Tencent structured fill"` for full schema + walkthrough.
+
+This is Tencent-only — Bytedance uses Arco, Alibaba uses Ant, the
+selector vocabulary differs. A follow-up PR can extract the DOM walker
+into a per-design-system helper when a second EP-using adapter (likely
+mihoyo) needs it.
+
+Files added:
+* `cli/src/tencent-structured-fill.ts` — new executor + `StructuredProfileExtras` types.
+
+Files modified:
+* `cli/src/apply.ts` — `StructuredFillSpec` type + plumbing through
+  `ApplyFormSchema` / `StagedApplication` / `BespokeApplySchemaConfig` /
+  `buildBespokeApplySchema` / `stageApplication`; `ResumeProfile` gains
+  optional `educations` / `internships` / `projects` / `skills` /
+  `intent` slots; `FeishuStepLog` + `MultiStepResult` exported for
+  reuse by adapter-specific executors.
+* `cli/src/tencent.ts` — `fetchApplicationSchema` now passes
+  `structuredFill: { adapter: "tencent", cascader_skip: true }`.
+* `cli/src/index.ts` — dispatcher routes `--via-cdp` +
+  `structured_fill.adapter === "tencent"` to the new executor (both the
+  `--debug-submit` and `--really-submit` code paths).
+
 ## 1.1.0 — `--scope social|campus|intern|all`
 
 <!-- WORKTREE-A:CLI -->
