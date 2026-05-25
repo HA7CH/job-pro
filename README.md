@@ -1,8 +1,11 @@
 # job.pro
 
 [![ci](https://github.com/HA7CH/job-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/HA7CH/job-pro/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/job-pro.svg)](https://www.npmjs.com/package/job-pro)
+[![npm](https://img.shields.io/npm/v/%40ha7ch%2Fjob-pro.svg)](https://www.npmjs.com/package/@ha7ch/job-pro)
+[![read live](https://img.shields.io/badge/read--live-50%20%2F%2050-brightgreen)](https://job.ha7ch.com)
 [![apply ready](https://img.shields.io/badge/apply--ready-45%20%2F%2050-green)](./docs/auto-apply.md)
+[![license MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![node >=18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](./cli/package.json)
 
 Query Chinese big-tech campus + social recruiting from your terminal — [job.ha7ch.com](https://job.ha7ch.com)
 

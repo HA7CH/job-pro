@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-flight ci runs for the same ref when a new commit lands — avoids
+# burning runner minutes on stale PR pushes. main runs always finish (the
+# release workflow gates on a real ci conclusion).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
   cli-build:
     runs-on: ubuntu-latest

@@ -624,7 +624,8 @@ async function runCompany(
 
   if (verb === "detail") {
     const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} detail <post_id>`);
+    if (!postId || postId.startsWith("--"))
+      die(`usage: job-pro ${company} detail <post_id>`);
     return emit(await adapter.fetchPositionDetail(postId), compact);
   }
 
@@ -650,7 +651,8 @@ async function runCompany(
 
   if (verb === "notice") {
     const id = args[0];
-    if (!id) die(`usage: job-pro ${company} notice <id>`);
+    if (!id || id.startsWith("--"))
+      die(`usage: job-pro ${company} notice <id>`);
     return emit(await adapter.getNotice(id), compact);
   }
 
@@ -815,7 +817,8 @@ async function runCompany(
     void aBatch;
 
     const postId = args[0];
-    if (!postId) die(`usage: job-pro ${company} apply <post_id> [--schema | --print-form | --form-file <path> | --interactive [--remember] | --batch <file>] [--debug-submit-to <url> | --confirm-submit | --really-submit]`);
+    if (!postId || postId.startsWith("--"))
+      die(`usage: job-pro ${company} apply <post_id> [--schema | --print-form | --form-file <path> | --interactive [--remember] | --batch <file>] [--debug-submit-to <url> | --confirm-submit | --really-submit]`);
 
     const fetchSchema = adapter.fetchApplicationSchema;
     if (typeof fetchSchema !== "function") {
@@ -1813,7 +1816,7 @@ async function main() {
       }
     }
     console.log(`\n  Tally:`);
-    for (const [k, v] of [...tally.entries()].sort()) {
+    for (const [k, v] of [...tally.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       console.log(`    ${k.padEnd(20)}  ${v}`);
     }
     // Some adapters (cdp/lilith via puppeteer) keep the event loop alive

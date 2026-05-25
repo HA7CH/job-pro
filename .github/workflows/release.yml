@@ -1,20 +1,37 @@
 name: release
 
+# Triggered indirectly: ci runs on every push to main; once ci concludes
+# successfully we fire this workflow. This guarantees we never publish a
+# main commit that hasn't passed cli-build + test:unit + web-build.
+#
+# `workflow_dispatch` is kept as an escape hatch — if ci is red but you
+# need to ship a hotfix, you can publish manually after fixing the red.
 on:
-  push:
+  workflow_run:
+    workflows: ["ci"]
     branches: [main]
-    paths:
-      - "cli/package.json"
+    types: [completed]
   workflow_dispatch:
+
+permissions:
+  contents: write   # to push the git tag + create the GitHub Release
+  id-token: write   # for `npm publish --provenance`
 
 jobs:
   publish-cli:
+    # `workflow_run` fires for every conclusion (success / failure / cancelled).
+    # Skip everything unless the upstream ci job actually passed.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: cli
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tag + release lookups need full history
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -22,6 +39,7 @@ jobs:
           cache: npm
           cache-dependency-path: cli/package-lock.json
       - run: npm ci
+
       - name: Compare local vs NPM version
         id: vercheck
         run: |
@@ -36,13 +54,43 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish to NPM
+
+      - name: Publish to NPM (with provenance)
         if: steps.vercheck.outputs.skip == 'false'
         run: |
           echo "Publishing ${{ steps.vercheck.outputs.name }}@${{ steps.vercheck.outputs.local }} (NPM has ${{ steps.vercheck.outputs.remote }})"
-          npm publish
+          npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag + GitHub Release
+        if: steps.vercheck.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.vercheck.outputs.local }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping tag + release."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "release: $TAG"
+          git push origin "$TAG"
+
+          CHANGELOG="docs/changelog/v${VERSION}.md"
+          if [ -f "$CHANGELOG" ]; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file "$CHANGELOG"
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "Release ${TAG}. See docs/changelog/ for prior versions."
+          fi
+
       - name: Skip notice
         if: steps.vercheck.outputs.skip == 'true'
         run: echo "Version ${{ steps.vercheck.outputs.local }} already on NPM, skipping."

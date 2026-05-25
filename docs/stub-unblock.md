@@ -1,9 +1,14 @@
 # Unblocking the remaining 4 stubs
 
-Live count is **46 / 50**. This document is the feasibility log for the 4
-adapters still in `KNOWN_LIMITED` (see `cli/test/smoke.ts`). The earlier
-"10 stubs" / "7 stubs" matrix was successively cracked across iterations
-2–4 via:
+Live read coverage is **50 / 50** as of v1.1.0+ — the 4 adapters listed in
+the matrix below (hikvision / cicc / cainiao / webank) are routed through
+the Liepin aggregator (`api-c.liepin.com`); see `cli/src/liepin.ts`.
+`KNOWN_LIMITED` in `cli/test/smoke.ts` is now empty.
+
+This document is the feasibility log for those 4 adapters: it explains why
+their own portals aren't reachable, what we tried, and why Liepin is the
+current best fallback. The earlier "10 stubs" / "7 stubs" matrix was
+successively cracked across iterations 2–4 via:
 
 * iteration 2 (`6e22fba`) — Moka AES + Feishu tenant fixes + Beisen-iTalent
   → 13 unblocks

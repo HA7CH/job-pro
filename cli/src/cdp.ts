@@ -38,6 +38,10 @@ type AnyBrowser = {
   newPage: () => Promise<AnyPage>;
   close: () => Promise<void>;
   setCookie: (...cookies: AnyCookie[]) => Promise<void>;
+  // puppeteer-core's Browser exposes the underlying ChildProcess; we use it
+  // for synchronous SIGTERM in exit/SIGINT/SIGTERM handlers (async close()
+  // inside those handlers never gets awaited and leaks Chrome).
+  process?: () => { kill?: (signal?: string | number) => boolean } | null;
 };
 type AnyResponse = {
   url: () => string;
@@ -182,6 +186,9 @@ export async function getBrowser(): Promise<{ ok: true; browser: AnyBrowser } | 
     return { ok: false, error: result };
   }
   _browser = result;
+  // Arm the exit hook here (not in withPage) so every browser acquisition —
+  // including cookie-only paths — is covered against zombie Chrome processes.
+  ensureExitHook();
   return { ok: true, browser: result };
 }
 
@@ -198,28 +205,32 @@ export async function closeBrowser(): Promise<void> {
 }
 
 // On Node exit, best-effort close the browser to avoid zombie processes.
+// Node's 'exit' event never awaits returned promises, and SIGINT/SIGTERM
+// handlers here call process.exit() immediately afterward — either way an
+// async browser.close() would be aborted mid-flight, leaving Chrome alive.
+// So we synchronously SIGTERM the child Chrome process via browser.process().
 let _exitHookInstalled = false;
 function ensureExitHook(): void {
   if (_exitHookInstalled) return;
   _exitHookInstalled = true;
-  const cleanup = () => {
-    if (_browser) {
-      try {
-        // synchronous best-effort kill; puppeteer launches Chrome as a child
-        // process tracked by the Browser object, so close() handles SIGTERM.
-        void _browser.close().catch(() => undefined);
-      } catch {
-        /* ignore */
+  const killSync = () => {
+    if (!_browser) return;
+    try {
+      const child = _browser.process?.();
+      if (child && typeof child.kill === "function") {
+        child.kill("SIGTERM");
       }
+    } catch {
+      /* ignore */
     }
   };
-  process.on("exit", cleanup);
+  process.on("exit", killSync);
   process.on("SIGINT", () => {
-    cleanup();
+    killSync();
     process.exit(130);
   });
   process.on("SIGTERM", () => {
-    cleanup();
+    killSync();
     process.exit(143);
   });
 }

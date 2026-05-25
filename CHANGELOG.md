@@ -1,8 +1,30 @@
 # Changelog
 
-Job-pro releases are tracked on npm: <https://www.npmjs.com/package/job-pro>.
-This file is the human-readable narrative of how we got here, not a
-mechanical diff log — for that, `git log --oneline cli/`.
+Job-pro releases are tracked on npm:
+<https://www.npmjs.com/package/@ha7ch/job-pro>. This file is the
+human-readable narrative of how we got here, not a mechanical diff log —
+for that, `git log --oneline cli/`.
+
+## Per-release notes (v1.1.5 onward)
+
+Starting with v1.1.5 each release ships two short per-version files
+instead of a paragraph appended here:
+
+| Version | User-facing notes | Developer notes |
+| --- | --- | --- |
+| 1.1.14 | [docs/changelog/v1.1.14.md](./docs/changelog/v1.1.14.md) | [docs/devlog/v1.1.14.md](./docs/devlog/v1.1.14.md) |
+| 1.1.13 | [docs/changelog/v1.1.13.md](./docs/changelog/v1.1.13.md) | [docs/devlog/v1.1.13.md](./docs/devlog/v1.1.13.md) |
+| 1.1.12 | [docs/changelog/v1.1.12.md](./docs/changelog/v1.1.12.md) | [docs/devlog/v1.1.12.md](./docs/devlog/v1.1.12.md) |
+| 1.1.11 | [docs/changelog/v1.1.11.md](./docs/changelog/v1.1.11.md) | [docs/devlog/v1.1.11.md](./docs/devlog/v1.1.11.md) |
+| 1.1.10 | [docs/changelog/v1.1.10.md](./docs/changelog/v1.1.10.md) | [docs/devlog/v1.1.10.md](./docs/devlog/v1.1.10.md) |
+| 1.1.9  | [docs/changelog/v1.1.9.md](./docs/changelog/v1.1.9.md)   | [docs/devlog/v1.1.9.md](./docs/devlog/v1.1.9.md)   |
+| 1.1.8  | [docs/changelog/v1.1.8.md](./docs/changelog/v1.1.8.md)   | [docs/devlog/v1.1.8.md](./docs/devlog/v1.1.8.md)   |
+| 1.1.7  | [docs/changelog/v1.1.7.md](./docs/changelog/v1.1.7.md)   | [docs/devlog/v1.1.7.md](./docs/devlog/v1.1.7.md)   |
+| 1.1.6  | [docs/changelog/v1.1.6.md](./docs/changelog/v1.1.6.md)   | [docs/devlog/v1.1.6.md](./docs/devlog/v1.1.6.md)   |
+| 1.1.5  | [docs/changelog/v1.1.5.md](./docs/changelog/v1.1.5.md)   | [docs/devlog/v1.1.5.md](./docs/devlog/v1.1.5.md)   |
+
+The narrative entries below cover v0.x → v1.1.4. They are kept as a
+historical record of how the project's shape evolved.
 
 ## 1.1.4 — Tencent structured fill (`saveResumeInfo`)
 

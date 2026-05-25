@@ -1,23 +1,33 @@
 # Phase 2: auto-apply
 
 Phase 1 (read jobs) is done: 50 / 50 companies live. Phase 2 (submit
-applications) is partially shipped as of `0.9.1`:
+applications) is stable as of `1.1.x` — **45 / 50** adapters have a
+submission path wired, **45 / 50** have endpoint-verified status, and the
+remaining 5 are intentionally external (no API submission exists).
 
-* **Staging path** is live for every adapter — `job-pro <co> apply <postId>`
-  walks the application form, fills standard fields from
-  `~/.jobpro/profile.json`, and prints a dry-run preview.
-* **Application schema** is exposed by 3 adapters today: `xpeng`,
-  `hoyoverse` (Greenhouse boards), and `weride` (Lever). Their submit
-  endpoints accept anonymous `multipart/form-data` POSTs — wire format
-  verified against `httpbin.org/post`.
+* **Application schema** — every adapter exposes a schema via
+  `job-pro <co> apply <postId> --schema`. Use this to discover the form
+  shape without filling anything (`--schema` short-circuits before any
+  profile is loaded).
+* **Staging path** — `job-pro <co> apply <postId>` walks the schema, fills
+  the standard fields from `~/.jobpro/profile.json`, and prints a dry-run
+  preview. Nothing is sent.
+* **Wire-format verification** — `--debug-submit-to <url>` re-points the
+  POST at an echo server (e.g. `https://httpbin.org/post`) so you can see
+  exactly what would hit the careers site, without touching it.
+* **`--confirm-submit`** is the human-in-the-loop submit path: stage the
+  form, show the final payload, ask once, then fire the official-site
+  submitter. **`--really-submit`** remains for scripts and is gated behind
+  `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes`.
 * **Session bridge** (`extension/`) — manifest-v3 Chrome extension that
   captures Cookie + CSRF/XSRF headers from any of the 50 careers sites
-  the user logs into, and exports them as `~/.jobpro/<adapter>.session.json`.
-* **`--confirm-submit`** is the human-in-the-loop submit path: stage the
-  form, show the final payload, ask once, then fire the right official-site
-  submitter. **`--really-submit`** remains for scripts and is gated behind
-  `JOB_PRO_I_UNDERSTAND_REAL_SUBMIT=yes`. Non-anon adapters still require
-  `~/.jobpro/<co>.session.json`.
+  the user logs into, and exports them as
+  `~/.jobpro/<adapter>.session.json`. Required for every adapter except
+  the 3 anonymous Greenhouse/Lever boards.
+* **Four safety gates** stack before a real POST fires:
+  consent (`--confirm-submit` or `--really-submit` + env attestation) →
+  `staged.ready` (every required field filled) → `endpoint_verified`
+  (URL probe-confirmed) → session present + <30 days old (non-anon only).
 
 ## Quickstart
 
