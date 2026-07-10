@@ -1,7 +1,7 @@
 // Thin client for 宇树科技 (Unitree Robotics) campus recruiting.
 //
 // ============================================================
-// API DISCOVERY (probed 2026-05)
+// API DISCOVERY (probed 2026-05, re-verified 2026-07)
 //
 // Infrastructure:
 //   https://www.unitree.com/position/ (and /cn/position/) →
@@ -23,17 +23,36 @@
 // WORKING APPROACH — parse SSR HTML from www.unitree.com/position/:
 //   The Nuxt SPA is configured with ssr:false in its __NUXT_DATA__ state
 //   (serverRendered:false), yet the site's CDN pre-renders the page HTML via
-//   a build-time static pass. The full position list (typically ~20-25 jobs)
-//   is embedded verbatim in the returned HTML, including job IDs, titles, city,
-//   category, department, and hot/urgent flags.
+//   a build-time static pass. The full position list (26 jobs as of 2026-07-11)
+//   is embedded verbatim in the returned HTML, including numeric job ids, titles,
+//   city, category, department, hot/urgent flags, and a JD preview per job.
 //
-//   HTML job entry format (stripped from tags):
-//     {Title}({JobCode}) 热招 [急招] {City} | {Category} | {Department} {JD text...}
-//   Some newer listings omit the job code:
-//     {Title} 热招 [急招] {City} | {Category} | {Department} {JD text...}
+//   Each job is one self-contained anchor block (verified 2026-07-11 against the
+//   live page — 26 blocks, one per job, no other /position/<digits> links):
+//     <a href="/position/<numericId>" ... class="link">
+//       <p class="title">{Title}[({JobCode})] [<span class="icon hot">热招</span>]
+//                        [<span class="icon urgent">急招</span>]</p>
+//       <p class="base-info">{City} | {Category} | {Department}</p>
+//       <div class="duty"><p>…JD lines…</p>…</div>
+//     </a>
+//   Parsing block-by-block (instead of regex-scanning the tag-stripped page text)
+//   keeps every job regardless of title codepoints and bounds each JD at its own
+//   entry — no bleed into neighbouring jobs or the page's product-catalog footer.
 //
-//   Job detail deep-links use SPA routing at /position/{JobCode} or /cn/position/{JobCode}.
-//   These return 404 from the CDN (SPA-only routes) but are still the canonical apply URLs.
+//   CODEPOINT QUIRK (dumped 2026-07-11): several newer titles/JDs mix Kangxi
+//   Radical codepoints into otherwise-normal CJK text, e.g. 具⾝智能软件⼯程师
+//   uses ⾝=U+2F9D and ⼯=U+2F2F instead of 身=U+8EAB / 工=U+5DE5. We NFKC-fold
+//   those radical-block chars so titles/search behave like normal CJK
+//   (see normalizeRadicals).
+//
+//   Job detail deep-links use SPA routing at /position/{numericId}. These return
+//   404 from the CDN for non-browser clients (SPA-only routes) but are still the
+//   canonical apply URLs.
+//
+// SEARCH SEMANTICS: the only server-side search would be api.unitree.com/website
+// /job/list, which is WAF-blocked (HTTP 567, see above). Keyword filtering is
+// therefore client-side over the bounded full enumeration — the single SSR page
+// embeds every open position, so the filter runs over the complete corpus.
 //
 // ============================================================
 // PositionSummary field mapping (canonical keys — matches all other adapters):
@@ -58,10 +77,9 @@ export const supportedScopes: ReadonlyArray<PositionScope> = ["social", "campus"
 const SOURCE = "unitree.com";
 const POSITION_PAGE = "https://www.unitree.com/position/";
 // Nuxt only mounts `/position/<numericSnowflakeId>` (e.g. /position/1569894802328125440).
-// `/position/<JobCode>` (e.g. /position/J10126) returns HTTP 404. The list-page
-// HTML pairs each (J\d+) title with its snowflake id in the surrounding
-// `<a href="/position/<id>" ...>` block — we parse that mapping out of the
-// raw HTML before stripTags throws away the hrefs.
+// `/position/<JobCode>` (e.g. /position/J10126) returns HTTP 404. Each list-page
+// anchor block carries the numeric id in its href, so every parsed job (with or
+// without a visible JobCode) gets its canonical deep link.
 const DETAIL_URL = (numericId: string) =>
   `https://www.unitree.com/position/${encodeURIComponent(numericId)}`;
 
@@ -85,6 +103,11 @@ export interface PositionSummary {
   apply_url: string;
 }
 
+// Internal parse result: summary + the JD preview text embedded in the block.
+interface ParsedPosition extends PositionSummary {
+  description: string;
+}
+
 // ---------- SearchOptions ----------
 
 export interface SearchOptions {
@@ -93,17 +116,45 @@ export interface SearchOptions {
   pageSize?: number;
 }
 
-// ---------- HTML parser ----------
+// ---------- HTML / text helpers ----------
 
-function stripTags(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, " ")
+/**
+ * Fold Kangxi Radical (U+2F00–U+2FDF) and CJK Radicals Supplement
+ * (U+2E80–U+2EFF) codepoints to their CJK unified ideographs via NFKC.
+ *
+ * Measured on the live page 2026-07-11: 4 of 26 titles (具⾝智能软件⼯程师 /
+ * 数据管线⼯程师 / AI Infra ⼯程师 / 具身数据评估⼯程师) and their JD text mix
+ * radical codepoints (⼯=U+2F2F, ⾝=U+2F9D, ⼈=U+2F08 …) into normal CJK.
+ * We deliberately normalize ONLY chars inside the two radical blocks — a
+ * whole-string NFKC would also fold fullwidth parens （）→() and corrupt
+ * titles like 嵌入式软件工程师（Linux）.
+ */
+function normalizeRadicals(s: string): string {
+  return s.replace(/[\u2E80-\u2FDF]/g, (c) => c.normalize("NFKC"));
+}
+
+function decodeEntities(s: string): string {
+  return s
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, " ");
+    .replace(/&quot;/g, '"');
+}
+
+/** Strip tags to a single collapsed line (titles / meta rows). */
+function stripTags(html: string): string {
+  return decodeEntities(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
+}
+
+/** Strip tags to readable multi-line text (JD blocks): one line per <p>/<br>. */
+function blockToText(html: string): string {
+  const withBreaks = html.replace(/<\/p\s*>|<br\s*\/?>/gi, "\n");
+  return decodeEntities(withBreaks.replace(/<[^>]+>/g, " "))
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
 function slugify(title: string): string {
@@ -115,112 +166,63 @@ function slugify(title: string): string {
     .slice(0, 40);
 }
 
-/**
- * Pre-extract JobCode → numeric snowflake-id pairs from the raw HTML.
- *
- * The list page renders each job inside an `<a href="/position/<numericId>"...>`
- * block whose inner `<p class="title">` contains the human title followed by
- * the visible JobCode in parens, e.g. `解决方案工程师(J10126)`. stripTags()
- * later drops the href, so we capture the mapping first.
- */
-function extractJobCodeToNumericId(html: string): Map<string, string> {
-  const m = new Map<string, string>();
-  const linkPattern =
-    /<a[^>]*href="\/position\/(\d+)"[^>]*>\s*<p[^>]*class="title"[^>]*>[^<]*\(J(\d+)\)/g;
-  let match: RegExpExecArray | null;
-  while ((match = linkPattern.exec(html)) !== null) {
-    const numericId = match[1];
-    const jobCode = `J${match[2]}`;
-    if (!m.has(jobCode)) m.set(jobCode, numericId);
-  }
-  return m;
-}
+// ---------- HTML parser ----------
 
-function parsePositions(html: string): PositionSummary[] {
-  const codeToNumericId = extractJobCodeToNumericId(html);
-  const text = stripTags(html);
-  const positions: PositionSummary[] = [];
-
-  // ---- Pass 1: jobs with explicit job-code like (J10034) ----
-  // Context before the (Jxxxxx) anchor is the title; after it are the status / city / category / dept.
-  const idPattern = /\(J(\d+)\)/g;
-  let m: RegExpExecArray | null;
+function parsePositions(html: string): ParsedPosition[] {
+  // One match per job entry; the non-greedy body ends at the entry's own </a>,
+  // so everything extracted below is bounded to a single job.
+  const blockPattern = /<a[^>]*href="\/position\/(\d+)"[^>]*>([\s\S]*?)<\/a>/g;
+  const positions: ParsedPosition[] = [];
   const seen = new Set<string>();
 
-  while ((m = idPattern.exec(text)) !== null) {
-    const jobCode = `J${m[1]}`;
-    if (seen.has(jobCode)) continue;
-    seen.add(jobCode);
+  let m: RegExpExecArray | null;
+  while ((m = blockPattern.exec(html)) !== null) {
+    const numericId = m[1];
+    const block = m[2];
 
-    // Title: scan backwards from the match start for a Chinese/ASCII job title.
-    // Titles immediately precede the job code in the stripped text.
-    // Note: some titles include full-width parentheses, e.g. 嵌入式软件工程师（Linux）
-    // so we must not treat （ as a hard word boundary.
-    const beforeSlice = text.slice(Math.max(0, m.index - 140), m.index);
-    // Take the last "word" cluster that looks like a job title.
-    // Allow full-width （）inside the title but stop at half-width ( and common separators.
-    const titleMatch = beforeSlice.match(
-      /([A-Za-z+#（）一-鿿][^\s·|。；：(]{1,50}(?:\/[^\s|·。；：(]{2,20})?)\s*$/
-    );
-    const rawTitle = titleMatch ? titleMatch[1].trim() : "";
-    // Strip any description text that bled in (heuristic: keep last segment after 。 or ；)
-    const title = rawTitle.split(/[。；]\s*/).pop()?.trim() ?? rawTitle;
+    const titleHtml =
+      block.match(/<p[^>]*class="title"[^>]*>([\s\S]*?)<\/p>/)?.[1] ?? "";
+    // The visible title precedes any status <span class="icon …"> badges.
+    const rawTitle = normalizeRadicals(stripTags(titleHtml.split(/<span/i)[0])).trim();
+    if (!rawTitle) continue;
 
-    // Status / city / category / dept: scan forward from end of job code
-    const afterSlice = text.slice(m.index + m[0].length, m.index + m[0].length + 200);
-    const isHot = afterSlice.slice(0, 30).includes("热招");
-    const isUrgent = afterSlice.slice(0, 30).includes("急招");
+    // Coded titles end with the visible JobCode, e.g. 解决方案工程师(J10126).
+    const codeMatch = rawTitle.match(/\((J\d+)\)\s*$/);
+    const title = codeMatch
+      ? rawTitle.slice(0, codeMatch.index).trim()
+      : rawTitle;
+    const postId = codeMatch ? codeMatch[1] : slugify(title);
+    if (!postId || seen.has(postId)) continue;
+    seen.add(postId);
 
-    const metaMatch = afterSlice.match(
-      /([一-鿿]{2,6}市)\s*\|\s*([^|]{2,20}?)\s*\|\s*([^\s|·。]{2,30})/
-    );
-    const city = metaMatch ? metaMatch[1].trim() : "杭州市";
-    const category = metaMatch ? metaMatch[2].trim() : "";
-    const dept = metaMatch ? metaMatch[3].trim() : "";
+    const baseInfo = normalizeRadicals(
+      stripTags(
+        block.match(/<p[^>]*class="base-info"[^>]*>([\s\S]*?)<\/p>/)?.[1] ?? ""
+      )
+    ).trim();
+    const [city = "", category = "", dept = ""] = baseInfo
+      .split("|")
+      .map((part) => part.trim());
 
     const recruitParts: string[] = [];
-    if (isHot) recruitParts.push("热招");
-    if (isUrgent) recruitParts.push("急招");
-    const recruit_label = recruitParts.join("|");
+    if (/class="icon hot"/.test(block)) recruitParts.push("热招");
+    if (/class="icon urgent"/.test(block)) recruitParts.push("急招");
 
-    const numericId = codeToNumericId.get(jobCode);
-    positions.push({
-      post_id: jobCode,
-      title: title || jobCode,
-      project: category,
-      recruit_label,
-      bgs: dept,
-      work_cities: city,
-      apply_url: numericId ? DETAIL_URL(numericId) : POSITION_PAGE,
-    });
-  }
-
-  // ---- Pass 2: jobs without a (Jxxxxx) code ----
-  // Pattern: ChineseTitle 热招 [急招] City | Category | Dept
-  const noIdPattern =
-    /([^\s·|：；。]{3,30}(?:工程师|设计师|经理|专员|研究员|架构师|科学家|运营|专家|分析师|顾问))\s+热招(?!\s*\()(\s*急招)?\s+([一-鿿]{2,6}市)\s*\|\s*([^|]{2,20}?)\s*\|\s*([^\s|·。]{2,30})/g;
-
-  let m2: RegExpExecArray | null;
-  while ((m2 = noIdPattern.exec(text)) !== null) {
-    const title = m2[1].trim();
-    const slug = slugify(title);
-    if (seen.has(slug)) continue;
-    seen.add(slug);
-
-    const isUrgent = Boolean(m2[2]?.trim());
-    const city = m2[3].trim();
-    const category = m2[4].trim();
-    const dept = m2[5].trim();
-    const recruit_label = isUrgent ? "热招|急招" : "热招";
+    // The duty <div> is the last element of the block (verified 2026-07-11);
+    // capture from its opening tag to the end of the block — the </a> boundary
+    // already guarantees no bleed into the next job or the page footer.
+    const dutyHtml = block.match(/<div[^>]*class="duty"[^>]*>([\s\S]*)$/)?.[1] ?? "";
+    const description = normalizeRadicals(blockToText(dutyHtml));
 
     positions.push({
-      post_id: slug,
+      post_id: postId,
       title,
       project: category,
-      recruit_label,
+      recruit_label: recruitParts.join("|"),
       bgs: dept,
       work_cities: city,
-      apply_url: POSITION_PAGE,
+      apply_url: DETAIL_URL(numericId),
+      description,
     });
   }
 
@@ -261,11 +263,11 @@ async function fetchPositionHtml(): Promise<{
 // ---------- In-process cache ----------
 // The position list rarely changes; one fetch per Node process is enough.
 
-let _posCache: { positions: PositionSummary[]; fetchedAt: number } | null = null;
+let _posCache: { positions: ParsedPosition[]; fetchedAt: number } | null = null;
 
 async function getAllPositions(): Promise<{
   ok: boolean;
-  positions: PositionSummary[];
+  positions: ParsedPosition[];
   message: string;
   total: number;
 }> {
@@ -281,8 +283,43 @@ async function getAllPositions(): Promise<{
   }
 
   const positions = parsePositions(result.html);
+  if (!positions.length) {
+    // Fail loudly instead of reporting a misleading empty list: the page has
+    // always embedded the full list (26 entries as of 2026-07-11), so zero
+    // parsed blocks means the markup changed or we got a stub/WAF page.
+    const hasTitleMarkup = /class="title"/.test(result.html);
+    return {
+      ok: false,
+      positions: [],
+      total: 0,
+      message:
+        `parsed 0 job blocks from ${POSITION_PAGE} (HTML ${result.html.length} bytes` +
+        (hasTitleMarkup ? ", title markup present — parser/page mismatch" : "") +
+        ") — refusing to report an empty list as a real zero",
+    };
+  }
   _posCache = { positions, fetchedAt: now };
   return { ok: true, positions, message: "ok", total: positions.length };
+}
+
+// ---------- keyword filter (client-side; see SEARCH SEMANTICS above) ----------
+
+function keywordFilter(
+  positions: ParsedPosition[],
+  keyword: string
+): ParsedPosition[] {
+  if (!keyword) return positions;
+  return positions.filter((p) => {
+    const blob = [p.title, p.project, p.bgs, p.work_cities, p.post_id, p.description]
+      .join(" ")
+      .toLowerCase();
+    return blob.includes(keyword);
+  });
+}
+
+function toSummary(p: ParsedPosition): PositionSummary {
+  const { description: _description, ...summary } = p;
+  return summary;
 }
 
 // ---------- searchPositions ----------
@@ -290,7 +327,9 @@ async function getAllPositions(): Promise<{
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const keyword = (opts.keyword ?? "").trim().toLowerCase();
+  // Normalize the keyword the same way parsed text is normalized, so a query
+  // containing a radical codepoint still matches the folded corpus.
+  const keyword = normalizeRadicals((opts.keyword ?? "").trim()).toLowerCase();
 
   const pool = await getAllPositions();
   if (!pool.ok) {
@@ -303,18 +342,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
     };
   }
 
-  let filtered = pool.positions;
-  if (keyword) {
-    filtered = filtered.filter((p) => {
-      const blob = [p.title, p.project, p.bgs, p.work_cities, p.post_id]
-        .join(" ")
-        .toLowerCase();
-      return blob.includes(keyword);
-    });
-  }
-
+  const filtered = keywordFilter(pool.positions, keyword);
   const offset = (page - 1) * pageSize;
-  const paginated = filtered.slice(offset, offset + pageSize);
+  const paginated = filtered.slice(offset, offset + pageSize).map(toSummary);
 
   return {
     ok: true as const,
@@ -327,11 +357,13 @@ export async function searchPositions(opts: SearchOptions = {}) {
 }
 
 // ---------- fetchAllPositions ----------
+// The single SSR page embeds the complete list, so "all" is always exhaustive
+// (no pagination, no truncation) and post_id-deduped by the parser.
 
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
-  const keyword = (opts.keyword ?? "").trim().toLowerCase();
+  const keyword = normalizeRadicals((opts.keyword ?? "").trim()).toLowerCase();
   const pool = await getAllPositions();
   if (!pool.ok) {
     return {
@@ -344,14 +376,7 @@ export async function fetchAllPositions(
     };
   }
 
-  const positions = keyword
-    ? pool.positions.filter((p) => {
-        const blob = [p.title, p.project, p.bgs, p.work_cities, p.post_id]
-          .join(" ")
-          .toLowerCase();
-        return blob.includes(keyword);
-      })
-    : pool.positions;
+  const positions = keywordFilter(pool.positions, keyword).map(toSummary);
 
   return {
     ok: true as const,
@@ -363,8 +388,15 @@ export async function fetchAllPositions(
 }
 
 // ---------- fetchPositionDetail ----------
-// The SSR HTML contains the JD text for each position but does not expose it
-// in a clean structured field. We extract a best-effort description snippet.
+// Returns the JD preview embedded in the position's own list-page block.
+// KNOWN LIMITATION: the block only carries the 职责 (duty) section — the
+// full-JD endpoint api.unitree.com/website/job/info is EdgeOne-WAF-blocked
+// (HTTP 567), so a richer description is not reachable server-side.
+
+const DETAIL_NOTE =
+  "description is the JD preview embedded in the list page (职责 section only); " +
+  "the full-JD API (api.unitree.com/website/job/info) is blocked by Tencent Cloud " +
+  "EdgeOne WAF (HTTP 567) for non-browser clients.";
 
 export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
@@ -372,57 +404,50 @@ export async function fetchPositionDetail(postId: string) {
     return { ok: false as const, source: SOURCE, message: "post_id is required" };
   }
 
-  const result = await fetchPositionHtml();
-  if (!result.ok || !result.html) {
-    return { ok: false as const, source: SOURCE, post_id: id, message: result.message };
+  const pool = await getAllPositions();
+  if (!pool.ok) {
+    return { ok: false as const, source: SOURCE, post_id: id, message: pool.message };
   }
 
-  const text = stripTags(result.html);
-
-  // Find the job code anchor or slug and extract surrounding JD text
-  const anchor = id.startsWith("J") ? `(${id})` : id.replace(/-/g, "");
-  const idx = text.indexOf(anchor);
-  if (idx === -1) {
+  const needle = normalizeRadicals(id);
+  const pos = pool.positions.find(
+    (p) =>
+      p.post_id === needle ||
+      // also accept the numeric snowflake id from apply_url deep links
+      (/^\d+$/.test(needle) && p.apply_url === DETAIL_URL(needle)) ||
+      p.title === needle
+  );
+  if (!pos) {
     return {
       ok: false as const,
       source: SOURCE,
       post_id: id,
-      message: `post ${id} not found in current page snapshot`,
+      message: `post ${id} not found in current page snapshot (${pool.total} open positions)`,
     };
   }
-
-  // Extract up to 600 chars of JD text following the city|category|dept line
-  const after = text.slice(idx, idx + 800);
-  const descMatch = after.match(
-    /[一-鿿]{2,5}市\s*\|\s*[^|]+\|\s*[^\s|]+\s+(.{50,600})/
-  );
-  const description = descMatch ? descMatch[1].trim() : "";
-
-  const pool = await getAllPositions();
-  const pos = pool.positions.find((p) => p.post_id === id);
 
   return {
     ok: true as const,
     source: SOURCE,
-    post_id: id,
-    title: pos?.title ?? id,
-    project: pos?.project ?? "",
-    bgs: pos?.bgs ?? "",
-    recruit_label: pos?.recruit_label ?? "",
-    description,
-    work_cities: pos?.work_cities ?? "",
-    // The id we got is a JobCode (e.g. J10126) — DETAIL_URL needs a numeric
-    // snowflake id we only know via the list-page pool. Fall back to the list
-    // page when the position isn't in the pool.
-    apply_url: pos?.apply_url ?? POSITION_PAGE,
+    post_id: pos.post_id,
+    title: pos.title,
+    project: pos.project,
+    bgs: pos.bgs,
+    recruit_label: pos.recruit_label,
+    description: pos.description,
+    work_cities: pos.work_cities,
+    apply_url: pos.apply_url,
+    note: DETAIL_NOTE,
   };
 }
 
 // ---------- fetchDictionaries ----------
-// Returns the known static taxonomy (Unitree does not expose a filter catalog).
+// Unitree does not expose a filter catalog; derive the taxonomy from the
+// scraped position list instead of hardcoding it.
 
 export async function fetchDictionaries() {
   const pool = await getAllPositions();
+  const uniq = (values: string[]) => [...new Set(values.filter(Boolean))];
   return {
     ok: pool.ok,
     source: SOURCE,
@@ -432,9 +457,9 @@ export async function fetchDictionaries() {
       "(HTTP 567) and is inaccessible from server-side clients. " +
       "Job listings are parsed from the SSR HTML of www.unitree.com/position/ instead.",
     positions_scraped: pool.total,
-    categories: ["技术类", "销售类"],
-    departments: ["研发部", "销售服务体系"],
-    cities: ["杭州市"],
+    categories: uniq(pool.positions.map((p) => p.project)),
+    departments: uniq(pool.positions.map((p) => p.bgs)),
+    cities: uniq(pool.positions.map((p) => p.work_cities)),
     message: pool.message,
   };
 }
@@ -494,9 +519,10 @@ export async function matchResume(
   const scored: Scored[] = [];
 
   for (const p of pool.positions) {
-    const blob = [p.title, p.project, p.bgs, p.work_cities, p.recruit_label].join(" ");
+    // Score against the JD preview too — it carries the actual tech keywords.
+    const blob = [p.title, p.project, p.bgs, p.work_cities, p.recruit_label, p.description].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
-    if (score > 0) scored.push({ score, position: p, reasons });
+    if (score > 0) scored.push({ score, position: toSummary(p), reasons });
   }
   scored.sort((a, b) => b.score - a.score);
 
@@ -504,7 +530,7 @@ export async function matchResume(
   if (!shortlist.length) {
     shortlist = pool.positions.slice(0, candidates).map((position) => ({
       score: 0,
-      position,
+      position: toSummary(position),
       reasons: [],
     }));
   }
@@ -531,39 +557,3 @@ export async function matchResume(
 
 export { extractResumeSignals, scoreOverlap };
 export type { SearchOptions as UnitreeSearchOptions };
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_unitree } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_unitree } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_unitree } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "unitree.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://unitree.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "unitree.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_unitree({
-      source: "unitree.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: undefined,
-      submitKind: "external",
-      submitNotes:
-        "Unitree — recruiting funnel runs through a WeChat mini-program; no public submit API. Open apply_url in browser to scan the WeChat QR.",
-    }),
-  };
-}

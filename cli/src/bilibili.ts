@@ -47,10 +47,13 @@
 // ============================================================
 // Filter taxonomy (probed 2026-05, total ~356 positions):
 //
-// DIMENSION 1 — positionTypeList (职位类型)
-//   "实习"  — intern positions       (~335 of 356 visible)
-//   "全职"  — full-time campus hire  (~21 of 356 visible)
-//   (default: both, pass [] or omit)
+// DIMENSION 1 — 职位类型 (实习/全职)
+//   Historically positionTypeList:["实习"|"全职"]; re-probed 2026-07-11 the
+//   backend ignores positionTypeList strings and filters on numeric
+//   workTypeList codes instead:
+//     workTypeList:[0] — 实习 (284 of 296)
+//     workTypeList:[3] — 全职 (12 of 296)
+//   (default: both, pass []; unknown codes → total 0; SRS ignores it)
 //
 // DIMENSION 2 — workLocationList (工作地点, free-text city names from workLocation field)
 //   Common values seen: "上海", "北京", "上海/北京", "深圳", "杭州", "成都"
@@ -106,6 +109,10 @@
 //   bgs           ← ""  (Bilibili does not expose BG/事业群 in public search)
 //   work_cities   ← item.workLocation   (e.g. "上海" / "上海/北京")
 //   apply_url     ← https://jobs.bilibili.com/campus/positions/${id}
+//
+// The list rows also inline the full JD as item.positionDescription
+// (plain-text 工作职责 + 工作要求, both feeds — probed 2026-07-11). List
+// summaries stay lean; detail/match surface it as `description`.
 //
 // ============================================================
 // Endpoints that return 403 without a real account session (ajSessionId):
@@ -337,6 +344,81 @@ function channelForScope(s: PositionScope | undefined): "campus" | "social" | "a
   return "campus";
 }
 
+// ---------- raw single-channel page fetch ----------
+// Both public list endpoints inline the full JD as `positionDescription`
+// (probed 2026-07-11 with the anonymous CSRF handshake: campus and SRS rows
+// both carry the plain-text 工作职责+工作要求 blob). Keeping the raw rows
+// available here lets fetchPositionDetail / matchResume surface the JD
+// without a second endpoint, while list summaries stay lean.
+
+interface RawPageResult {
+  ok: boolean;
+  message: string;
+  total: number;
+  rows: RawPosition[];
+  /** Echo of the upstream payload (+ _path) for the `query` field. */
+  query: Record<string, unknown>;
+}
+
+async function fetchRawPage(
+  channel: "campus" | "social",
+  opts: SearchOptions
+): Promise<RawPageResult> {
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+  const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+
+  const path = channel === "social"
+    ? "/api/srs/position/positionList"
+    : "/api/campus/position/positionList";
+
+  const payload: Record<string, unknown> = {
+    pageNum: page,
+    pageSize,
+    positionName: keyword,
+    deptCodeList: [],
+  };
+
+  // intern scope narrows campus feed to 实习 rows unless caller overrides.
+  let positionTypes = opts.positionTypes;
+  if (!positionTypes?.length && opts.scope === "intern") {
+    positionTypes = ["实习"];
+  }
+  // The 实习/全职 dimension moved server-side params (re-probed 2026-07-11):
+  // positionTypeList strings are now IGNORED by the backend (["实习"] still
+  // returns the full 296-post campus board incl. 全职), while workTypeList
+  // takes numeric codes and filters for real — [0]=实习 (284) and [3]=全职
+  // (12) exactly partition campus total 296, and both combine with the
+  // positionName keyword. Unknown values → total 0 (honest empty, never the
+  // unfiltered board). The SRS social feed ignores workTypeList entirely
+  // (always 575, all 全职), same as it ignored positionTypeList before.
+  const WORK_TYPE_CODE: Record<string, number> = { 实习: 0, 全职: 3 };
+  const requestedTypes: unknown[] = Array.isArray(positionTypes)
+    ? positionTypes
+    : positionTypes ? [positionTypes] : []; // CLI --position-types 实习 arrives as a bare string
+  payload.workTypeList = requestedTypes.map((t) => WORK_TYPE_CODE[String(t)] ?? t);
+  payload.positionTypeList = []; // dead upstream since ≤2026-07; kept for payload-shape parity
+  payload.workLocationList = opts.workLocations?.length ? opts.workLocations : [];
+
+  if (opts.recruitType !== undefined && channel === "campus") {
+    payload.recruitType = opts.recruitType;
+  }
+
+  const query = { ...payload, _path: path };
+  const response = await call<RawListData>(payload, path);
+  if (!response.ok || !response.data) {
+    return { ok: false, message: response.message, total: 0, rows: [], query };
+  }
+  const rows = response.data.list ?? [];
+  return {
+    ok: true,
+    message: "ok",
+    total: response.data.total ?? rows.length,
+    rows,
+    query,
+  };
+}
+
 // ---------- searchPositions ----------
 
 type SearchPositionsResult =
@@ -386,55 +468,25 @@ export async function searchPositions(opts: SearchOptions = {}): Promise<SearchP
     };
   }
 
-  const path = channel === "social"
-    ? "/api/srs/position/positionList"
-    : "/api/campus/position/positionList";
-
-  const payload: Record<string, unknown> = {
-    pageNum: page,
-    pageSize,
-    positionName: keyword,
-    workTypeList: [],
-    deptCodeList: [],
-  };
-
-  // intern scope narrows campus feed via positionTypeList=["实习"] unless caller overrides.
-  let positionTypes = opts.positionTypes;
-  if (!positionTypes?.length && opts.scope === "intern") {
-    positionTypes = ["实习"];
-  }
-  payload.positionTypeList = positionTypes?.length ? positionTypes : [];
-
-  if (opts.workLocations?.length) {
-    payload.workLocationList = opts.workLocations;
-  } else {
-    payload.workLocationList = [];
-  }
-
-  if (opts.recruitType !== undefined && channel === "campus") {
-    payload.recruitType = opts.recruitType;
-  }
-
-  const response = await call<RawListData>(payload, path);
-  if (!response.ok || !response.data) {
+  const result = await fetchRawPage(channel, opts);
+  if (!result.ok) {
     return {
       ok: false,
-      message: response.message,
+      message: result.message,
       source: "jobs.bilibili.com",
-      query: { ...payload, _path: path },
+      query: result.query,
       positions: [] as PositionSummary[],
     };
   }
 
-  const rows = response.data.list ?? [];
   return {
     ok: true,
     source: "jobs.bilibili.com",
-    query: { ...payload, _path: path },
+    query: result.query,
     page,
     page_size: pageSize,
-    total: response.data.total ?? rows.length,
-    positions: rows.map((row) => summarizePosition(row, channel)),
+    total: result.total,
+    positions: result.rows.map((row) => summarizePosition(row, channel)),
   };
 }
 
@@ -446,6 +498,9 @@ type FetchAllPositionsResult =
       source: string;
       total: number;
       fetched: number;
+      /** Present (true) only when the sweep hit maxPages before exhausting
+       *  `total` — the caller got a prefix of the board, not all of it. */
+      truncated?: true;
       positions: PositionSummary[];
     }
   | {
@@ -460,7 +515,11 @@ export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ): Promise<FetchAllPositionsResult> {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-  const maxPages = Math.max(1, opts.maxPages ?? 4); // ~400 positions max
+  // Default 120 pages exhausts the larger SRS feed (~575 posts, probed
+  // 2026-07-11; campus ~296) down to --page-size 5. The total-reached /
+  // short-page / no-new-rows exits below keep a default sweep at 3–6
+  // requests in practice; 120 is only the runaway cap.
+  const maxPages = Math.max(1, opts.maxPages ?? 120);
   const channel = channelForScope(opts.scope);
 
   // scope=all → fan out both channels and merge with de-dup on post_id/url.
@@ -477,19 +536,38 @@ export async function fetchAllPositions(
       seen.add(key);
       merged.push(p);
     }
-    const total = (campusRes.ok ? (campusRes.total ?? 0) : 0)
-      + (socialRes.ok ? (socialRes.total ?? 0) : 0);
+    // A failed channel means the merged board is silently missing that whole
+    // feed — surface it as an error (with whatever was fetched) instead of
+    // reporting ok with an understated total.
+    if (!campusRes.ok || !socialRes.ok) {
+      const message = [
+        campusRes.ok ? null : `campus: ${campusRes.message}`,
+        socialRes.ok ? null : `social: ${socialRes.message}`,
+      ].filter(Boolean).join("; ");
+      return {
+        ok: false,
+        source: "jobs.bilibili.com",
+        message,
+        fetched: merged.length,
+        positions: merged,
+      };
+    }
+    const total = campusRes.total + socialRes.total;
+    const anyTruncated = campusRes.truncated === true || socialRes.truncated === true;
     return {
       ok: true,
       source: "jobs.bilibili.com",
       total,
       fetched: merged.length,
+      ...(anyTruncated ? { truncated: true as const } : {}),
       positions: merged,
     };
   }
 
   const bucket: PositionSummary[] = [];
+  const seen = new Set<string>();
   let total: number | undefined;
+  let exhausted = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({ ...opts, page, pageSize });
@@ -503,51 +581,82 @@ export async function fetchAllPositions(
       };
     }
     if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    // De-dup on post_id and stop as soon as a page adds nothing new, so a
+    // server that ever started ignoring pageNum can't loop us over the same
+    // page (both feeds honoured pageNum when probed 2026-07-11, but this is
+    // exactly the failure Moka shipped pre-1.1.15).
+    let added = 0;
+    for (const p of result.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      bucket.push(p);
+      added += 1;
+    }
+    if (result.positions.length === 0 || added === 0) {
+      exhausted = true; // past the last page / nothing new
+      break;
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
+    if (result.positions.length < pageSize) {
+      exhausted = true; // short page = last page
+      break;
+    }
   }
 
+  const truncated = !exhausted && total !== undefined && bucket.length < total;
   return {
     ok: true,
     source: "jobs.bilibili.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
+    ...(truncated ? { truncated: true as const } : {}),
     positions: bucket,
   };
 }
 
 // ---------- fetchPositionDetail ----------
-// Bilibili's public search response carries description + requirement inline,
-// so "detail" is a paginated scan-and-filter (same pattern as feishu.ts).
+// Bilibili's public list response carries the full JD inline as
+// `positionDescription` (工作职责 + 工作要求 plain text — probed 2026-07-11 on
+// both feeds), so "detail" is a paginated raw scan-and-filter (same pattern
+// as feishu.ts) that returns that field as `description`.
 
 export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
   if (!id) return { ok: false as const, source: "jobs.bilibili.com", message: "post_id is required" };
 
   const pageSize = 100;
-  const maxPages = 5;
+  // 12 × 100 = 1200 posts per channel — comfortably past the larger SRS feed
+  // (~575 posts, probed 2026-07-11); the short-page / total-reached exits stop
+  // the scan at the real end of each feed well before the cap.
+  const maxPages = 12;
 
   // Scan campus feed first (historical default), then SRS social feed.
-  for (const scope of ["campus", "social"] as const) {
+  for (const channel of ["campus", "social"] as const) {
+    let scanned = 0;
     for (let page = 1; page <= maxPages; page++) {
-      const result = await searchPositions({ page, pageSize, scope });
+      const result = await fetchRawPage(channel, { page, pageSize });
       if (!result.ok) break; // fall through to next channel
-      const found = result.positions.find((p) => p.post_id === id);
+      const found = result.rows.find((row) => String(row.id ?? "") === id);
       if (found) {
+        const summary = summarizePosition(found, channel);
         return {
           ok: true as const,
           source: "jobs.bilibili.com",
           post_id: id,
-          title: found.title,
-          project: found.project,
-          recruit_label: found.recruit_label,
-          bgs: found.bgs,
-          work_cities: found.work_cities,
-          apply_url: found.apply_url,
+          title: summary.title,
+          project: summary.project,
+          recruit_label: summary.recruit_label,
+          bgs: summary.bgs,
+          work_cities: summary.work_cities,
+          description: (found.positionDescription ?? "").trim(),
+          apply_url: summary.apply_url,
         };
       }
-      if (result.positions.length < pageSize) break;
+      scanned += result.rows.length;
+      if (result.rows.length < pageSize || scanned >= result.total) break;
     }
   }
 
@@ -555,7 +664,7 @@ export async function fetchPositionDetail(postId: string) {
     ok: false as const,
     source: "jobs.bilibili.com",
     post_id: id,
-    message: `post ${id} not found in public search results (scanned campus + SRS up to ${maxPages * pageSize} posts each)`,
+    message: `post ${id} not found in public search results (scanned the full campus + SRS feeds, up to ${maxPages * pageSize} posts each)`,
   };
 }
 
@@ -580,21 +689,31 @@ export async function matchResume(
 
   const queries = pickDistinctiveTerms(terms, 3);
   if (!queries.length) queries.push(terms[0] ?? "");
+  // Pull raw rows (not summaries) so scoring can see the inline JD
+  // (positionDescription) instead of just title/category/city.
   const posLists = await Promise.all(
-    queries.map((q) => searchPositions({ keyword: q, page: 1, pageSize: 100 }))
+    queries.map((q) => fetchRawPage("campus", { keyword: q, page: 1, pageSize: 100 }))
   );
   const seen = new Set<string>();
   const pool: PositionSummary[] = [];
+  const rawById = new Map<string, RawPosition>();
+  const addRows = (rows: RawPosition[]) => {
+    for (const row of rows) {
+      const p = summarizePosition(row, "campus");
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      pool.push(p);
+      rawById.set(p.post_id, row);
+    }
+  };
   let lastErr: string | undefined;
   for (const l of posLists) {
     if (!l.ok) { lastErr = l.message; continue; }
-    for (const p of l.positions) {
-      if (!seen.has(p.post_id)) { seen.add(p.post_id); pool.push(p); }
-    }
+    addRows(l.rows);
   }
   if (!pool.length) {
-    const broad = await searchPositions({ page: 1, pageSize: 100 });
-    if (broad.ok) pool.push(...broad.positions);
+    const broad = await fetchRawPage("campus", { page: 1, pageSize: 100 });
+    if (broad.ok) addRows(broad.rows);
   }
   if (!pool.length) {
     return { ok: false, source: "jobs.bilibili.com", message: lastErr ?? "no positions returned", positions: [] };
@@ -609,10 +728,11 @@ export async function matchResume(
   const scored: Scored[] = [];
 
   for (const p of pool) {
-    const blob = [p.title, p.project, p.recruit_label, p.work_cities].join(" ");
+    const description = (rawById.get(p.post_id)?.positionDescription ?? "").trim();
+    const blob = [p.title, p.project, p.recruit_label, p.work_cities, description].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
     if (score > 0) {
-      scored.push({ score, position: p, reasons });
+      scored.push({ score, position: p, reasons, description });
     }
   }
   scored.sort((a, b) => b.score - a.score);
@@ -623,6 +743,7 @@ export async function matchResume(
       score: 0,
       position,
       reasons: [],
+      description: (rawById.get(position.post_id)?.positionDescription ?? "").trim(),
     }));
   }
 
@@ -631,7 +752,7 @@ export async function matchResume(
       s.reasons.length > 0
         ? s.reasons.slice(0, 5)
         : ["no specific keyword overlap — surfaced from initial keyword search"];
-    return { ...s.position, match_reasons: mr };
+    return { ...s.position, description: s.description, match_reasons: mr };
   });
 
   return {
@@ -691,42 +812,5 @@ export async function findNoticesByQuestion(
     ok: false,
     source: "jobs.bilibili.com",
     message: "Bilibili: no public notices endpoint",
-  };
-}
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_bilibili } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_bilibili } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_bilibili } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "jobs.bilibili.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://jobs.bilibili.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "jobs.bilibili.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_bilibili({
-      source: "jobs.bilibili.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://jobs.bilibili.com/api/portal/post/apply",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "Bilibili — POST /api/portal/post/apply with ajSessionId cookie. Endpoint anon-probed → HTTP 200 + {code:-101, msg:\"ajSessionId不能为空\"} (real apply route; original /api/post/apply returns structured 404, but the /api/portal/* sub-tree is the real customer-facing one). Body shape still needs validation.",
-    }),
   };
 }

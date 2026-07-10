@@ -42,108 +42,8 @@
 //   - Both: city_info is null; city_list always populated
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
-import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
-
-// ---------- shared apply-schema helper (re-used by bespoke Feishu adapters) ----------
-//
-// xiaomi.ts / zhipu.ts / iqiyi.ts / agibot.ts / lilith.ts each predate the
-// factory and have their own searchPositions implementations. To give them
-// the same Phase-2 behaviour as factory-using adapters (nio / minimax /
-// baichuan / zerooneai), each can call `buildFeishuApplySchema()` from
-// its own fetchApplicationSchema function.
-
-/**
- * Wire fetchApplicationSchema for a bespoke Feishu adapter that doesn't use
- * createAdapter. The callback `fetchTitle(id)` is the adapter's own
- * fetchPositionDetail (or any function that returns `{ ok, title }`).
- *
- * Usage:
- *   export const fetchApplicationSchema = makeFeishuApplyFn({
- *     host: HOST, source: SOURCE, channel: CHANNEL,
- *     applyUrlPrefix: APPLY_PREFIX,
- *     fetchTitle: (id) => fetchPositionDetail(id),
- *     submitKind: "feishu-3-step",  // override for lilith → "cdp-real-browser"
- *   });
- */
-export function makeFeishuApplyFn(opts: {
-  host: string;
-  source: string;
-  channel: string;
-  applyUrlPrefix: string;
-  fetchTitle: (postId: string) => Promise<unknown>;
-  submitKind?: "feishu-3-step" | "cdp-real-browser";
-}) {
-  return async function fetchApplicationSchema(postId: string): Promise<
-    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
-  > {
-    const id = (postId ?? "").trim();
-    if (!id) return { ok: false, source: opts.source, message: "post_id is required" };
-    let title = "";
-    try {
-      const detail = (await opts.fetchTitle(id)) as { ok?: boolean; title?: string; message?: string };
-      if (detail?.ok === false) {
-        return { ok: false, source: opts.source, message: detail.message ?? "post not found" };
-      }
-      title = detail?.title ?? "";
-    } catch {
-      // detail call failures aren't fatal for the schema — we can still
-      // return what we know.
-    }
-    const schema = buildFeishuApplySchema({
-      host: opts.host,
-      source: opts.source,
-      channel: opts.channel,
-      applyUrlPrefix: opts.applyUrlPrefix,
-      postId: id,
-      jobTitle: title,
-    });
-    if (opts.submitKind === "cdp-real-browser") {
-      schema.submit_kind = "cdp-real-browser";
-      schema.submit_notes =
-        "Lilith's Feishu tenant requires a runtime-minted `_signature` token. " +
-        "Submission must drive a real browser (puppeteer-core) — staged dry-run " +
-        "only for now.";
-    }
-    return { ok: true, schema };
-  };
-}
-
-export function buildFeishuApplySchema(args: {
-  host: string;
-  source: string;
-  channel: string;
-  applyUrlPrefix: string;
-  postId: string;
-  jobTitle: string;
-}): ApplyFormSchema {
-  const standard: ApplyQuestion[] = [
-    { label: "Name",   required: true, fields: [{ name: "name",   type: "input_text" }] },
-    { label: "Email",  required: true, fields: [{ name: "email",  type: "input_text" }] },
-    { label: "Phone",  required: true, fields: [{ name: "phone",  type: "input_text" }] },
-    { label: "Resume", required: true, fields: [{ name: "resume", type: "input_file" }] },
-  ];
-  return {
-    source: args.source,
-    post_id: args.postId,
-    job_title: args.jobTitle,
-    apply_url: `${args.applyUrlPrefix}/${encodeURIComponent(args.postId)}/detail`,
-    submit_endpoint: `https://${args.host}/api/v1/user/applications`,
-    submit_method: "POST",
-    submit_kind: "feishu-3-step",
-    endpoint_verified: true,
-    submit_notes:
-      "Feishu apply is a 3-step token flow: POST /api/v1/attachment/upload/tokens → " +
-      "PUT presigned URL on lf-package-cn.feishucdn.com → POST /api/v1/attachment/exchange/tokens → " +
-      "POST /api/v1/user/applications with { post_id, attachment_id, applicant_info }. " +
-      "Endpoint extracted from atsx-throne/hire-fe-prod/saas-career/4026.f23f1edc.js " +
-      "(/user/applications path) and anon-probed → HTTP 405 = real REST route in Feishu's " +
-      "routing table (method/csrf requirements differ from anon POST). Requires candidate " +
-      "session cookies (capture via extension/, drop under ~/.jobpro/<adapter>.session.json).",
-    questions: standard,
-  };
-}
 
 // ---------- adapter config ----------
 
@@ -155,8 +55,13 @@ export interface FeishuAdapterConfig {
    *  Treated as the adapter's historical default channel. */
   channel: string;
   /** Optional dedicated channel for `scope=social`. If absent, the factory
-   *  falls back to `channel` + `recruitment_id_list:["101"]` semantics. */
+   *  falls back to `channel` + `recruitment_id_list:["101"]` semantics.
+   *  `""` is a valid value — custom-domain portals (hr.sensetime.com) use
+   *  the empty channel for their main site. */
   socialChannel?: string;
+  /** Optional dedicated channel for `scope=campus`. If absent, the factory
+   *  falls back to `channel` + `recruitment_id_list:["201"]` semantics. */
+  campusChannel?: string;
   /** Optional dedicated channel for `scope=intern`. If absent, the factory
    *  falls back to `channel` + `recruitment_id_list:["202"]` semantics. */
   internChannel?: string;
@@ -330,16 +235,21 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
   function channelForScope(
     s: PositionScope | undefined
   ): { channel: string; recruitmentIdList?: string[] } {
+    // NOTE: `!== undefined`, not truthiness — `""` is a real channel value
+    // on custom-domain portals (hr.sensetime.com main site).
     if (s === undefined || s === "all") return { channel: cfg.channel };
     if (s === "social") {
-      if (cfg.socialChannel) return { channel: cfg.socialChannel };
+      if (cfg.socialChannel !== undefined) return { channel: cfg.socialChannel };
       return { channel: cfg.channel, recruitmentIdList: ["101"] };
     }
     if (s === "intern") {
-      if (cfg.internChannel) return { channel: cfg.internChannel };
+      if (cfg.internChannel !== undefined) return { channel: cfg.internChannel };
       return { channel: cfg.channel, recruitmentIdList: ["202"] };
     }
-    if (s === "campus") return { channel: cfg.channel, recruitmentIdList: ["201"] };
+    if (s === "campus") {
+      if (cfg.campusChannel !== undefined) return { channel: cfg.campusChannel };
+      return { channel: cfg.channel, recruitmentIdList: ["201"] };
+    }
     return { channel: cfg.channel };
   }
 
@@ -496,38 +406,101 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
 
   // ---------- fetchAllPositions ----------
 
-  async function fetchAllPositions(
-    opts: SearchOptions & { maxPages?: number } = {}
-  ) {
+  /** Enumerate one scope's channel to exhaustion with post_id dedupe. */
+  async function fetchAllOneScope(
+    scope: PositionScope | undefined,
+    opts: SearchOptions & { maxPages?: number },
+    seen: Set<string>,
+    bucket: PositionSummary[]
+  ): Promise<{ ok: boolean; message?: string; total: number; truncated: boolean }> {
     const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-    const maxPages = Math.max(1, opts.maxPages ?? 5);
-
-    const bucket: PositionSummary[] = [];
+    const maxPages = Math.max(1, opts.maxPages ?? 50);
     let total: number | undefined;
 
     for (let page = 1; page <= maxPages; page++) {
-      const result = await searchPositions({ ...opts, page, pageSize });
-      if (!result.ok) {
-        return {
-          ok: false,
-          message: result.message,
-          source,
-          fetched: bucket.length,
-          positions: bucket,
-        };
-      }
+      const result = await searchPositions({ ...opts, scope, page, pageSize });
+      if (!result.ok) return { ok: false, message: result.message, total: total ?? 0, truncated: true };
       if (total === undefined) total = result.total;
-      if (!result.positions.length) break;
-      bucket.push(...result.positions);
-      if (total !== undefined && bucket.length >= total) break;
+      if (!result.positions.length) return { ok: true, total: total ?? 0, truncated: false };
+      let added = 0;
+      for (const p of result.positions) {
+        if (seen.has(p.post_id)) continue;
+        seen.add(p.post_id);
+        bucket.push(p);
+        added += 1;
+      }
+      // No fresh ids = upstream replaying pages; stop instead of looping.
+      if (added === 0) return { ok: true, total: total ?? 0, truncated: false };
+      if (total !== undefined && bucket.length >= total) return { ok: true, total, truncated: false };
+      if (result.positions.length < pageSize) return { ok: true, total: total ?? 0, truncated: false };
+    }
+    return { ok: true, total: total ?? 0, truncated: true };
+  }
+
+  async function fetchAllPositions(
+    opts: SearchOptions & { maxPages?: number } = {}
+  ) {
+    const seen = new Set<string>();
+    const bucket: PositionSummary[] = [];
+
+    // scope === "all" sweeps every distinct configured channel (deduped by
+    // post_id) — a Feishu post only exists on its own portal channel, so a
+    // single-channel sweep silently misses the other portals (audit: minimax
+    // `all` returned 77 campus posts while 190 social posts existed).
+    // Other scopes (or none) keep the historical single-channel behaviour.
+    const sweeps: Array<PositionScope | undefined> =
+      opts.scope === "all"
+        ? (() => {
+            const chs = new Set<string>();
+            const order: Array<PositionScope | undefined> = [];
+            const pairs: Array<[PositionScope | undefined, string | undefined]> = [
+              [undefined, cfg.channel],
+              ["social", cfg.socialChannel],
+              ["campus", cfg.campusChannel],
+              ["intern", cfg.internChannel],
+            ];
+            for (const [sc, ch] of pairs) {
+              if (ch === undefined || chs.has(ch)) continue;
+              chs.add(ch);
+              order.push(sc);
+            }
+            return order;
+          })()
+        : [opts.scope];
+
+    let totalSum = 0;
+    let truncated = false;
+    const errors: string[] = [];
+    for (const sweep of sweeps) {
+      const r = await fetchAllOneScope(sweep, opts, seen, bucket);
+      if (!r.ok) {
+        errors.push(r.message ?? "unknown error");
+        truncated = true;
+        continue;
+      }
+      totalSum += r.total;
+      if (r.truncated) truncated = true;
+    }
+    if (bucket.length === 0 && errors.length === sweeps.length) {
+      return {
+        ok: false,
+        message: errors.join("; "),
+        source,
+        fetched: 0,
+        positions: bucket,
+      };
     }
 
     return {
       ok: true,
       source,
-      total: total ?? bucket.length,
+      // Dedupe can make unique count < per-channel total sum; report the sum
+      // as the upstream-declared total and fetched as unique rows harvested.
+      total: totalSum || bucket.length,
       fetched: bucket.length,
       positions: bucket,
+      ...(truncated ? { truncated: true as const } : {}),
+      ...(errors.length ? { errors } : {}),
     };
   }
 
@@ -542,36 +515,47 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     const pageSize = 100;
     const maxPages = 5;
 
-    for (let page = 1; page <= maxPages; page++) {
-      const offset = (page - 1) * pageSize;
-      const payload = {
-        keyword: "",
-        limit: pageSize,
-        offset,
-        portal_type: 3,
-        portal_entrance: 1,
-        language: "zh",
-      };
-      const response = await call<RawSearchData>("/search/job/posts", payload);
-      if (!response.ok || !response.data) break;
+    // A post only exists on its own portal channel, so sweep every distinct
+    // configured channel (default first) — otherwise detail fails for any
+    // job that lives on a non-default channel (e.g. hr.sensetime.com campus
+    // jobs on "edu" while the default channel is the social main site).
+    const channels: string[] = [];
+    for (const c of [cfg.channel, cfg.socialChannel, cfg.campusChannel, cfg.internChannel]) {
+      if (c !== undefined && !channels.includes(c)) channels.push(c);
+    }
 
-      const posts = response.data.job_post_list ?? [];
-      const found = posts.find((p) => String(p.id) === id);
-      if (found) {
-        const summary = summarizePosition(found);
-        return {
-          ok: true,
-          source,
-          post_id: id,
-          title: found.title ?? "",
-          direction: found.sub_title ?? "",
-          description: found.description ?? "",
-          requirements: found.requirement ?? "",
-          work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
-          apply_url: summary.apply_url,
+    for (const channel of channels) {
+      for (let page = 1; page <= maxPages; page++) {
+        const offset = (page - 1) * pageSize;
+        const payload = {
+          keyword: "",
+          limit: pageSize,
+          offset,
+          portal_type: 3,
+          portal_entrance: 1,
+          language: "zh",
         };
+        const response = await call<RawSearchData>("/search/job/posts", payload, channel);
+        if (!response.ok || !response.data) break;
+
+        const posts = response.data.job_post_list ?? [];
+        const found = posts.find((p) => String(p.id) === id);
+        if (found) {
+          const summary = summarizePosition(found);
+          return {
+            ok: true,
+            source,
+            post_id: id,
+            title: found.title ?? "",
+            direction: found.sub_title ?? "",
+            description: found.description ?? "",
+            requirements: found.requirement ?? "",
+            work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
+            apply_url: summary.apply_url,
+          };
+        }
+        if (posts.length < pageSize) break;
       }
-      if (posts.length < pageSize) break;
     }
 
     return {
@@ -830,58 +814,6 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     };
   }
 
-  // ---------- fetchApplicationSchema (Phase 2) ----------
-  //
-  // Feishu's apply funnel is a 3-step token flow, not a single multipart
-  // POST. Discovered via JS-bundle inspection of nio.jobs.feishu.cn
-  // (lf-package-cn.feishucdn.com/obj/atsx-throne/hire-fe-prod/portal/
-  // saas-career/static/js/*.js) — the routes baked into the bundle are:
-  //
-  //   1. POST {API_ROOT}/attachment/upload/tokens
-  //        → returns short-lived presigned upload URL + attachment_id
-  //   2. PUT  <presigned-URL on lf-package-cn.feishucdn.com>
-  //        → uploads the resume PDF/DOCX bytes directly
-  //   3. POST {API_ROOT}/attachment/exchange/tokens
-  //        → exchanges short-lived id for a permanent attachment_id
-  //   4. POST {API_ROOT}/user/delivery/check (pre-flight, optional)
-  //   5. POST {API_ROOT}/resume/apply
-  //        body: { post_id, attachment_id, applicant_info: { name, email,
-  //                phone, ... }, ... }
-  //        → returns { code:0, data:{ application_id } } on success
-  //
-  // The whole flow requires the user to be logged in as a candidate; the
-  // session cookie set during login authorizes every call above. Capture
-  // via the browser extension (~/.jobpro/<co>.session.json), then a
-  // future iteration adds an `executeSubmission` hook that drives the
-  // 3-step flow with the captured cookies.
-  //
-  // For now `fetchApplicationSchema` returns the contact-info schema
-  // (sufficient for dry-run staging) plus `submit_kind: "feishu-3-step"`
-  // so the dispatcher refuses --really-submit with a useful pointer.
-
-  async function fetchApplicationSchema(postId: string): Promise<
-    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
-  > {
-    const id = (postId ?? "").trim();
-    if (!id) return { ok: false, source, message: "post_id is required" };
-    const detail = await fetchPositionDetail(id);
-    const detailAny = detail as { ok?: boolean; title?: string; message?: string };
-    if (!detailAny.ok) {
-      return { ok: false, source, message: detailAny.message ?? "post not found" };
-    }
-    return {
-      ok: true,
-      schema: buildFeishuApplySchema({
-        host: cfg.host,
-        source,
-        channel: cfg.channel,
-        applyUrlPrefix: cfg.applyUrlPrefix,
-        postId: id,
-        jobTitle: detailAny.title ?? "",
-      }),
-    };
-  }
-
   return {
     supportedScopes,
     channelForScope,
@@ -894,6 +826,5 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
-    fetchApplicationSchema,
   };
 }

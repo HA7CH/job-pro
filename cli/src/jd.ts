@@ -14,6 +14,10 @@
 //                   parameter:{ positionName:str, planIdList:int[], positionDeptList:[],
 //                                jobDirectionCodeList:str[], workCityCodeList:str[] } }
 //        Response: { success:true, body:{ totalNumber:int, items:[...] } }
+//        - pageIndex is 0-BASED: offset = pageSize × pageIndex (re-probed 2026-07-11:
+//          present totalNumber=16; pageSize=5/pageIndex=0 → items 1-5 (8006, 7993, ...),
+//          pageIndex=1 → items 6-10 (8003, 7999, ...)). The CLI's 1-based --page must
+//          be translated to pageIndex = page - 1 before hitting upstream.
 //        - Each item has publishId (= post_id), positionName, jobDirection, jobDirectionCode,
 //          workContent, qualification, and requirementVoList (array per city/BG).
 //        - positionDeptList: the server accepts [] (no-op); no public dictionary for dept codes.
@@ -274,9 +278,9 @@ const TYPE_LABELS: Record<string, string> = {
 // ---------- SearchOptions ----------
 
 export interface SearchOptions {
-  /** Keyword to filter by position name. Max 60 chars. */
+  /** Keyword to filter by position name (server-side positionName filter). Max 60 chars. */
   keyword?: string;
-  /** Page number (1-based). Default: 1. */
+  /** Page number (1-based; translated to upstream 0-based pageIndex). Default: 1. */
   page?: number;
   /** Page size. Default: 20. Max: 200 (server returns all if huge). */
   pageSize?: number;
@@ -300,9 +304,12 @@ export interface SearchOptions {
 
 // ---------- searchPositions ----------
 
-// Scope → recruitType buckets. JD has three buckets and the legacy default
-// ("present" alone) returns totalNumber>0 with empty items[] for most
-// keywords, so fanning out + dedupe by publishId gives users honest data.
+// Scope → recruitType buckets. JD has three buckets; fanning out + dedupe by
+// publishId gives users honest data across all of them.
+// (Historical note: pre-1.1.15 the CLI sent its 1-based page straight to the
+// 0-based upstream pageIndex, so every bucket's first page was skipped. That
+// off-by-one is what made "present" look like it "returns totalNumber>0 with
+// empty items[]" — the bucket is fine; the CLI was asking for page 2.)
 function bucketsForScope(scope: PositionScope | undefined): Array<"present" | "internship" | "talent"> {
   if (scope === "intern") return ["internship"];
   if (scope === "campus") return ["present", "talent"];
@@ -318,7 +325,10 @@ async function searchOneBucket(
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
   const payload = {
     pageSize,
-    pageIndex: page,
+    // Upstream pageIndex is 0-based (offset = pageSize × pageIndex; probed
+    // 2026-07-11, see endpoint inventory at the top of this file). The CLI's
+    // page is 1-based, so subtract 1 here.
+    pageIndex: page - 1,
     parameter: {
       positionName: keyword,
       planIdList: opts.planIdList ?? [],
@@ -398,7 +408,11 @@ export async function fetchAllPositions(
   const maxPages = Math.max(1, opts.maxPages ?? 10);
 
   const bucket: PositionSummary[] = [];
+  const seen = new Set<string>();
   let total: number | undefined;
+  // true once we hit a natural stop (empty page / no new ids / reached total);
+  // if we instead run out of maxPages, the result is reported as truncated.
+  let exhausted = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({ ...opts, page, pageSize });
@@ -413,9 +427,27 @@ export async function fetchAllPositions(
       };
     }
     if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+
+    // Dedupe by post_id across pages/buckets (searchPositions already dedupes
+    // within a single page's bucket fan-out, but not across pages).
+    let added = 0;
+    for (const p of result.positions) {
+      if (p.post_id) {
+        if (seen.has(p.post_id)) continue;
+        seen.add(p.post_id);
+      }
+      bucket.push(p);
+      added++;
+    }
+
+    if (!result.positions.length || added === 0) {
+      exhausted = true;
+      break;
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
   }
 
   return {
@@ -423,6 +455,7 @@ export async function fetchAllPositions(
     source: "campus.jd.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
+    ...(exhausted ? {} : { truncated: true as const }),
     positions: bucket,
   };
 }
@@ -785,42 +818,5 @@ export async function matchResume(
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
       "The only authority on selection is HR.",
-  };
-}
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_jd } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_jd } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_jd } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "campus.jd.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://campus.jd.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "campus.jd.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_jd({
-      source: "campus.jd.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://wutongzhaopin.jd.com/api/wx/delivery",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "JD — POST /api/wx/delivery on wutongzhaopin.jd.com (JD's careers backend). Endpoint extracted from the campus.jd.com SPA's umi.js bundle (gzip-decompressed); also documented sibling routes /api/wx/activityDelivery/activityDelivery, /api/wx/favorites/add, /api/wx/delivery/list. The campus.jd.com frontend domain serves SPA HTML only; XHR traffic targets wutongzhaopin.jd.com. Requires session cookies + JD passport login. Probe from US IP returns ECONNRESET (geo-fenced); the URL is verified via static JS-bundle analysis, not live anonymous probe.",
-    }),
   };
 }

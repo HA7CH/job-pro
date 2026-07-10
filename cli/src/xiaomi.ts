@@ -26,6 +26,18 @@
 //                   location_code_list?, subject_id_list? }
 //        Response: { code:0, data:{ job_post_list:[...], count:<int> }, message:"ok" }
 //
+//   GET  https://xiaomi.jobs.f.mioffice.cn/api/v1/job/posts/{post_id}
+//        Per-post detail (probed 2026-07). CHANNEL-AGNOSTIC: resolves ids from
+//        ALL three pools (campus / internship / social) with just the
+//        portal-platform:pc header — no portal-channel needed (verified with a
+//        live id from each pool). Response:
+//          { code:0, data:{ job_post_detail:{ id,title,description,requirement,
+//            recruit_type,city_list,publish_time,code,... },
+//            recommend_job_post_List:[...] }, message:"ok" }
+//        Unknown/bogus ids still return code:0 but with job_post_detail ABSENT
+//        (data carries only recommend_job_post_List:[]) — that is the
+//        authoritative not-found signal.
+//
 //   GET  https://xiaomi.jobs.f.mioffice.cn/api/v1/config/job/filters/campus
 //        Returns: { job_function_list, city_list, recruitment_type_list,
 //                   job_subject_list, ... }
@@ -350,6 +362,12 @@ export interface SearchOptions {
 }
 
 // ---------- searchPositions ----------
+// NOTE on keyword semantics (audit 2026-07, upstream behaviour — not a CLI
+// bug): the ATSX search matches `keyword` against the FULL JD TEXT, not just
+// titles, so e.g. "算法" can surface "资金专员" whose JD mentions 算法. A
+// direct curl of POST /api/v1/search/job/posts returns byte-identical totals
+// and titles. Likewise the campus pool is locked to recruitment batch 201
+// (44 posts as of 2026-07), so campus keyword totals are legitimately small.
 
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
@@ -462,29 +480,98 @@ export async function fetchAllPositions(
 }
 
 // ---------- fetchPositionDetail ----------
-// Xiaomi has no public per-post detail REST endpoint.
-// We paginate the search and filter by id (same strategy as bytedance.ts).
+// Primary path (probed 2026-07): the per-post REST endpoint
+//   GET /api/v1/job/posts/{post_id}
+// It is CHANNEL-AGNOSTIC — verified live with one id from each pool (campus
+// 7620280811061496102, internship 7660791605549418798, social
+// 7303887804843524205): all resolve with just portal-platform:pc, no
+// portal-channel header. Bogus ids return code:0 with job_post_detail absent
+// (data only has recommend_job_post_List:[]) — the authoritative not-found.
+// This fixes the 1.1.14 audit finding where social/intern ids were 100%
+// unresolvable: the old implementation paginated ONLY the campus pool with a
+// 500-post cap, while the social pool alone is ~2053 posts (2026-07).
+//
+// Fallback path: if the per-post endpoint fails at transport level
+// (WAF/network/non-JSON), sweep the search pagination across ALL THREE
+// channels — requested channel first when the caller passed one — with a
+// count-driven page limit (hard cap 4000 posts/channel, comfortably above the
+// ~2053-post social pool).
 
-export async function fetchPositionDetail(
-  postId: string,
-  opts: { channel?: XmChannel; scope?: PositionScope } = {}
-) {
-  const id = (postId ?? "").trim();
-  const channel: XmChannel = opts.channel ?? channelForScope(opts.scope) ?? "campus";
-  if (!id) {
-    return { ok: false, source: "xiaomi.jobs.f.mioffice.cn", message: "post_id is required" };
+/** Channel a post belongs to, inferred from its recruit_type tree:
+ *  parent id "1"/社招 → social; id "202"/实习 → internship; else campus
+ *  (id "201"/正式, parent "2"/校招). Confirmed live 2026-07 on one post from
+ *  each pool. Used only to build the right detail-page apply_url. */
+function channelFromRecruitType(rt: RawRecruitType | undefined | null): XmChannel {
+  if (rt?.parent?.id === "1" || rt?.parent?.name === "社招") return "social";
+  if (rt?.id === "202" || rt?.name === "实习") return "internship";
+  return "campus";
+}
+
+interface RawDetailData {
+  job_post_detail?: RawJobPost;
+  recommend_job_post_List?: unknown[];
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** GET the per-post detail endpoint with modest backoff (the WAF answers
+ *  rapid-fire requests with empty bodies — observed live 2026-07). Returns
+ *  `null` for a clean upstream "no such post" (code:0, job_post_detail
+ *  absent) and a string error message for transport-level failures. */
+async function fetchDetailById(id: string): Promise<RawJobPost | null | { transportError: string }> {
+  const url = `${API_ROOT}/job/posts/${encodeURIComponent(id)}`;
+  // makeHeaders("social") = portal-platform:pc + root Referer, NO
+  // portal-channel — exactly the header set the endpoint was probed with.
+  const headers = makeHeaders("social");
+  let lastErr = "unknown error";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(700 * attempt);
+    let response: Response;
+    try {
+      response = await fetch(url, { headers });
+    } catch (err) {
+      lastErr = `network error: ${err instanceof Error ? err.message : String(err)}`;
+      continue;
+    }
+    if (!response.ok) {
+      lastErr = `HTTP ${response.status}: ${response.statusText}`;
+      continue;
+    }
+    let payload: XmEnvelope<RawDetailData>;
+    try {
+      payload = (await response.json()) as XmEnvelope<RawDetailData>;
+    } catch (err) {
+      lastErr = `bad JSON: ${err instanceof Error ? err.message : String(err)}`;
+      continue;
+    }
+    if (payload.code !== 0) {
+      lastErr = payload.message || `upstream code ${payload.code}`;
+      continue;
+    }
+    // code:0 envelope is authoritative: detail present → found, absent → no
+    // such post anywhere (bogus ids yield {recommend_job_post_List:[]}).
+    return payload.data?.job_post_detail ?? null;
   }
+  return { transportError: lastErr };
+}
 
+/** Fallback: paginate one channel's search pool looking for the id. Page
+ *  limit is driven by the pool's own `count` (ceil(count/100)), hard-capped
+ *  at 40 pages = 4000 posts — above the ~2053-post social pool (2026-07). */
+async function sweepChannelForPost(
+  id: string,
+  channel: XmChannel
+): Promise<RawJobPost | null> {
   const pageSize = 100;
-  const maxPages = 5;
+  const hardCap = 40;
+  let maxPages = hardCap;
   const defaultRecruitId = channel === "internship" ? "202" : "201";
 
   for (let page = 1; page <= maxPages; page++) {
-    const offset = (page - 1) * pageSize;
     const payload: Record<string, unknown> = {
       keyword: "",
       limit: pageSize,
-      offset,
+      offset: (page - 1) * pageSize,
       portal_type: 3,
       portal_entrance: 1,
       language: "zh",
@@ -494,31 +581,78 @@ export async function fetchPositionDetail(
     }
     const response = await call<RawSearchData>("/search/job/posts", payload, channel);
     if (!response.ok || !response.data) break;
-
+    if (page === 1 && typeof response.data.count === "number") {
+      maxPages = Math.min(hardCap, Math.max(1, Math.ceil(response.data.count / pageSize)));
+    }
     const posts = response.data.job_post_list ?? [];
     const found = posts.find((p) => String(p.id) === id);
-    if (found) {
-      const summary = summarizePosition(found, channel);
-      return {
-        ok: true,
-        source: "xiaomi.jobs.f.mioffice.cn",
-        post_id: id,
-        title: found.title ?? "",
-        direction: found.sub_title ?? "",
-        description: found.description ?? "",
-        requirements: found.requirement ?? "",
-        work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
-        apply_url: summary.apply_url,
-      };
-    }
+    if (found) return found;
     if (posts.length < pageSize) break;
+  }
+  return null;
+}
+
+export async function fetchPositionDetail(
+  postId: string,
+  opts: { channel?: XmChannel; scope?: PositionScope } = {}
+) {
+  const id = (postId ?? "").trim();
+  if (!id) {
+    return { ok: false, source: "xiaomi.jobs.f.mioffice.cn", message: "post_id is required" };
+  }
+
+  const shape = (found: RawJobPost, channel: XmChannel) => {
+    const summary = summarizePosition(found, channel);
+    return {
+      ok: true as const,
+      source: "xiaomi.jobs.f.mioffice.cn",
+      post_id: id,
+      channel,
+      title: found.title ?? "",
+      direction: found.sub_title ?? "",
+      recruit_label: found.recruit_type?.name ?? "",
+      description: found.description ?? "",
+      requirements: found.requirement ?? "",
+      work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
+      apply_url: summary.apply_url,
+    };
+  };
+
+  // 1) Per-post endpoint — resolves ids from every pool in one request.
+  const direct = await fetchDetailById(id);
+  if (direct && !("transportError" in direct)) {
+    return shape(direct, channelFromRecruitType(direct.recruit_type));
+  }
+  if (direct === null) {
+    return {
+      ok: false,
+      source: "xiaomi.jobs.f.mioffice.cn",
+      post_id: id,
+      message: `post ${id} not found (per-post endpoint covers campus/internship/social pools)`,
+    };
+  }
+
+  // 2) Transport failure → cross-channel pagination sweep. The dispatcher
+  // never forwards --scope to detail, so default order covers all pools;
+  // an explicitly passed channel/scope is just searched first.
+  const preferred = opts.channel ?? channelForScope(opts.scope);
+  const channels: XmChannel[] = ["campus", "internship", "social"];
+  if (preferred) {
+    channels.splice(channels.indexOf(preferred), 1);
+    channels.unshift(preferred);
+  }
+  for (const channel of channels) {
+    const found = await sweepChannelForPost(id, channel);
+    if (found) return shape(found, channel);
   }
 
   return {
     ok: false,
     source: "xiaomi.jobs.f.mioffice.cn",
     post_id: id,
-    message: `post ${id} not found in ${channel} pool (searched up to ${maxPages * pageSize} posts)`,
+    message:
+      `post ${id} not found: per-post endpoint failed (${direct.transportError}) ` +
+      `and pagination sweep across campus/internship/social pools had no match`,
   };
 }
 
@@ -810,14 +944,3 @@ export async function matchResume(
       "The only authority on selection is HR.",
   };
 }
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-import { makeFeishuApplyFn } from "./feishu.js";
-
-export const fetchApplicationSchema = makeFeishuApplyFn({
-  host: "xiaomi.jobs.f.mioffice.cn",
-  source: "xiaomi.jobs.f.mioffice.cn",
-  channel: "campus",
-  applyUrlPrefix: "https://xiaomi.jobs.f.mioffice.cn/campus/position",
-  fetchTitle: (id) => fetchPositionDetail(id),
-});

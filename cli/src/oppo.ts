@@ -60,10 +60,14 @@ export { checkResume };
 /**
  * OPPO supports campus + intern + all (1.1.0+).
  *
- * Scope translation:
- *   campus → recruitmentType:"Campus"  (existing default; preserves 1.0.93)
+ * Scope translation (re-verified 2026-07-11):
+ *   campus → recruitmentType:"Graduate" + "doctor"  (two upstream requests,
+ *            merged client-side — the 博士生 campus project counts as 校招;
+ *            upstream recruitmentType only accepts a single String: an array
+ *            body → Jackson 500, recruitmentTypeList/recruitmentTypes are
+ *            silently ignored, "Graduate,doctor" → total 0)
  *   intern → recruitmentType:"Intern"
- *   all / undefined → no recruitmentType filter (mixed campus + intern)
+ *   all / undefined → no recruitmentType filter (mixed feed)
  *
  * `--scope social` is rejected by the dispatcher (see supportedScopes below).
  * OPPO has no public social-hire API — see the API DISCOVERY block above.
@@ -159,21 +163,32 @@ export interface SearchOptions {
   /** city code, e.g. "440300" = 深圳市 */
   cityCode?: string;
   /** CLI `--scope` echo (1.1.0+). When set, overrides `recruitType`:
-   *  campus→Campus, intern→Intern, all→omit filter. `social` is rejected by
-   *  the dispatcher (see supportedScopes). */
+   *  campus→Graduate+doctor, intern→Intern, all→omit filter. `social` is
+   *  rejected by the dispatcher (see supportedScopes). */
   scope?: PositionScope;
 }
 
+/** Upstream recruitmentType values that make up the campus (校招) scope.
+ *  "Graduate" = 应届生 formal campus hire, "doctor" = 博士生 campus project
+ *  (2026-07-11: the mixed feed of 123 splits Intern:98 + doctor:25; Graduate
+ *  is 0 between hiring seasons — the 博士生 postings ARE the live campus jobs). */
+const CAMPUS_RECRUITMENT_TYPES = ["Graduate", "doctor"] as const;
+
 /**
- * Translate the CLI scope to the upstream `recruitmentType` query field.
+ * Translate the CLI scope to the upstream `recruitmentType` values.
  * Returns `undefined` to mean "do not send the filter" (i.e. mixed feed).
+ * A multi-element result means one upstream request per type, merged
+ * client-side — recruitmentType is a single Java String upstream (array →
+ * Jackson 500; recruitmentTypeList / comma-joined → ignored / 0; verified
+ * 2026-07-11 by direct POSTs to /openapi/position/pageNew).
  */
-function recruitmentTypeForScope(s: PositionScope | undefined): string | undefined {
+function recruitmentTypesForScope(s: PositionScope | undefined): readonly string[] | undefined {
   // OPPO's upstream taxonomy uses "Graduate" for 应届生/校招 (not "Campus" —
   // that string returns 0 results despite looking right). Verified 2026-05
-  // via /openapi/position/project/list.
-  if (s === "campus") return "Graduate";
-  if (s === "intern") return "Intern";
+  // via /openapi/position/project/list; "doctor" added 2026-07 so the 博士生
+  // campus project is not silently excluded from --scope campus.
+  if (s === "campus") return CAMPUS_RECRUITMENT_TYPES;
+  if (s === "intern") return ["Intern"];
   // "all" → no filter, mixed feed. "social" never reaches here (dispatcher
   // rejects it via supportedScopes). undefined preserves 1.0.93 behaviour
   // (caller's existing `recruitType` field wins).
@@ -207,52 +222,180 @@ function summarize(item: RawPositionEntry): PositionSummary {
   };
 }
 
-// ---------- searchPositions ----------
+// ---------- low-level page fetch + single-feed enumeration ----------
 
-export async function searchPositions(opts: SearchOptions = {}) {
-  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
-  const page = Math.max(1, opts.page ?? 1);
-  const body: Record<string, unknown> = {
-    pageNum: page,
-    pageSize,
-  };
-  if (opts.keyword) body.keyword = opts.keyword.trim().slice(0, 60);
-  // The CLI `--scope` flag takes precedence over the legacy per-adapter
-  // `recruitType` field when both are set. When neither is set we preserve
-  // the 1.0.93 default (mixed campus + intern feed).
-  const scopeFilter = recruitmentTypeForScope(opts.scope);
-  if (scopeFilter !== undefined) {
-    body.recruitmentType = scopeFilter;
-  } else if (opts.recruitType === "campus") {
-    body.recruitmentType = "Graduate";
-  } else if (opts.recruitType === "intern") {
-    body.recruitmentType = "Intern";
-  }
-  if (opts.cityCode) body.workCityCode = opts.cityCode;
+interface FeedFilter {
+  /** Single upstream recruitmentType, or undefined for the mixed feed. */
+  recruitmentType?: string;
+  /** Server-side title filter. The field is `positionName` — `keyword` /
+   *  `keyWord` are silently ignored by pageNew (any value → full 123-row
+   *  feed), while {"positionName":"工程师"} → total 74, {"positionName":
+   *  "算法"} → 35, {"positionName":"前端"} → 0. Verified 2026-07-11 by
+   *  direct POSTs to /openapi/position/pageNew. */
+  positionName?: string;
+  workCityCode?: string;
+}
 
+function feedBody(filter: FeedFilter, pageNum: number, pageSize: number): Record<string, unknown> {
+  const body: Record<string, unknown> = { pageNum, pageSize };
+  if (filter.positionName) body.positionName = filter.positionName;
+  if (filter.recruitmentType) body.recruitmentType = filter.recruitmentType;
+  if (filter.workCityCode) body.workCityCode = filter.workCityCode;
+  return body;
+}
+
+async function fetchPage(body: Record<string, unknown>) {
   const r = await call<{ records?: RawPositionEntry[]; total?: number; pages?: number }>(
     "POST",
     "/openapi/position/pageNew",
     { body }
   );
-  if (!r.ok || !r.data) {
+  if (!r.ok || !r.data) return { ok: false as const, message: r.message };
+  const rows = r.data.records ?? [];
+  return { ok: true as const, message: "ok", rows, total: r.data.total ?? rows.length };
+}
+
+/**
+ * Exhaustively page through ONE upstream feed (a single recruitmentType or
+ * the unfiltered mixed feed), deduping by post_id. Stops on: fetched >= the
+ * upstream total, a short page, or a page contributing no new ids. pageNum
+ * paginates for real on this endpoint (page 1 vs 2 return disjoint ids;
+ * verified 2026-07-11).
+ */
+async function enumerateFeed(
+  filter: FeedFilter,
+  opts: { pageSize?: number; maxPages?: number } = {}
+) {
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
+  const maxPages = Math.max(1, opts.maxPages ?? 40);
+  const seen = new Set<string>();
+  const positions: PositionSummary[] = [];
+  let total = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await fetchPage(feedBody(filter, page, pageSize));
+    if (!r.ok) {
+      return { ok: false as const, message: r.message, total, positions, truncated: positions.length < total };
+    }
+    total = r.total;
+    let added = 0;
+    for (const row of r.rows) {
+      const s = summarize(row);
+      if (!s.post_id || seen.has(s.post_id)) continue;
+      seen.add(s.post_id);
+      positions.push(s);
+      added++;
+    }
+    if (positions.length >= total) break; // exhausted the feed
+    if (r.rows.length < pageSize) break; // short page → server has no more
+    if (added === 0) break; // page repeated known ids → stop instead of looping
+  }
+  return {
+    ok: true as const,
+    message: "ok",
+    total,
+    positions,
+    truncated: positions.length < total,
+  };
+}
+
+/** Resolve the effective recruitmentType list: `--scope` wins over the legacy
+ *  per-adapter `recruitType` field; both map campus → Graduate + doctor. */
+function resolveRecruitmentTypes(
+  scope: PositionScope | undefined,
+  recruitType: "campus" | "intern" | undefined
+): readonly string[] | undefined {
+  const fromScope = recruitmentTypesForScope(scope);
+  if (fromScope !== undefined) return fromScope;
+  if (recruitType === "campus") return CAMPUS_RECRUITMENT_TYPES;
+  if (recruitType === "intern") return ["Intern"];
+  return undefined;
+}
+
+// ---------- searchPositions ----------
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+  const keyword = opts.keyword?.trim().slice(0, 60) || undefined;
+  const types = resolveRecruitmentTypes(opts.scope, opts.recruitType);
+
+  // Single upstream feed (no filter, intern, or a one-type scope): let the
+  // server paginate — pageNum/pageSize/positionName all work server-side.
+  if (!types || types.length === 1) {
+    const body = feedBody(
+      { recruitmentType: types?.[0], positionName: keyword, workCityCode: opts.cityCode },
+      page,
+      pageSize
+    );
+    const r = await fetchPage(body);
+    if (!r.ok) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: r.message,
+        query: body,
+        positions: [] as PositionSummary[],
+      };
+    }
     return {
-      ok: false as const,
+      ok: true as const,
       source: SOURCE,
-      message: r.message,
       query: body,
-      positions: [] as PositionSummary[],
+      page,
+      page_size: pageSize,
+      total: r.total,
+      positions: r.rows.map(summarize),
     };
   }
-  const rows = r.data.records ?? [];
+
+  // Multi-type scope (campus = Graduate + doctor): upstream recruitmentType
+  // only takes a single String (array → Jackson 500; recruitmentTypeList /
+  // "Graduate,doctor" → ignored / 0; verified 2026-07-11), so run one
+  // server-filtered enumeration per type and merge + paginate client-side.
+  // Bounded: the whole site is ~123 postings, so 20 pages × 100 per type is
+  // ample headroom.
+  const query: Record<string, unknown> = {
+    pageNum: page,
+    pageSize,
+    recruitmentTypes: [...types],
+  };
+  if (keyword) query.positionName = keyword;
+  if (opts.cityCode) query.workCityCode = opts.cityCode;
+
+  const merged: PositionSummary[] = [];
+  const seen = new Set<string>();
+  let truncated = false;
+  for (const t of types) {
+    const feed = await enumerateFeed(
+      { recruitmentType: t, positionName: keyword, workCityCode: opts.cityCode },
+      { pageSize: 100, maxPages: 20 }
+    );
+    if (!feed.ok) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: feed.message,
+        query,
+        positions: [] as PositionSummary[],
+      };
+    }
+    truncated = truncated || feed.truncated;
+    for (const p of feed.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      merged.push(p);
+    }
+  }
+  const start = (page - 1) * pageSize;
   return {
     ok: true as const,
     source: SOURCE,
-    query: body,
+    query,
     page,
     page_size: pageSize,
-    total: r.data.total ?? rows.length,
-    positions: rows.map(summarize),
+    total: merged.length,
+    truncated,
+    positions: merged.slice(start, start + pageSize),
   };
 }
 
@@ -270,36 +413,56 @@ export async function fetchAllPositions(
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
   const maxPages = Math.max(1, opts.maxPages ?? 40);
+  const keyword = opts.keyword?.trim().slice(0, 60) || undefined;
+  const types = resolveRecruitmentTypes(opts.scope, opts.recruitType);
 
-  const bucket: PositionSummary[] = [];
-  let total: number | undefined;
+  // One enumeration per upstream feed: [undefined] = the mixed feed;
+  // campus = Graduate + doctor (see recruitmentTypesForScope).
+  const feeds: ReadonlyArray<string | undefined> = types ?? [undefined];
 
-  for (let page = 1; page <= maxPages; page++) {
-    const r = await searchPositions({
-      keyword: opts.keyword,
-      page,
-      pageSize,
-      recruitType: opts.recruitType,
-      scope: opts.scope,
-    });
-    if (!r.ok) {
-      return { ok: false as const, source: SOURCE, message: r.message, total: 0, fetched: bucket.length, positions: bucket };
+  const merged: PositionSummary[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+  let truncated = false;
+  for (const t of feeds) {
+    const feed = await enumerateFeed(
+      { recruitmentType: t, positionName: keyword },
+      { pageSize, maxPages }
+    );
+    if (!feed.ok) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: feed.message,
+        total: 0,
+        fetched: merged.length,
+        positions: merged,
+      };
     }
-    if (total === undefined) total = r.total;
-    if (!r.positions.length) break;
-    bucket.push(...r.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    total += feed.total; // per-feed upstream totals; feeds are disjoint by type
+    truncated = truncated || feed.truncated;
+    for (const p of feed.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      merged.push(p);
+    }
   }
   return {
     ok: true as const,
     source: SOURCE,
-    total: total ?? bucket.length,
-    fetched: bucket.length,
-    positions: bucket,
+    total,
+    fetched: merged.length,
+    truncated,
+    positions: merged,
   };
 }
 
 // ---------- fetchPositionDetail ----------
+
+interface RawWorkCityVO {
+  workCityCode?: string | null;
+  workCityName?: string | null;
+}
 
 interface RawDetail extends RawPositionEntry {
   positionDesc?: string;
@@ -308,7 +471,7 @@ interface RawDetail extends RawPositionEntry {
   projectPositionRequire?: string;
   releaseTime?: string;
   positionNum?: number;
-  workCityVOList?: unknown;
+  workCityVOList?: RawWorkCityVO[] | null;
 }
 
 export async function fetchPositionDetail(postId: string) {
@@ -325,6 +488,19 @@ export async function fetchPositionDetail(postId: string) {
     return { ok: false as const, source: SOURCE, message: r.message || "no detail returned", post_id: id };
   }
   const raw = r.data;
+  // Detail responses null out the flat workCityName/workCityCode fields and
+  // put the real cities in workCityVOList instead (verified 2026-07-11 on
+  // id=1724: workCityName:null, workCityVOList:[深圳市, 成都市] — while the
+  // list row for the same posting carries workCityName:"成都市,深圳市").
+  // Join the VO list to match the list-row format when the flat fields are
+  // empty.
+  const cityVOs = Array.isArray(raw.workCityVOList) ? raw.workCityVOList : [];
+  const work_city =
+    (raw.workCityName ?? "").trim() ||
+    cityVOs.map((c) => (c?.workCityName ?? "").trim()).filter(Boolean).join(",");
+  const work_city_code =
+    (raw.workCityCode ?? "").trim() ||
+    cityVOs.map((c) => (c?.workCityCode ?? "").trim()).filter(Boolean).join(",");
   return {
     ok: true as const,
     source: SOURCE,
@@ -335,8 +511,8 @@ export async function fetchPositionDetail(postId: string) {
     position_type: raw.positionTypeName ?? "",
     description: (raw.positionDesc ?? raw.projectPositionDesc ?? "").trim(),
     requirements: (raw.positionRequire ?? raw.projectPositionRequire ?? "").trim(),
-    work_city: raw.workCityName ?? "",
-    work_city_code: raw.workCityCode ?? "",
+    work_city,
+    work_city_code,
     head_count: raw.positionNum,
     release_time: raw.releaseTime ?? "",
     apply_url: DETAIL_PAGE(id),
@@ -420,40 +596,3 @@ export async function matchResume(
 }
 
 export { extractResumeSignals, scoreOverlap };
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_oppo } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_oppo } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_oppo } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "careers.oppo.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://careers.oppo.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "careers.oppo.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_oppo({
-      source: "careers.oppo.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://careers.oppo.com/api/delivery/saveDelivery",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "OPPO — POST /api/delivery/saveDelivery with session cookie. Endpoint anon-probed → HTTP 500 + Spring \"Internal Server Error\" (real Spring controller; the /api/delivery/* sub-tree was discovered by reading the SPA's resume-787081aa.js chunk which references /api/delivery/getDeliveryInfo etc, then probing siblings — all 7 candidates returned 500 = real routes). The original /openapi/position/apply returned structured 404 from a different Spring service. Body shape still needs validation.",
-    }),
-  };
-}

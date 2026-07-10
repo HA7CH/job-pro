@@ -15,6 +15,13 @@ import { createAdapter } from "./liepin.js";
 
 const adapter = createAdapter({
   companyName: "中金公司",
+  // Liepin company id + exact card compName (probed 2026-07-11:
+  // https://www.liepin.com/company/4580900/). NB: on Liepin the cards carry
+  // the full legal name, NOT "中金公司" — a compName string match never hits,
+  // which is why results must be filtered strictly by compId. Subsidiaries
+  // (e.g. 中国中金财富证券有限公司, compId 7602098) are deliberately excluded.
+  compId: 4580900,
+  liepinCompName: "中国国际金融股份有限公司",
   label: "CICC / 中金",
 });
 
@@ -28,39 +35,3 @@ export const getNotice = adapter.getNotice;
 export const findNoticesByQuestion = adapter.findNoticesByQuestion;
 export const matchResume = adapter.matchResume;
 export const checkResume = adapter.checkResume;
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_cicc } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_cicc } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_cicc } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "cicc.com (via api-c.liepin.com)", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://cicc.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "cicc.com (via api-c.liepin.com)", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_cicc({
-      source: "cicc.com (via api-c.liepin.com)",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: undefined,
-      submitKind: "external",
-      submitNotes:
-        "CICC (Liepin-backed) — submission is recruiter-IM-mediated through Liepin. Open the apply_url to start the chat.",
-    }),
-  };
-}

@@ -14,6 +14,10 @@ import { createAdapter } from "./liepin.js";
 
 const adapter = createAdapter({
   companyName: "微众银行",
+  // Liepin company id + exact card compName (probed 2026-07-11:
+  // https://www.liepin.com/company/8312365/).
+  compId: 8312365,
+  liepinCompName: "微众银行",
   label: "WeBank / 微众银行",
 });
 
@@ -27,39 +31,3 @@ export const getNotice = adapter.getNotice;
 export const findNoticesByQuestion = adapter.findNoticesByQuestion;
 export const matchResume = adapter.matchResume;
 export const checkResume = adapter.checkResume;
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_webank } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_webank } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_webank } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "webank.com (via api-c.liepin.com)", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://webank.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "webank.com (via api-c.liepin.com)", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_webank({
-      source: "webank.com (via api-c.liepin.com)",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: undefined,
-      submitKind: "external",
-      submitNotes:
-        "WeBank (Liepin-backed) — submission is recruiter-IM-mediated through Liepin. Open the apply_url to start the chat.",
-    }),
-  };
-}

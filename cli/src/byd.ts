@@ -26,12 +26,33 @@
 //     positionProvinceArr: [],   // 省 codes
 //     positionCityArr:     [],   // 市 codes
 //     positionOrgArr:      [],   // 事业群 codes
-//     vagueCondition:      "",   // free-text keyword (matches title)
+//     vagueCondition:      "",   // free-text keyword (matches title; server-side,
+//                                //   e.g. 工程师 → total 716 of 2032, verified 2026-07-11)
 //     searchType:          1,    // 1 = title search
 //     zpType:              "00251",  // 招聘类型 — see table below
-//     pageNum:             0,    // zero-based
+//     pageNum:             0,    // *** ROW OFFSET, NOT a page index ***
 //     pageSize:            20
 //   }
+//
+// pageNum semantics (re-probed 2026-07-11): the server treats pageNum as a
+// zero-based ROW OFFSET into the result set, not a page number:
+//   - pageNum=1&pageSize=10  returns rows 1-10 (shifted by exactly one row vs
+//     pageNum=0), NOT the second page.
+//   - pageNum=10&pageSize=10 returns exactly rows 10-19 of pageNum=0&pageSize=20
+//     (byte-identical id list).
+//   - pageNum=2025&pageSize=50 returns the final 7 rows (2025+7 = total 2032).
+// So page N of size S must be requested as pageNum=(N-1)*S. (Pre-1.2.x this
+// adapter sent pageNum=page-1, which made every "page" overlap the previous one
+// by pageSize-1 rows — `all` returned only ~87 unique jobs out of 2032.)
+//
+// The raw corpus also contains DUPLICATE ROWS — same positionCode listed as
+// multiple posting instances (distinct internal `id`s). Measured 2026-07-11 by
+// sweeping all 2032 raw rows: 1689 unique positionCodes, 343 duplicate rows
+// across 253 codes (e.g. 20305947 x7; 20368270 twice within one 10-row page).
+// 250/253 dup groups are byte-identical in every user-visible field; the other
+// 3 (店端销售顾问) differ only in one variant missing province/city. All
+// surfaces therefore dedupe by post_id, backfilling work_cities from a richer
+// duplicate when the kept row lacks it.
 //
 // `zpType` controls the recruit channel:
 //   "00251"  社招   (Experienced; 1647+ live postings)
@@ -217,7 +238,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
     vagueCondition: (opts.keyword ?? "").trim().slice(0, 60),
     searchType: 1,
     zpType: opts.zpType ?? "00251",
-    pageNum: page - 1, // BYD uses 0-based
+    // pageNum is a ROW OFFSET, not a page index (see header notes, probed
+    // 2026-07-11: pageNum=2025&pageSize=50 → the final 7 of 2032 rows).
+    pageNum: (page - 1) * pageSize,
     pageSize,
   };
   const r = await call<{ total?: number; data?: RawPosition[] }>(
@@ -235,6 +258,21 @@ export async function searchPositions(opts: SearchOptions = {}) {
     };
   }
   const rows = r.data.data ?? [];
+  // BYD's own table can list the same positionCode twice within one page
+  // (observed 20368270 duplicated in a raw 10-row page) — collapse by post_id,
+  // keeping the first row but backfilling work_cities from a richer duplicate.
+  const seen = new Map<string, PositionSummary>();
+  const positions: PositionSummary[] = [];
+  for (const row of rows) {
+    const p = summarize(row);
+    const prev = p.post_id ? seen.get(p.post_id) : undefined;
+    if (prev) {
+      if (!prev.work_cities && p.work_cities) prev.work_cities = p.work_cities;
+      continue;
+    }
+    if (p.post_id) seen.set(p.post_id, p);
+    positions.push(p);
+  }
   return {
     ok: true as const,
     source: SOURCE,
@@ -242,20 +280,45 @@ export async function searchPositions(opts: SearchOptions = {}) {
     page,
     page_size: pageSize,
     total: r.data.total ?? rows.length,
-    positions: rows.map(summarize),
+    // Raw row count from the server, BEFORE in-page dedup. fetchAllPositions
+    // needs this for short-page / offset accounting (offsets are in raw rows).
+    raw_rows: rows.length,
+    ...(rows.length > positions.length
+      ? { duplicates_removed: rows.length - positions.length }
+      : {}),
+    positions,
   };
 }
 
 // ---------- fetchAllPositions ----------
+// Sweeps the catalog in non-overlapping raw-row windows (pageNum is a row
+// offset — see header notes). Dedupes by post_id across pages AND collapses
+// BYD's own duplicate rows, and stops on:
+//   - raw rows consumed >= server-reported total (corpus exhausted)
+//   - a short raw page (server ran out of rows)
+//   - a full page that adds no new ids (guard against a looping server)
+// If maxPages is hit while raw rows remain, `truncated: true` is emitted.
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number; zpType?: string } = {}
+  opts: {
+    keyword?: string;
+    maxPages?: number;
+    pageSize?: number;
+    zpType?: string;
+    scope?: PositionScope;
+  } = {}
 ) {
   const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 50));
-  const maxPages = Math.max(1, opts.maxPages ?? 40);
+  // 2032 raw social rows / 50 per page = 41 pages as of 2026-07-11; 60 leaves
+  // headroom (the pre-1.2.x default of 40 could not even cover today's corpus).
+  const maxPages = Math.max(1, opts.maxPages ?? 60);
 
+  const seen = new Map<string, PositionSummary>();
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
+  let rawConsumed = 0;
+  let duplicates = 0;
+  let exhausted = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const r = await searchPositions({
@@ -265,26 +328,66 @@ export async function fetchAllPositions(
       zpType: opts.zpType,
     });
     if (!r.ok) {
+      if (page === 1) {
+        return {
+          ok: false as const,
+          source: SOURCE,
+          message: r.message,
+          total: 0,
+          fetched: 0,
+          positions: [] as PositionSummary[],
+        };
+      }
+      // Mid-sweep failure: return what we have, flagged as truncated.
       return {
-        ok: false as const,
+        ok: true as const,
         source: SOURCE,
-        message: r.message,
-        total: 0,
+        total: total ?? bucket.length,
         fetched: bucket.length,
         positions: bucket,
+        truncated: true as const,
+        ...(duplicates > 0 ? { duplicates_removed: duplicates } : {}),
+        note: `stopped early at page ${page}: ${r.message}`,
       };
     }
-    if (total === undefined) total = r.total;
-    if (!r.positions.length) break;
-    bucket.push(...r.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    total = r.total;
+    rawConsumed += r.raw_rows;
+    let added = 0;
+    for (const p of r.positions) {
+      const prev = p.post_id ? seen.get(p.post_id) : undefined;
+      if (prev) {
+        // Duplicate posting instance of the same positionCode; 3 of 253 dup
+        // groups only differ by one variant missing province/city — backfill.
+        if (!prev.work_cities && p.work_cities) prev.work_cities = p.work_cities;
+        continue;
+      }
+      if (!p.post_id) continue;
+      seen.set(p.post_id, p);
+      bucket.push(p);
+      added += 1;
+    }
+    // Cross-page + in-page collapses, measured against raw server rows.
+    duplicates = rawConsumed - bucket.length;
+    if (r.raw_rows < pageSize || rawConsumed >= total || added === 0) {
+      exhausted = true;
+      break;
+    }
   }
+
+  // Truncated only if we ran out of page budget while raw rows remained.
+  const truncated = !exhausted && total !== undefined && rawConsumed < total;
+
   return {
     ok: true as const,
     source: SOURCE,
+    // Server total counts RAW rows; the corpus itself contains duplicate rows
+    // (e.g. 20368270 listed twice), so unique `fetched` can sit slightly below
+    // `total` even after a full sweep — duplicates_removed explains the gap.
     total: total ?? bucket.length,
     fetched: bucket.length,
     positions: bucket,
+    ...(truncated ? { truncated: true as const } : {}),
+    ...(duplicates > 0 ? { duplicates_removed: duplicates } : {}),
   };
 }
 
@@ -293,6 +396,14 @@ export async function fetchAllPositions(
 // The detail endpoint /portal/api/position/queryDetail requires auth, but the
 // public list endpoint returns enough info per row that we surface a "row+link"
 // detail instead of a fully gated 4001 stub.
+//
+// JD bodies are a GENUINE server-side JWT gate, re-verified 2026-07-11 audit:
+//   - anon POST /portal/api/position/queryDetail → {"code":4001,"msg":"Token无
+//     效或已过期: Not Authenticated"}
+//   - anon POST /portal/api/portal-api/position/queryDetail with an internal
+//     row id → code:0 but detail length 0 for every position sampled.
+// So description/requirements stay empty by upstream policy, not adapter
+// laziness; the honest `note` + apply_url below is the best anon surface.
 
 export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
@@ -504,40 +615,3 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
 }
 
 export { extractResumeSignals, scoreOverlap };
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_byd } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_byd } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_byd } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "job.byd.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://job.byd.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "job.byd.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_byd({
-      source: "job.byd.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://job.byd.com/portal/api/portal-api/resume/apply",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "BYD — POST /portal/api/portal-api/resume/apply with JWT bearer (Token). Endpoint anon-probed → HTTP 200 + {code:4001, msg:\"Token无效或已过期: Not Authenticated\"} (unified gateway token middleware; the originally-inferred /position/apply returns structured 404 from the Spring position service, but /resume/apply, /job/apply, /applicant/apply, /resume/submit, /career/apply all hit the auth gateway). Body shape still needs validation against a real candidate session.",
-    }),
-  };
-}

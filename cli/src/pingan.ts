@@ -25,12 +25,19 @@
 //
 //   POST /candidate/position/campus/positionSearch/queryPositionPage
 //        Search / list positions.
-//        Required: { wecruitId, pageNo, pageSize }
+//        Required: { wecruitId, pageNum, pageSize }
 //        Optional filters: { keyWord, workCity, interviewCity, businessUnitId,
 //                            positionCategoryId, positionType }
 //        Response: { responseCode:"10001", data:{ list:[...], pageNo, pageSize,
 //                    totalCount, totalPage } }
+//        PAGINATION PARAM (re-probed 2026-07-11): the request param is
+//        `pageNum`, NOT `pageNo`. Sending {pageNo:2,pageSize:5} is silently
+//        ignored — the response echoes pageNo:1 and returns page-1 rows.
+//        Sending {pageNum:2,pageSize:5} echoes pageNo:2 and returns distinct
+//        rows (page-1 first row "应用运维工程师" vs page-2 "安全技术工程师").
+//        Note the asymmetry: request takes `pageNum`, response echoes `pageNo`.
 //        Total positions (no filter, 2026-05): ~849 across all subsidiaries.
+//        (2026-07-11: 93 posts, all 全职.)
 //
 //   POST /candidate/position/campus/positionSearch/queryPositionDetail
 //        Fetch a single position's full detail.
@@ -311,6 +318,51 @@ export interface SearchOptions {
   scope?: PositionScope;
 }
 
+// ---------- query payload helpers ----------
+
+/** Build the queryPositionPage request body.
+ *
+ *  Pagination param is `pageNum` (NOT `pageNo`) — re-probed 2026-07-11:
+ *  {pageNo:2} is silently ignored (upstream echoes pageNo:1, returns page-1
+ *  rows), while {pageNum:2} echoes pageNo:2 and returns distinct rows.
+ */
+function buildQueryPayload(
+  wecruitId: string,
+  page: number,
+  pageSize: number,
+  opts: SearchOptions
+): Record<string, unknown> {
+  const keyword = (opts.keyword ?? "").trim().slice(0, 20);
+  const payload: Record<string, unknown> = {
+    wecruitId,
+    pageNum: page,
+    pageSize,
+  };
+  if (keyword) payload["keyWord"] = keyword;
+  if (opts.workCity) payload["workCity"] = opts.workCity.trim();
+  if (opts.interviewCity) payload["interviewCity"] = opts.interviewCity.trim();
+  if (opts.businessUnitId) payload["businessUnitId"] = opts.businessUnitId.trim();
+  if (opts.positionCategoryId) payload["positionCategoryId"] = opts.positionCategoryId.trim();
+  return payload;
+}
+
+/** Resolve the client-side positionType filter for a request.
+ *
+ *  Explicit positionType wins; otherwise derive from scope (1.1.0+).
+ *  undefined positionType + undefined/all scope = all types (no filter).
+ *
+ *  NOTE (2026-05-21, re-confirmed 2026-07-11): Upstream broke server-side
+ *  filtering on `positionType` — any value ("全职" / "实习" / ...) returns
+ *  `{responseCode:"10001", responseMsg:"请求成功", data:null}`. The field is
+ *  still populated on each row, so we filter client-side instead of sending
+ *  it upstream (payload omits positionType).
+ */
+function resolvePositionType(opts: SearchOptions): string | undefined {
+  return opts.positionType !== undefined
+    ? opts.positionType
+    : positionTypeForScope(opts.scope);
+}
+
 // ---------- searchPositions ----------
 
 export async function searchPositions(opts: SearchOptions = {}) {
@@ -326,28 +378,9 @@ export async function searchPositions(opts: SearchOptions = {}) {
 
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const keyword = (opts.keyword ?? "").trim().slice(0, 20);
 
-  const payload: Record<string, unknown> = {
-    wecruitId,
-    pageNo: page,
-    pageSize,
-  };
-  if (keyword) payload["keyWord"] = keyword;
-  if (opts.workCity) payload["workCity"] = opts.workCity.trim();
-  if (opts.interviewCity) payload["interviewCity"] = opts.interviewCity.trim();
-  if (opts.businessUnitId) payload["businessUnitId"] = opts.businessUnitId.trim();
-  if (opts.positionCategoryId) payload["positionCategoryId"] = opts.positionCategoryId.trim();
-  // positionType: explicit positionType wins; otherwise derive from scope (1.1.0+).
-  // undefined positionType + undefined/all scope = all types (no filter).
-  //
-  // NOTE (2026-05-21): Upstream silently broke server-side filtering on
-  // `positionType` — any value ("全职" / "实习" / "校招" / ...) now returns
-  // `{responseCode:"10001", responseMsg:"请求成功", data:null}`. The field
-  // is still populated on each row, so we filter client-side instead of
-  // sending it upstream. We omit positionType from the request payload.
-  const positionType =
-    opts.positionType !== undefined ? opts.positionType : positionTypeForScope(opts.scope);
+  const payload = buildQueryPayload(wecruitId, page, pageSize, opts);
+  const positionType = resolvePositionType(opts);
 
   const response = await call<RawPositionListData>(
     "/candidate/position/campus/positionSearch/queryPositionPage",
@@ -382,37 +415,101 @@ export async function searchPositions(opts: SearchOptions = {}) {
 
 // ---------- fetchAllPositions ----------
 
+/** Exhaustively enumerate positions.
+ *
+ *  Paginates with `pageNum` (see buildQueryPayload). Defensive against
+ *  upstream pagination regressions (v1.1.14 shipped `pageNo`, which upstream
+ *  ignores — every page silently returned page 1, duplicating 50 rows and
+ *  dropping 43 of 93 posts at --page-size 50):
+ *    - de-duplicates by post_id (idPosition) across pages
+ *    - stall protection: stops if a page yields zero previously-unseen ids
+ *      (i.e. upstream re-served an old page)
+ *    - stops on empty page, short page (< pageSize raw rows), or once the
+ *      unique raw rows seen cover upstream totalCount
+ *    - reports truncated: true if maxPages was hit before exhausting the feed
+ *
+ *  When a client-side positionType filter is active (scope campus/intern —
+ *  upstream's server-side positionType filter is broken, see
+ *  resolvePositionType), `total` is the filtered count over the full
+ *  enumeration, so it stays consistent with the rows actually returned.
+ */
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
-  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-  const maxPages = Math.max(1, opts.maxPages ?? 10);
+  const wecruitId = await getWecruitId();
+  if (!wecruitId) {
+    return {
+      ok: false,
+      source: "campus.pingan.com",
+      message: "could not obtain wecruitId from selectGroupOfficial",
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
 
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
+  const maxPages = Math.max(1, opts.maxPages ?? 20);
+  const positionType = resolvePositionType(opts);
+  const filtering = positionType !== undefined && positionType !== "";
+
+  const seenIds = new Set<string>();
   const bucket: PositionSummary[] = [];
-  let total: number | undefined;
+  let upstreamTotal: number | undefined;
+  let rawUnique = 0; // unique raw rows seen (pre positionType filter)
+  let truncated = false;
 
   for (let page = 1; page <= maxPages; page++) {
-    const result = await searchPositions({ ...opts, page, pageSize });
-    if (!result.ok) {
+    const response = await call<RawPositionListData>(
+      "/candidate/position/campus/positionSearch/queryPositionPage",
+      buildQueryPayload(wecruitId, page, pageSize, opts)
+    );
+    if (!response.ok || !response.data) {
       return {
         ok: false,
         source: "campus.pingan.com",
-        message: result.message,
+        message: response.message,
         fetched: bucket.length,
         positions: bucket,
       };
     }
-    if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+
+    const rawRows = response.data.list ?? [];
+    if (upstreamTotal === undefined && typeof response.data.totalCount === "number") {
+      upstreamTotal = response.data.totalCount;
+    }
+    if (!rawRows.length) break; // empty page — feed exhausted
+
+    let newRaw = 0;
+    for (const row of rawRows) {
+      const id = row.idPosition ?? "";
+      if (id) {
+        if (seenIds.has(id)) continue; // duplicate row (upstream overlap) — drop
+        seenIds.add(id);
+      }
+      newRaw++;
+      if (filtering && row.positionType !== positionType) continue;
+      bucket.push(summarizePosition(row));
+    }
+    rawUnique += newRaw;
+
+    // Stall protection: page yielded nothing we haven't already seen —
+    // upstream is re-serving old rows; advancing further cannot make progress.
+    if (newRaw === 0) break;
+    // Short page = last page.
+    if (rawRows.length < pageSize) break;
+    // Covered the advertised total.
+    if (upstreamTotal !== undefined && rawUnique >= upstreamTotal) break;
+    if (page === maxPages) truncated = true;
   }
 
   return {
     ok: true,
     source: "campus.pingan.com",
-    total: total ?? bucket.length,
+    // With a client-side positionType filter the true total is the filtered
+    // count over the (exhaustive) enumeration; otherwise trust upstream.
+    total: filtering ? bucket.length : upstreamTotal ?? bucket.length,
     fetched: bucket.length,
+    ...(truncated ? { truncated: true, upstream_total: upstreamTotal } : {}),
     positions: bucket,
   };
 }
@@ -602,7 +699,7 @@ export async function matchResume(
   if (wecruitId) {
     const raw = await call<RawPositionListData>(
       "/candidate/position/campus/positionSearch/queryPositionPage",
-      { wecruitId, pageNo: 1, pageSize: 100 }
+      { wecruitId, pageNum: 1, pageSize: 100 }
     );
     if (raw.ok && raw.data?.list) {
       rawPosts.push(...raw.data.list);
@@ -680,42 +777,5 @@ export async function matchResume(
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
       "The only authority on selection is HR.",
-  };
-}
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_pingan } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_pingan } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_pingan } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "campus.pingan.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://campus.pingan.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "campus.pingan.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_pingan({
-      source: "campus.pingan.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://campus.pingan.com/recruit/api/applyJob",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "Ping An — POST /recruit/api/applyJob with session cookie. Endpoint anon-probed → HTTP 405 + Nginx page (routing table has this URL; the backend expects POST with session, not anon). Body shape still needs validation.",
-    }),
   };
 }

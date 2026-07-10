@@ -50,12 +50,25 @@
 // ═══════════════════════════════════════════════════════════════════
 //
 //   POST /websiterecruit/position/pageQueryPosition
-//        body: { recruitType, keyword, page, pageSize, workplaceIds?, jobProjectCode? }
+//        body: { recruitType, positionName?, pageNum, pageSize }
 //        returns: { statusCode, data: { pageNum, pageSize, total, totalPage, list: [...] } }
-//        KNOWN SILENTLY-IGNORED BODY FIELDS: keyword, pageSize, workplaceIds,
-//        jobProjectCode, jobType — every call returns the same full list for
-//        the given recruitType. Caller-side filtering required for all dims.
-//        The endpoint always returns its default page size (~10 per page).
+//        VERIFIED 2026-07-11 by direct curl (fixes the 1.1.14 field names):
+//          - positionName IS a working server-side keyword filter and `total`
+//            becomes the filtered count (campus "前端" → total:23; social
+//            "前端" → total:47; unfiltered campus 344 / social 857). It
+//            substring-matches the title AND the JD body — a multi-term string
+//            like "Java Golang Redis" matches nothing (total:0), so multi-term
+//            queries must be issued one term at a time.
+//          - pageNum IS the honored paging field (pageNum:2 returns distinct
+//            ids). A `page` field is SILENTLY IGNORED and every request
+//            replays page 1 — this was the 1.1.14 bug that made 294/344
+//            campus positions unreachable.
+//          - pageSize IS honored for 10..100 (50→50 rows, 100→100 rows);
+//            values below 10 are floored to 10 server-side (5→10 rows).
+//        STILL SILENTLY-IGNORED BODY FIELDS (re-probed 2026-07-11): keyword
+//        (the 1.1.14 search field — total stays 344), workplaceIds ("4403"
+//        and ["4403"] both keep total:344 with non-Shenzhen rows),
+//        jobProjectCode, jobType.
 //
 //   GET  /websiterecruit/position/queryPositionDetail?positionId=<id>
 //        returns: { statusCode, data: { positionId, positionName, duty, qualification,
@@ -105,10 +118,10 @@ export { checkResume };
  * has no separate intern recruitType, so `intern` is mapped to `campus`.
  *
  * Scope translation to upstream `recruitType`:
- *   social  → "social"  (~828 posts)
- *   campus  → "campus"  (~319 posts, includes intern)
+ *   social  → "social"  (857 posts as of 2026-07-11)
+ *   campus  → "campus"  (344 posts as of 2026-07-11, includes intern)
  *   intern  → "campus"
- *   all     → "campus" (fan-out is the caller's responsibility)
+ *   all     → fan-out over campus + social, merged and de-duped by post_id
  *   undefined → "campus"  (historical default)
  */
 export const supportedScopes = ["social", "campus", "intern", "all"] as const satisfies ReadonlyArray<PositionScope>;
@@ -120,10 +133,15 @@ function recruitTypeForScope(s: PositionScope | undefined): "campus" | "social" 
 
 const API_ROOT = "https://job.xiaohongshu.com";
 const CAMPUS_PAGE = "https://job.xiaohongshu.com/campus/position";
-// SPA router is `/campus/position/:id` (with `/:id/apply` sibling). The query-string
-// form `?id=…` falls through to the list route and never renders the detail page.
-const DETAIL_PAGE = (positionId: string | number) =>
-  `https://job.xiaohongshu.com/campus/position/${encodeURIComponent(String(positionId))}`;
+const SOCIAL_PAGE = "https://job.xiaohongshu.com/social/position";
+// The SPA router (main.8305ae7.js, verified 2026-07-11) defines TWO detail routes:
+//   /campus/position/:id → CampusPositionDetail
+//   /social/position/:id → SocialPositionDetail
+// so social ids must link to the /social/ route — 1.1.14 hardcoded /campus/ for
+// everything. The query-string form `?id=…` falls through to the list route and
+// never renders the detail page.
+const DETAIL_PAGE = (positionId: string | number, channel: "campus" | "social" = "campus") =>
+  `https://job.xiaohongshu.com/${channel}/position/${encodeURIComponent(String(positionId))}`;
 
 const DEFAULT_HEADERS = {
   "User-Agent":
@@ -243,15 +261,16 @@ export async function fetchDictionaries() {
     ok: true,
     source: "job.xiaohongshu.com",
     note: [
-      "Taxonomy derived by crawling all campus (319) and social (828) positions — no public dict API.",
+      "Taxonomy derived by crawling all campus and social positions — no public dict API.",
       "recruitType='top_intern' is rejected by pageQueryPosition (error 999); top-intern positions",
       "live inside campus with jobProjectName='Ace 顶尖实习生计划' (jobProject='top_intern_program').",
-      "All server-side filters (workplaceIds, jobType, jobProjectCode, keyword, pageSize) are silently ignored.",
-      "Client-side filtering is required for all dimensions.",
+      "Server-side keyword search works via the `positionName` body field (filtered `total`),",
+      "and paging works via `pageNum` with pageSize honored 10..100 (verified 2026-07-11).",
+      "workplaceIds / jobType / jobProjectCode remain silently ignored — filter those client-side.",
     ].join(" "),
     recruit_types: {
-      campus: { total: 319, description: "校园招聘 — intern + new-grad, publicly queryable" },
-      social: { total: 828, description: "社会招聘 — experienced hires, publicly queryable, no auth needed" },
+      campus: { total: 344, description: "校园招聘 — intern + new-grad, publicly queryable (snapshot 2026-07-11)" },
+      social: { total: 857, description: "社会招聘 — experienced hires, publicly queryable, no auth needed (snapshot 2026-07-11)" },
       top_intern: { total: null, description: "INVALID for pageQueryPosition — returns error 999; use campus + project filter" },
     },
     cities: CITY_MAP,
@@ -303,7 +322,10 @@ interface RawPositionListEntry {
   labels?: unknown;
 }
 
-function summarizePosition(item: RawPositionListEntry): PositionSummary {
+function summarizePosition(
+  item: RawPositionListEntry,
+  channel: "campus" | "social"
+): PositionSummary {
   const postId = String(item.positionId ?? "");
   return {
     post_id: postId,
@@ -314,7 +336,13 @@ function summarizePosition(item: RawPositionListEntry): PositionSummary {
     // The raw entry contains no department, businessLine, team, or bu key.
     bgs: "",
     work_cities: (item.workplace ?? "").trim(),
-    apply_url: postId ? DETAIL_PAGE(postId) : CAMPUS_PAGE,
+    // Route the apply_url by the recruit channel the row came from — social
+    // rows render under /social/position/:id, campus rows under /campus/.
+    apply_url: postId
+      ? DETAIL_PAGE(postId, channel)
+      : channel === "social"
+        ? SOCIAL_PAGE
+        : CAMPUS_PAGE,
   };
 }
 
@@ -326,9 +354,15 @@ export interface SearchOptions {
    *  on project === "Ace 顶尖实习生计划". */
   recruitType?: "campus" | "social" | "top_intern";
   /** CLI `--scope` echo (1.1.0+). When set and `recruitType` is omitted, scope
-   *  picks the upstream recruitType. `recruitType` takes precedence. */
+   *  picks the upstream recruitType. `recruitType` takes precedence.
+   *  `scope: "all"` fans out campus + social and merges (deduped by post_id). */
   scope?: PositionScope;
+  /** Sent upstream as `positionName` — a real server-side filter (verified
+   *  2026-07-11): `total` becomes the filtered count and it matches title +
+   *  JD body. The 1.1.14 `keyword` body field is silently ignored upstream. */
   keyword?: string;
+  /** Sent upstream as `pageNum` — the only paging field the upstream honors.
+   *  (A `page` body field is silently ignored; that was the 1.1.14 bug.) */
   page?: number;
   pageSize?: number;
   /** City filter — passed to the upstream API but SILENTLY IGNORED server-side.
@@ -350,7 +384,7 @@ interface PageQueryData {
   list?: RawPositionListEntry[];
 }
 
-export async function searchPositions(opts: SearchOptions = {}) {
+async function searchPositionsOneChannel(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   // "top_intern" is rejected by the upstream API (error 999). The caller may pass it
@@ -359,14 +393,23 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const recruitType = opts.recruitType === "top_intern"
     ? "campus"
     : (opts.recruitType ?? recruitTypeForScope(opts.scope));
+  const keyword = (opts.keyword ?? "").trim().slice(0, 50);
   const body: Record<string, unknown> = {
     recruitType,
-    keyword: (opts.keyword ?? "").trim().slice(0, 50),
-    page,
+    // `pageNum` is the paging field the upstream honors. Sending `page`
+    // (1.1.14) is silently ignored and every request replays page 1
+    // (verified 2026-07-11: pageNum:2 → distinct ids 19813, 19808, …).
+    pageNum: page,
+    // pageSize 10..100 is honored server-side; below 10 it is floored to 10.
     pageSize,
   };
+  // `positionName` is the upstream's real server-side keyword filter — the
+  // returned `total` is the filtered count (verified 2026-07-11: campus
+  // "前端" → total:23, all relevant; the 1.1.14 `keyword` field is ignored).
+  if (keyword) body.positionName = keyword;
   // workplaceIds and jobProjectCode are forwarded for completeness but are silently
-  // ignored by the upstream — all server-side filtering must be done client-side.
+  // ignored by the upstream (re-probed 2026-07-11) — city / project filtering must
+  // be done client-side.
   if (opts.workplaceIds !== undefined && opts.workplaceIds !== null) {
     body.workplaceIds = Array.isArray(opts.workplaceIds)
       ? opts.workplaceIds.join(",")
@@ -377,7 +420,10 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const response = await call<PageQueryData>(
     "POST",
     "/websiterecruit/position/pageQueryPosition",
-    { body }
+    {
+      body,
+      referer: recruitType === "social" ? SOCIAL_PAGE : CAMPUS_PAGE,
+    }
   );
   if (!response.ok || !response.data) {
     return {
@@ -388,8 +434,8 @@ export async function searchPositions(opts: SearchOptions = {}) {
     };
   }
   const rows = response.data.list ?? [];
-  // The upstream API appears to ignore pageSize and always returns its default
-  // page size (~10). Enforce the caller's requested pageSize by slicing here.
+  // pageSize below 10 is floored to 10 upstream (5→10 rows; 10..100 honored
+  // exactly — verified 2026-07-11), so slice down to the caller's request.
   const trimmed = rows.slice(0, pageSize);
   return {
     ok: true as const,
@@ -398,8 +444,61 @@ export async function searchPositions(opts: SearchOptions = {}) {
     page,
     page_size: pageSize,
     total: response.data.total ?? rows.length,
-    positions: trimmed.map(summarizePosition),
+    positions: trimmed.map((r) => summarizePosition(r, recruitType)),
   };
+}
+
+// `--scope all` fans out campus + social (intern lives inside campus — there is
+// no third upstream recruitType) and merges the page, de-duplicated by post_id.
+// Per-channel filtered totals are echoed in `query.totals`; `total` is their sum.
+async function searchPositionsAcrossAllScopes(opts: SearchOptions) {
+  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
+  const page = Math.max(1, opts.page ?? 1);
+  const merged: PositionSummary[] = [];
+  const seen = new Set<string>();
+  const totals: Record<string, number> = {};
+  let lastQuery: Record<string, unknown> = {};
+  for (const rt of ["campus", "social"] as const) {
+    const r = await searchPositionsOneChannel({
+      ...opts,
+      scope: undefined,
+      recruitType: rt,
+      page,
+      pageSize,
+    });
+    if (!r.ok) {
+      return {
+        ok: false as const,
+        message: `[${rt}] ${r.message}`,
+        query: r.query,
+        positions: [] as PositionSummary[],
+      };
+    }
+    totals[rt] = r.total;
+    lastQuery = r.query;
+    for (const p of r.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      merged.push(p);
+    }
+  }
+  return {
+    ok: true as const,
+    source: "job.xiaohongshu.com",
+    query: { ...lastQuery, scope: "all", totals: JSON.stringify(totals) },
+    page,
+    page_size: pageSize,
+    total: (totals.campus ?? 0) + (totals.social ?? 0),
+    positions: merged,
+  };
+}
+
+export async function searchPositions(opts: SearchOptions = {}) {
+  // `scope:"all"` without an explicit recruitType fans out campus + social.
+  if (opts.scope === "all" && opts.recruitType === undefined) {
+    return searchPositionsAcrossAllScopes(opts);
+  }
+  return searchPositionsOneChannel(opts);
 }
 
 export async function fetchAllPositions(
@@ -411,32 +510,95 @@ export async function fetchAllPositions(
     scope?: PositionScope;
   } = {}
 ) {
-  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
+  // Clamp to [10, 100]: the upstream floors pageSize below 10 up to 10
+  // (verified 2026-07-11), which would make every page look "short" and stop
+  // the sweep after page 1 if we compared against a smaller requested size.
+  const pageSize = Math.max(10, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
 
-  const bucket: PositionSummary[] = [];
-  let total: number | undefined;
+  // `scope:"all"` (without explicit recruitType) sweeps both channels;
+  // otherwise a single channel picked by recruitType-then-scope precedence.
+  const channels: Array<"campus" | "social"> =
+    opts.scope === "all" && opts.recruitType === undefined
+      ? ["campus", "social"]
+      : [
+          opts.recruitType === "top_intern"
+            ? "campus"
+            : (opts.recruitType ?? recruitTypeForScope(opts.scope)),
+        ];
 
-  for (let page = 1; page <= maxPages; page++) {
-    const result = await searchPositions({ keyword: opts.keyword, recruitType: opts.recruitType, scope: opts.scope, page, pageSize });
-    if (!result.ok) {
-      return {
-        ok: false as const,
-        message: result.message,
-        fetched: bucket.length,
-        positions: bucket,
-      };
+  const seen = new Set<string>();
+  const bucket: PositionSummary[] = [];
+  const totals: Record<string, number> = {};
+  let truncated = false;
+
+  channelLoop: for (const channel of channels) {
+    let channelTotal: number | undefined;
+    let fetchedThisChannel = 0;
+    let complete = false;
+    for (let page = 1; page <= maxPages; page++) {
+      const result = await searchPositionsOneChannel({
+        keyword: opts.keyword,
+        recruitType: channel,
+        page,
+        pageSize,
+      });
+      if (!result.ok) {
+        if (bucket.length === 0) {
+          return {
+            ok: false as const,
+            message: result.message,
+            fetched: 0,
+            positions: [] as PositionSummary[],
+          };
+        }
+        // Mid-sweep failure: return what we have, flagged as truncated.
+        truncated = true;
+        break channelLoop;
+      }
+      channelTotal = result.total;
+      fetchedThisChannel += result.positions.length;
+      // De-dupe by post_id so a paging regression upstream (the 1.1.14
+      // failure mode: every page replays page 1) can never inflate the
+      // result with duplicates again.
+      let added = 0;
+      for (const p of result.positions) {
+        if (seen.has(p.post_id)) continue;
+        seen.add(p.post_id);
+        bucket.push(p);
+        added += 1;
+      }
+      if (channelTotal !== undefined && fetchedThisChannel >= channelTotal) {
+        complete = true;
+        break;
+      }
+      if (result.positions.length < pageSize) {
+        // Short page — upstream has no more rows for this channel.
+        complete = true;
+        break;
+      }
+      if (added === 0) {
+        // Full page with zero new ids: no forward progress (defensive stop
+        // against upstream paging regressions) — report as truncated below.
+        break;
+      }
     }
-    if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    if (channelTotal !== undefined) totals[channel] = channelTotal;
+    if (!complete && (channelTotal === undefined || fetchedThisChannel < channelTotal)) {
+      truncated = true;
+    }
   }
+
+  const total = channels.reduce((sum, ch) => sum + (totals[ch] ?? 0), 0);
   return {
     ok: true as const,
     source: "job.xiaohongshu.com",
-    total: total ?? bucket.length,
+    // `total` is the upstream's own count (sum across channels for scope=all);
+    // with a keyword it is the server-side-filtered count, matching `search`.
+    total,
     fetched: bucket.length,
+    ...(channels.length > 1 ? { totals } : {}),
+    ...(truncated ? { truncated: true as const } : {}),
     positions: bucket,
   };
 }
@@ -476,6 +638,11 @@ export async function fetchPositionDetail(postId: string | number) {
     };
   }
   const raw = response.data;
+  // Detail recruitType values (verified 2026-07-11): "club_recruit" = social
+  // hire (e.g. 18316 资深HRBP), "intern_recruit" / "school_recruit" = campus.
+  // Social ids must link to the /social/position/:id SPA route — 1.1.14
+  // hardcoded /campus/ for everything.
+  const channel = raw.recruitType === "club_recruit" ? "social" : "campus";
   return {
     ok: true as const,
     source: "job.xiaohongshu.com",
@@ -488,7 +655,7 @@ export async function fetchPositionDetail(postId: string | number) {
     requirements: (raw.qualification ?? "").trim(),
     work_cities: (raw.workplace ?? "").split(/[，,]/).map((s) => s.trim()).filter(Boolean),
     recruit_cities: (raw.workplace ?? "").split(/[，,]/).map((s) => s.trim()).filter(Boolean),
-    apply_url: DETAIL_PAGE(raw.positionId ?? id),
+    apply_url: DETAIL_PAGE(raw.positionId ?? id, channel),
   };
 }
 
@@ -556,13 +723,31 @@ export async function matchResume(
     };
   }
 
-  const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 100 });
-  if (!list.ok) return { ok: false as const, message: list.message, positions: [] };
+  // The server-side positionName filter substring-matches a single phrase, so
+  // a joined multi-term string like "java golang redis" matches nothing
+  // (verified 2026-07-11: total:0). Search the top terms one at a time and
+  // merge (deduped by post_id); fall back to the unfiltered first page when
+  // no term produces a hit.
+  const seenIds = new Set<string>();
+  const pool: PositionSummary[] = [];
+  for (const term of terms.slice(0, 3)) {
+    const list = await searchPositionsOneChannel({ keyword: term, page: 1, pageSize: 100 });
+    if (!list.ok) continue;
+    for (const p of list.positions) {
+      if (seenIds.has(p.post_id)) continue;
+      seenIds.add(p.post_id);
+      pool.push(p);
+    }
+  }
+  if (!pool.length) {
+    const list = await searchPositionsOneChannel({ page: 1, pageSize: 100 });
+    if (!list.ok) return { ok: false as const, message: list.message, positions: [] };
+    pool.push(...list.positions);
+  }
 
   type Pre = { score: number; position: PositionSummary; reasons: string[] };
   const pre: Pre[] = [];
-  for (const p of list.positions) {
+  for (const p of pool) {
     const blob = [p.title, p.project, p.recruit_label, p.bgs, p.work_cities].join(" ");
     const { score, reasons } = scoreOverlap(blob, terms, cities);
     if (score > 0) pre.push({ score, position: p, reasons });
@@ -571,7 +756,7 @@ export async function matchResume(
 
   let shortlist = pre.slice(0, Math.max(topN, candidates));
   if (!shortlist.length) {
-    shortlist = list.positions.slice(0, candidates).map((position) => ({
+    shortlist = pool.slice(0, candidates).map((position) => ({
       score: 0,
       position,
       reasons: [],
@@ -626,42 +811,5 @@ export async function matchResume(
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
       "The only authority on selection is HR.",
-  };
-}
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_xiaohongshu } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_xiaohongshu } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_xiaohongshu } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "job.xiaohongshu.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://job.xiaohongshu.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "job.xiaohongshu.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_xiaohongshu({
-      source: "job.xiaohongshu.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://job.xiaohongshu.com/recruit/apply",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "Xiaohongshu — POST /recruit/apply (no /api/ prefix) with session cookie. Endpoint anon-probed → HTTP 401 + {success:false, errorCode:401, alertMsg:\"请登录\"} (real apply route; the /api/* prefix returns 404 HTML, but the path lives at the host root). Body shape still needs validation.",
-    }),
   };
 }

@@ -330,6 +330,11 @@ async function searchSocialPositions(opts: SearchOptions = {}): Promise<SearchPo
     page,
     page_size: wrapper.showCount ?? 10,
     total: wrapper.totalResult ?? rows.length,
+    // Verified live: SearchJob.do fixes the page size at 10 server-side and
+    // ignores any showCount/pageSize field in the body.
+    ...(opts.pageSize !== undefined && opts.pageSize !== 10
+      ? { note: "hr.sf-express.com fixes the page size at 10 server-side; --page-size has no effect on --scope social." }
+      : {}),
     positions: rows.map(summarizeSocial),
   };
 }
@@ -355,6 +360,7 @@ type SearchPositionsResult =
       page: number;
       page_size: number;
       total: number;
+      note?: string;
       positions: PositionSummary[];
     }
   | {
@@ -442,6 +448,10 @@ type FetchAllPositionsResult =
       source: string;
       total: number;
       fetched: number;
+      /** true when the crawl stopped at --max-pages before exhausting `total`. */
+      truncated?: boolean;
+      duplicates_removed?: number;
+      note?: string;
       positions: PositionSummary[];
     }
   | {
@@ -486,21 +496,37 @@ export async function fetchAllPositions(
     const total =
       (campusRes.ok && typeof campusRes.total === "number" ? campusRes.total : 0) +
       (socialRes.ok && typeof socialRes.total === "number" ? socialRes.total : 0);
+    const truncated =
+      (campusRes.ok && campusRes.truncated === true) ||
+      (socialRes.ok && socialRes.truncated === true);
+    const childNotes = [
+      campusRes.ok ? campusRes.note : undefined,
+      socialRes.ok ? socialRes.note : undefined,
+    ].filter((n): n is string => Boolean(n));
     return {
       ok: true as const,
       source: `${SOURCE}+${SOCIAL_SOURCE}`,
       total,
       fetched: merged.length,
+      truncated,
+      ...(childNotes.length ? { note: childNotes.join(" ") } : {}),
       positions: merged,
     };
   }
 
   // scope=social — page through hr.sf-express.com/SearchJob.do (server fixes
-  // page size at 10, so a few extra pages keep the round-trip count modest).
+  // page size at 10, so the full ~2200-post feed needs ~220 pages; the default
+  // 50-page cap keeps the round-trip count modest and reports truncated:true
+  // so callers know to raise --max-pages for a full crawl).
   if (feed === "social") {
     const maxPages = Math.max(1, opts.maxPages ?? 50);
+    const SOCIAL_PAGE_SIZE = 10; // fixed server-side
+    const seen = new Set<string>();
     const bucket: PositionSummary[] = [];
     let total: number | undefined;
+    let pagesNeeded: number | undefined;
+    let exhausted = false;
+    let duplicatesRemoved = 0;
     for (let page = 1; page <= maxPages; page++) {
       const r = await searchSocialPositions({
         keyword: opts.keyword,
@@ -518,16 +544,47 @@ export async function fetchAllPositions(
           positions: bucket,
         };
       }
-      if (total === undefined) total = r.total;
-      if (!r.positions.length) break;
-      bucket.push(...r.positions);
-      if (total !== undefined && bucket.length >= total) break;
+      if (total === undefined) {
+        total = r.total;
+        pagesNeeded = Math.max(1, Math.ceil((total ?? 0) / SOCIAL_PAGE_SIZE));
+      }
+      if (!r.positions.length) {
+        exhausted = true; // upstream ran out of rows
+        break;
+      }
+      // Dedupe by post_id across pages (live feed can shift between fetches).
+      for (const p of r.positions) {
+        if (p.post_id) {
+          if (seen.has(p.post_id)) {
+            duplicatesRemoved++;
+            continue;
+          }
+          seen.add(p.post_id);
+        }
+        bucket.push(p);
+      }
+      if (total !== undefined && bucket.length >= total) {
+        exhausted = true;
+        break;
+      }
+      if (pagesNeeded !== undefined && page >= pagesNeeded) {
+        exhausted = true;
+        break;
+      }
     }
+    const truncated = !exhausted;
     return {
       ok: true as const,
       source: SOCIAL_SOURCE,
       total: total ?? bucket.length,
       fetched: bucket.length,
+      truncated,
+      ...(duplicatesRemoved > 0 ? { duplicates_removed: duplicatesRemoved } : {}),
+      ...(truncated
+        ? {
+            note: `hr.sf-express.com pages by a server-fixed 10 rows; stopped at --max-pages ${maxPages} of ${pagesNeeded ?? "?"} pages — pass a larger --max-pages to fetch the rest`,
+          }
+        : {}),
       positions: bucket,
     };
   }
@@ -536,8 +593,11 @@ export async function fetchAllPositions(
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 50));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
 
+  const seen = new Set<string>();
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
+  let exhausted = false;
+  let duplicatesRemoved = 0;
 
   for (let page = 1; page <= maxPages; page++) {
     const r = await searchPositions({
@@ -557,9 +617,28 @@ export async function fetchAllPositions(
       };
     }
     if (total === undefined) total = r.total;
-    if (!r.positions.length) break;
-    bucket.push(...r.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    if (!r.positions.length) {
+      exhausted = true;
+      break;
+    }
+    for (const p of r.positions) {
+      if (p.post_id) {
+        if (seen.has(p.post_id)) {
+          duplicatesRemoved++;
+          continue;
+        }
+        seen.add(p.post_id);
+      }
+      bucket.push(p);
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
+    if (r.positions.length < pageSize) {
+      exhausted = true; // short page = last page
+      break;
+    }
   }
 
   return {
@@ -567,8 +646,110 @@ export async function fetchAllPositions(
     source: SOURCE,
     total: total ?? bucket.length,
     fetched: bucket.length,
+    truncated: !exhausted,
+    ...(duplicatesRemoved > 0 ? { duplicates_removed: duplicatesRemoved } : {}),
+    ...(!exhausted
+      ? { note: `stopped at --max-pages ${maxPages} before reaching total; pass --max-pages N to fetch the rest` }
+      : {}),
     positions: bucket,
   };
+}
+
+// ---------- social detail (HTML scrape of hr.sf-express.com) ----------
+//
+// hr.sf-express.com has no JSON detail endpoint, but /JobSearchById/<id>,<t>
+// is a fully SERVER-RENDERED JSP page (probed 2026-07-11): the JD lives in
+// hidden inputs (posId / positionName / positionworkAddress /
+// positionPositionType), <li>label：<i>value</i></li> rows (招聘人数 / 有效期 /
+// 学历要求 / 经验要求 / 薪酬范围) and two
+// <div class="job-detail-info"><h4>工作职责：</h4>…<pre>…</pre></div> blocks.
+// A wrong <t> or an unknown id renders a 404-styled page (HTTP 200, title
+// "顺丰人才招聘系统-404", no posId input), so we probe positionType 3 → 1 → 2
+// until one renders. Verified: /JobSearchById/69297,3 renders the full JD
+// while /JobSearchById/69297,1 and /JobSearchById/99999,3 both render the
+// 404 page.
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function stripTags(s: string): string {
+  return decodeHtmlEntities(s.replace(/<[^>]+>/g, ""))
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+function hiddenInputValue(html: string, id: string): string {
+  const m = html.match(new RegExp(`<input[^>]*id="${id}"[^>]*value="([^"]*)"`));
+  return m ? decodeHtmlEntities(m[1]).trim() : "";
+}
+
+function liFieldValue(html: string, label: string): string {
+  // e.g. <li>招聘人数：<i>1人</i></li>. 经验要求 uses an ASCII colon upstream.
+  const m = html.match(new RegExp(`${label}[：:]\\s*<i>([\\s\\S]*?)</i>`));
+  return m ? stripTags(m[1]).replace(/\s+/g, " ").trim() : "";
+}
+
+function preBlockValue(html: string, heading: string): string {
+  const m = html.match(
+    new RegExp(`<h4>\\s*${heading}[：:]?\\s*</h4>[\\s\\S]*?<pre[^>]*>([\\s\\S]*?)</pre>`)
+  );
+  return m ? stripTags(m[1]) : "";
+}
+
+/** Resolve a social (社招) post by scraping the server-rendered detail page.
+ *  Returns null when no positionType template renders the id (= not a live
+ *  social post). */
+async function fetchSocialPositionDetail(id: string) {
+  for (const positionType of [3, 1, 2]) {
+    const url = SOCIAL_DETAIL_PAGE(id, positionType);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "User-Agent": SOCIAL_HEADERS["User-Agent"],
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        },
+      });
+    } catch {
+      continue;
+    }
+    if (!response.ok) continue;
+    let html: string;
+    try {
+      html = await response.text();
+    } catch {
+      continue;
+    }
+    const posId = hiddenInputValue(html, "posId");
+    if (!posId || posId !== id) continue; // 404-styled page → try next template
+    return {
+      ok: true as const,
+      source: SOCIAL_SOURCE,
+      post_id: posId,
+      title: hiddenInputValue(html, "positionName"),
+      recruit_label: "社招",
+      position_type: hiddenInputValue(html, "positionPositionType"),
+      description: preBlockValue(html, "工作职责"),
+      requirements: preBlockValue(html, "岗位要求"),
+      work_city: hiddenInputValue(html, "positionworkAddress"),
+      headcount: liFieldValue(html, "招聘人数"),
+      valid_until: liFieldValue(html, "有效期"),
+      education: liFieldValue(html, "学历要求"),
+      experience: liFieldValue(html, "经验要求"),
+      salary_range: liFieldValue(html, "薪酬范围"),
+      apply_url: url,
+    };
+  }
+  return null;
 }
 
 // ---------- fetchPositionDetail ----------
@@ -577,56 +758,80 @@ export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
   if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required", post_id: id };
 
-  // /api/position/findById/ is the auth-gated internal route; /api/web/position/
-  // is the public anon route the SPA actually uses (sibling of /api/web/position/
-  // query for search). Without the /web/ prefix this 401s.
-  const url = `${API_ROOT}/api/web/position/findById/${encodeURIComponent(id)}`;
-  let response: Response;
-  try {
-    response = await fetch(url, { method: "GET", headers: DEFAULT_HEADERS });
-  } catch (err) {
+  // The CLI's `detail` verb takes the first positional token as the post_id,
+  // so `sf detail --scope social 69297` used to fire the literal "--scope" at
+  // the campus API (which answered with an opaque HTTP 500). Catch flag-shaped
+  // ids with a usage hint instead of a misleading upstream error.
+  if (id.startsWith("-")) {
     return {
       ok: false as const,
       source: SOURCE,
-      message: `network error: ${err instanceof Error ? err.message : String(err)}`,
       post_id: id,
-    };
-  }
-  if (!response.ok) {
-    return {
-      ok: false as const,
-      source: SOURCE,
-      message: `HTTP ${response.status}: ${response.statusText}`,
-      post_id: id,
-    };
-  }
-  let raw: RawPosition & Record<string, unknown>;
-  try {
-    raw = (await response.json()) as RawPosition & Record<string, unknown>;
-  } catch (err) {
-    return {
-      ok: false as const,
-      source: SOURCE,
-      message: `bad JSON: ${err instanceof Error ? err.message : err}`,
-      post_id: id,
+      message: `invalid post_id ${JSON.stringify(id)} — flags go after the id: job-pro sf detail <post_id>`,
     };
   }
 
+  // 1) Campus feed first (historical default). /api/position/findById/ is the
+  // auth-gated internal route; /api/web/position/ is the public anon route the
+  // SPA actually uses. Without the /web/ prefix this 401s.
+  // NOTE: the campus API answers HTTP 500 (empty statusText) for ANY id it
+  // does not know — including social post ids — so a campus failure falls
+  // through to the social portal probe below instead of surfacing the raw 500.
+  let campusFailure: string | undefined;
+  const url = `${API_ROOT}/api/web/position/findById/${encodeURIComponent(id)}`;
+  let response: Response | undefined;
+  try {
+    response = await fetch(url, { method: "GET", headers: DEFAULT_HEADERS });
+  } catch (err) {
+    campusFailure = `network error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (response && !response.ok) {
+    campusFailure = `HTTP ${response.status}`;
+    response = undefined;
+  }
+  if (response) {
+    let raw: (RawPosition & Record<string, unknown>) | null = null;
+    try {
+      raw = (await response.json()) as RawPosition & Record<string, unknown>;
+    } catch (err) {
+      campusFailure = `bad JSON: ${err instanceof Error ? err.message : err}`;
+    }
+    // Guard against an HTTP-200-but-empty body: only treat the campus answer
+    // as a hit when it actually carries the position.
+    if (raw && (raw.id !== undefined || raw.positionName)) {
+      return {
+        ok: true as const,
+        source: SOURCE,
+        post_id: String(raw.id ?? id),
+        title: raw.positionName ?? "",
+        project: raw.orgSourceName ?? raw.orgSource ?? "",
+        position_type: raw.positionTypeName ?? "",
+        description: (raw.postDuty ?? "").toString().trim(),
+        requirements: (raw.jobRequirement ?? "").toString().trim(),
+        work_city: raw.demandCity ?? "",
+        interview_city: raw.recruitCity ?? "",
+        education: raw.educationName ?? raw.education ?? "",
+        intern_type: raw.internTypeName ?? raw.internType ?? "",
+        create_date: raw.createDate ?? "",
+        apply_url: DETAIL_PAGE(id),
+      };
+    }
+    if (!campusFailure) campusFailure = "empty campus payload";
+  }
+
+  // 2) Social feed (hr.sf-express.com) — scrape the server-rendered page.
+  const social = await fetchSocialPositionDetail(id);
+  if (social) return social;
+
+  // 3) Clean not-found instead of the upstream's opaque HTTP 500.
   return {
-    ok: true as const,
-    source: SOURCE,
-    post_id: String(raw.id ?? id),
-    title: raw.positionName ?? "",
-    project: raw.orgSourceName ?? raw.orgSource ?? "",
-    position_type: raw.positionTypeName ?? "",
-    description: (raw.postDuty ?? "").toString().trim(),
-    requirements: (raw.jobRequirement ?? "").toString().trim(),
-    work_city: raw.demandCity ?? "",
-    interview_city: raw.recruitCity ?? "",
-    education: raw.educationName ?? raw.education ?? "",
-    intern_type: raw.internTypeName ?? raw.internType ?? "",
-    create_date: raw.createDate ?? "",
-    apply_url: DETAIL_PAGE(id),
+    ok: false as const,
+    source: `${SOURCE}+${SOCIAL_SOURCE}`,
+    post_id: id,
+    message:
+      `post ${id} not found in the campus (campus.sf-express.com) or social (hr.sf-express.com) feeds — ` +
+      `it may have expired or never existed. ` +
+      `(campus API said: ${campusFailure ?? "not found"}; it reports unknown ids as an opaque HTTP 500.)`,
   };
 }
 
@@ -715,40 +920,3 @@ export async function matchResume(
 }
 
 export { extractResumeSignals, scoreOverlap };
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_sf } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_sf } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_sf } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "campus.sf-express.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://campus.sf-express.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "campus.sf-express.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_sf({
-      source: "campus.sf-express.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://campus.sf-express.com/api/web/applicant/apply",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "SF Express — POST /api/web/applicant/apply with cr-service header + GeeTest captcha + session cookie. Endpoint anon-probed → HTTP 401 from the SF gateway (real auth gate; the cr-service-web-cloud cluster distinguishes /api/web/position/* [position service] from /api/web/applicant/* and /api/web/resume/* [applicant service, auth-gated]). Body shape still needs validation against a real candidate session.",
-    }),
-  };
-}

@@ -542,10 +542,18 @@ export async function fetchAllPositions(
   } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-  const maxPages = Math.max(1, opts.maxPages ?? 30);
+  // 1.2.x: default raised 30 → 50 pages so `all` can exhaust every scope at
+  // any pageSize ≥ 66 (scope=all is ~3256 posts; --scope social ~2260 posts
+  // needed 46 pages at --page-size 50 and used to stop silently at 1500).
+  // Stopping early under a user-supplied --max-pages now reports
+  // truncated:true instead of failing silently.
+  const maxPages = Math.max(1, opts.maxPages ?? 50);
 
+  const seen = new Set<string>();
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
+  let exhausted = false;
+  let duplicatesRemoved = 0;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({
@@ -567,15 +575,55 @@ export async function fetchAllPositions(
       };
     }
     if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    if (!result.positions.length) {
+      exhausted = true; // upstream ran out of rows
+      break;
+    }
+    // Dedupe across pages by post_id — the refreshTime-ordered live feed can
+    // shift between page requests, repeating a row on a page boundary
+    // (verified live 2026-06: jobUnionId 4600051151 as last row of page 1 and
+    // first row of page 2). Count only unique positions.
+    let added = 0;
+    for (const p of result.positions) {
+      if (p.post_id) {
+        if (seen.has(p.post_id)) {
+          duplicatesRemoved++;
+          continue;
+        }
+        seen.add(p.post_id);
+      }
+      bucket.push(p);
+      added++;
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
+    // A whole page of already-seen rows = re-reading shifted pages; stop.
+    if (added === 0) {
+      exhausted = true;
+      break;
+    }
+    // Short page = last page (single server-paginated feed).
+    if (result.positions.length < pageSize) {
+      exhausted = true;
+      break;
+    }
   }
+
+  const truncated = !exhausted;
   return {
     ok: true as const,
     source: "zhaopin.meituan.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
+    truncated,
+    ...(duplicatesRemoved > 0 ? { duplicates_removed: duplicatesRemoved } : {}),
+    ...(truncated
+      ? {
+          note: `stopped at --max-pages ${maxPages} before reaching total; pass --max-pages N (pageSize ${pageSize}) to fetch the rest`,
+        }
+      : {}),
     positions: bucket,
   };
 }
@@ -801,42 +849,5 @@ export async function matchResume(
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
       "The only authority on selection is HR.",
-  };
-}
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_meituan } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_meituan } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_meituan } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "zhaopin.meituan.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://zhaopin.meituan.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "zhaopin.meituan.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_meituan({
-      source: "zhaopin.meituan.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://zhaopin.meituan.com/api/job-apply",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "Meituan — POST /api/job-apply with session cookie. Endpoint anon-probed → {data: {errorCode: 401, message: \"未登陆\"}} (real auth gate). Body shape still needs validation.",
-    }),
   };
 }

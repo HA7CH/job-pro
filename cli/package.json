@@ -1,7 +1,7 @@
 {
   "name": "@ha7ch/job-pro",
-  "version": "1.1.14",
-  "description": "Query Chinese big-tech campus + social recruiting + auto-apply from your terminal. 50 companies, all 50 live (46 via official APIs, 4 via Liepin third-party fallback). 45/50 with end-to-end verified apply endpoints; 5 structurally-external (Liepin IM × 4 + Unitree WeChat). Unified `--scope social|campus|intern|all` flag across every adapter. No signup, no token, no server.",
+  "version": "1.2.0",
+  "description": "Query Chinese big-tech campus + social recruiting from your terminal. 50 companies, all 50 live (46 via official APIs, 4 via Liepin third-party fallback). Search, JD detail, dictionaries, notices, and offline resume matching. Unified `--scope social|campus|intern|all` flag across every adapter. No signup, no token, no server.",
   "homepage": "https://job.ha7ch.com",
   "repository": "https://github.com/HA7CH/job-pro",
   "license": "MIT",
@@ -10,8 +10,7 @@
     "job-pro": "./dist/index.js"
   },
   "files": [
-    "dist",
-    "extension"
+    "dist"
   ],
   "publishConfig": {
     "access": "public",
@@ -22,8 +21,6 @@
     "校招",
     "social-recruiting",
     "社招",
-    "auto-apply",
-    "投递",
     "tencent",
     "bytedance",
     "alibaba",
@@ -44,11 +41,9 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "test": "tsx test/smoke.ts",
-    "test:apply": "tsx test/apply-smoke.ts",
-    "test:debug-submit": "tsx test/debug-submit-smoke.ts",
     "test:unit": "tsx test/unit-smoke.ts",
     "test:match": "tsx test/match-smoke.ts",
-    "prepublishOnly": "npm run build && rm -rf extension && cp -R ../extension extension"
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "mammoth": "^1.8.0",

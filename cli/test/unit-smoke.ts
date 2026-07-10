@@ -1,13 +1,13 @@
-// Pure unit smoke — no network. Exercises the persistence + format-validation
-// helpers added in 1.0.10 → 1.0.21:
+// Pure unit smoke — no network. Exercises the read-side profile loader
+// (cli/src/profile.ts) that `match` / `resume-check` / `status` depend on:
 //
-//   * saveProfile + loadProfileRaw round-trip
-//   * applyFormFile flat-shape merge
-//   * applyFormFile FormTemplate-shape merge
-//   * (manual reproduction of) profile-lint email/phone regex
+//   * loadProfileRaw missing-file → ok:false with the path surfaced
+//   * loadProfileRaw valid-JSON round-trip (resume_path / degree survive)
+//   * loadProfileRaw malformed-JSON → ok:false (no throw)
+//   * profilePath honors $JOB_PRO_PROFILE_PATH
 //
-// Designed to run in CI alongside `tsc` — no upstream calls, no Chrome,
-// no httpbin. Fast (sub-second) and deterministic.
+// Designed to run in CI alongside `tsc` — no upstream calls, no Chrome.
+// Fast (sub-second) and deterministic.
 //
 // Run with: pnpm test:unit
 
@@ -27,154 +27,64 @@ function record(name: string, ok: boolean, detail?: string): void {
 }
 
 async function main(): Promise<void> {
-  // Set JOB_PRO_PROFILE_PATH to a tmp file BEFORE importing apply.ts (which
+  // Set JOB_PRO_PROFILE_PATH to a tmp file BEFORE importing profile.ts (which
   // reads the env var at module-load to bind PROFILE_PATH).
   const tmp = mkdtempSync(join(tmpdir(), "jobpro-unit-smoke-"));
-  const profilePath = join(tmp, "profile.json");
-  process.env.JOB_PRO_PROFILE_PATH = profilePath;
+  const profilePathOverride = join(tmp, "profile.json");
+  process.env.JOB_PRO_PROFILE_PATH = profilePathOverride;
   try {
-    const apply = await import("../src/apply.js");
-    const { saveProfile, loadProfileRaw, applyFormFile } = apply;
-    type Profile = import("../src/apply.js").ResumeProfile;
+    const { loadProfileRaw, profilePath } = await import("../src/profile.js");
 
-    // 1. saveProfile -> loadProfileRaw round-trip
-    const orig: Profile = {
+    // 1. profilePath honors the env override.
+    record(
+      "profilePath honors $JOB_PRO_PROFILE_PATH",
+      profilePath() === profilePathOverride,
+      `got=${profilePath()}`
+    );
+
+    // 2. Missing file → ok:false, path still surfaced.
+    const missing = loadProfileRaw();
+    record("loadProfileRaw missing file → ok:false", missing.ok === false);
+    record(
+      "loadProfileRaw missing file surfaces the path",
+      missing.path === profilePathOverride,
+      `got=${missing.path}`
+    );
+
+    // 3. Valid JSON round-trip — the keys the read side actually consumes.
+    const orig = {
       first_name: "Smoke",
       last_name: "Test",
       email: "smoke@example.com",
       phone: "+86 13800138000",
       resume_path: "/tmp/x.pdf",
-      cover_letter_text: "",
-      custom: { question_001: "alpha", question_002: "bravo" },
+      degree: "master",
+      custom: { legacy_key: "kept-but-unused" },
     };
-    const saved = saveProfile(orig);
-    record(
-      "saveProfile returns ok",
-      saved.ok === true,
-      saved.ok ? `path=${saved.path}` : `message=${saved.message}`
-    );
+    writeFileSync(profilePathOverride, JSON.stringify(orig, null, 2) + "\n", "utf8");
     const loaded = loadProfileRaw();
-    record(
-      "loadProfileRaw returns ok after saveProfile",
-      loaded.ok === true,
-      loaded.ok ? "" : `message=${loaded.message}`
-    );
+    record("loadProfileRaw valid file → ok:true", loaded.ok === true, loaded.ok ? "" : `message=${loaded.message}`);
     if (loaded.ok) {
       const p = loaded.profile;
+      record("round-trip resume_path", p.resume_path === orig.resume_path, `got=${p.resume_path}`);
+      record("round-trip degree", p.degree === "master", `got=${p.degree}`);
       record("round-trip email", p.email === orig.email, `got=${p.email}`);
-      record("round-trip custom.question_001", p.custom?.question_001 === "alpha", `got=${p.custom?.question_001}`);
       record(
-        "round-trip preserves custom key count",
-        Object.keys(p.custom ?? {}).length === 2,
-        `got ${Object.keys(p.custom ?? {}).length}`
+        "round-trip preserves legacy custom keys",
+        p.custom?.legacy_key === "kept-but-unused",
+        `got=${p.custom?.legacy_key}`
       );
     }
 
-    // 2. applyFormFile flat shape: { name: value }
-    const flatPath = join(tmp, "flat-form.json");
-    writeFileSync(flatPath, JSON.stringify({ question_003: "charlie", question_004: "delta" }));
-    const mergedFlat = applyFormFile(orig, flatPath);
-    record("applyFormFile flat-shape ok", mergedFlat.ok === true, mergedFlat.ok ? "" : mergedFlat.message);
-    if (mergedFlat.ok) {
-      record("flat-shape merged 003", mergedFlat.profile.custom?.question_003 === "charlie");
-      record("flat-shape merged 004", mergedFlat.profile.custom?.question_004 === "delta");
-      record(
-        "flat-shape preserves existing 001",
-        mergedFlat.profile.custom?.question_001 === "alpha"
-      );
-    }
-
-    // 3. applyFormFile FormTemplate shape: { fields: [{ name, value }, …] }
-    const tplPath = join(tmp, "tpl-form.json");
-    writeFileSync(
-      tplPath,
-      JSON.stringify({
-        fields: [
-          { name: "question_005", value: "echo" },
-          { name: "question_006", value: "" }, // empty values dropped
-          { name: "question_007", value: "foxtrot" },
-        ],
-      })
+    // 4. Malformed JSON → ok:false with a parse message (must not throw).
+    writeFileSync(profilePathOverride, "not json {", "utf8");
+    const bad = loadProfileRaw();
+    record("loadProfileRaw malformed JSON → ok:false", bad.ok === false);
+    record(
+      "loadProfileRaw malformed JSON mentions parse failure",
+      bad.ok === false && /could not parse/.test(bad.message),
+      bad.ok === false ? bad.message : ""
     );
-    const mergedTpl = applyFormFile(orig, tplPath);
-    record("applyFormFile tpl-shape ok", mergedTpl.ok === true, mergedTpl.ok ? "" : mergedTpl.message);
-    if (mergedTpl.ok) {
-      record("tpl-shape merged 005", mergedTpl.profile.custom?.question_005 === "echo");
-      record("tpl-shape merged 007", mergedTpl.profile.custom?.question_007 === "foxtrot");
-      record(
-        "tpl-shape drops empty values",
-        mergedTpl.profile.custom?.question_006 === undefined,
-        `got=${mergedTpl.profile.custom?.question_006}`
-      );
-    }
-
-    // 4. applyFormFile rejects missing file
-    const missing = applyFormFile(orig, join(tmp, "does-not-exist.json"));
-    record("applyFormFile rejects missing file", missing.ok === false);
-
-    // 5. applyFormFile rejects invalid JSON
-    const badJson = join(tmp, "bad.json");
-    writeFileSync(badJson, "not json {");
-    const badParse = applyFormFile(orig, badJson);
-    record("applyFormFile rejects invalid JSON", badParse.ok === false);
-
-    // 6. Session-age math (mirrors the inner sessionAgeDays in index.ts).
-    function sessionAgeDays(exported_at: string): number | null {
-      const ts = Date.parse(exported_at);
-      if (!Number.isFinite(ts)) return null;
-      return Math.floor((Date.now() - ts) / 86_400_000);
-    }
-    const now = new Date();
-    const yesterday = new Date(now.getTime() - 86_400_000).toISOString();
-    const twoMonthsAgo = new Date(now.getTime() - 60 * 86_400_000).toISOString();
-    record("sessionAgeDays(yesterday) === 1", sessionAgeDays(yesterday) === 1);
-    record("sessionAgeDays(60d ago) === 60", sessionAgeDays(twoMonthsAgo) === 60);
-    record("sessionAgeDays(garbage) === null", sessionAgeDays("not a date") === null);
-
-    // 7. Profile lint regexes (mirrors index.ts inline validators).
-    const validEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
-    record("email regex accepts valid", validEmail("smoke@example.com") === true);
-    record("email regex rejects no-at", validEmail("smokeexample.com") === false);
-    record("email regex rejects no-tld", validEmail("smoke@example") === false);
-    record("email regex rejects whitespace", validEmail("a b@example.com") === false);
-    const validPhone = (s: string) => /^[+]?[\d\s\-()]{7,}$/.test(s) && s.replace(/\D/g, "").length >= 7;
-    record("phone regex accepts +86", validPhone("+86 13800138000") === true);
-    record("phone regex accepts (555) 123-4567", validPhone("(555) 123-4567") === true);
-    record("phone regex rejects 5 digits", validPhone("12345") === false);
-    record("phone regex rejects empty", validPhone("") === false);
-
-    // 8. HTTP-status hint table (mirrors `hintForStatus` in apply.ts).
-    function hintForStatus(status: number): string {
-      if (status === 401 || status === 403) return "session likely stale — recapture via `job-pro extension`, log into the careers site, click Export";
-      if (status === 404) return "endpoint not found — submit_endpoint may have drifted upstream; verify via `apply --schema` + `--debug-submit-to`";
-      if (status === 422 || status === 400) return "request rejected — likely a missing/malformed answer; rerun `apply --interactive` to refill required fields";
-      if (status === 429) return "rate limited — retry after a few minutes";
-      return "";
-    }
-    record("hintForStatus(401) mentions stale session", hintForStatus(401).includes("stale"));
-    record("hintForStatus(403) mentions stale session", hintForStatus(403).includes("stale"));
-    record("hintForStatus(404) mentions submit_endpoint", hintForStatus(404).includes("submit_endpoint"));
-    record("hintForStatus(422) mentions --interactive", hintForStatus(422).includes("--interactive"));
-    record("hintForStatus(429) mentions rate limit", hintForStatus(429).includes("rate limited"));
-    record("hintForStatus(500) returns empty (5xx not a hint case)", hintForStatus(500) === "");
-
-    // 9. ENDPOINT_VERIFIED set integrity (1.0.78+). Catches regressions:
-    //    a contributor accidentally drops an entry → CI fails.
-    const { ENDPOINT_VERIFIED } = await import("../src/coverage.js");
-    record("ENDPOINT_VERIFIED has exactly 45 entries", ENDPOINT_VERIFIED.size === 45, `actual ${ENDPOINT_VERIFIED.size}`);
-    const expectedVerified = [
-      "xpeng", "weride", "hoyoverse",
-      "alibaba", "pdd", "meituan", "mihoyo", "liauto",
-      "moonshot", "megvii", "deepseek", "galaxyuniversal", "stepfun", "cambricon", "geely",
-      "iflytek", "vivo",
-      "sf", "netease", "didi", "pingan", "byd", "bilibili", "xiaohongshu", "baidu",
-      "tencent", "jd", "oppo", "trip",
-      "xiaomi", "nio", "minimax", "zhipu", "iqiyi", "agibot", "zerooneai", "baichuan",
-      "bytedance", "sensetime", "horizonrobotics", "kuaishou", "weibo", "huawei", "lilith", "antgroup",
-    ];
-    record("ENDPOINT_VERIFIED contains every expected adapter", expectedVerified.every((k) => ENDPOINT_VERIFIED.has(k)));
-    const externals = ["hikvision", "cicc", "cainiao", "webank", "unitree"];
-    record("ENDPOINT_VERIFIED excludes the 5 external adapters", externals.every((k) => !ENDPOINT_VERIFIED.has(k)));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

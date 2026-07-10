@@ -10,19 +10,30 @@
 //   https://app.mokahr.com/recommendation-recruitment/<orgSlug>/<siteId>
 //
 // The SSR HTML always embeds an `<input id="init-data" value="<HTML-escaped JSON>">`
-// containing the first page of jobs + an `aesIv` constant. For deeper
-// pagination the SPA POSTs to
+// containing the first jobs + an `aesIv` constant. The init-data list is
+// only a prefix of the full board (e.g. high-flyer embeds 15 of 36 jobs),
+// so the SPA POSTs to
 //   /api/outer/ats-apply/website/jobs/v2?orgId=<slug>
 // and receives an AES-CBC encrypted envelope `{data, necromancer}`. We
 // decrypt with key=necromancer (utf8) and iv=aesIv (utf8) to obtain the
-// plain JSON page.
+// plain JSON page. Body params (recovered from the SPA bundle
+// recruitmentWeb-20260706-*.js, verified against high-flyer 2026-07-11):
+// `limit` / `offset` (NOT pageNum/pageSize — those are silently ignored
+// and the server falls back to limit=10 offset=0), plus optional
+// `keyword` for server-side matching. `limit` is capped upstream: 50 is
+// accepted, 100 returns code 102 参数错误. With `keyword` set,
+// `jobStats.total` is the *filtered* count. Encrypted jobs carry
+// `jobDescription` (the SSR init-data jobs do not).
+//
+// Single-job detail uses the SPA's
+//   POST /api/outer/ats-apply/website/job  {orgId, siteId, jobId, locale}
+// — same AES envelope, anonymous, returns the full job incl. description.
 //
 // This factory hides that machinery. Adapters declare `{ orgSlug, channels }`
 // (one channel per public portal URL) and get the eight canonical verbs.
 
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
 import { createDecipheriv } from "node:crypto";
-import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
 export type { PositionScope };
@@ -69,9 +80,17 @@ interface MokaJob {
   title: string;
   hireMode?: number;
   commitment?: string;
+  /** Present on jobs/v2 (encrypted) and /website/job responses; absent in SSR init-data. */
+  jobDescription?: string;
   zhineng?: { id?: number; name?: string };
   department?: { id?: number; name?: string };
-  locations?: Array<{ id?: number; cityId?: number | null; country?: string; address?: string }>;
+  locations?: Array<{
+    id?: number;
+    cityId?: number | null;
+    cityName?: string;
+    country?: string;
+    address?: string;
+  }>;
   location?: { id?: number; cityId?: number | null; country?: string };
 }
 
@@ -131,17 +150,28 @@ const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 const API_ENDPOINT = "https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2";
+const DETAIL_ENDPOINT = "https://app.mokahr.com/api/outer/ats-apply/website/job";
+
+/** Upstream rejects limit > 50 with code 102 ("参数错误"). */
+const MOKA_MAX_LIMIT = 50;
+
+function clampPageSize(n: number): number {
+  if (!Number.isFinite(n)) return 20;
+  return Math.max(1, Math.min(MOKA_MAX_LIMIT, Math.floor(n)));
+}
 
 // ---------- shared helpers ----------
 
 function htmlDecode(s: string): string {
+  // `&amp;` must decode last: doing it first turns double-encoded text
+  // (`&amp;lt;`) into `&lt;` and then a spurious `<`.
   return s
     .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&#x27;/g, "'")
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 function parseInitData(html: string): MokaInitData | null {
@@ -220,16 +250,20 @@ async function fetchEncryptedPage(
   pageSize: number,
   aesIv: string,
   cookieHeader: string,
-  portalUrl: string
+  portalUrl: string,
+  keyword?: string
 ): Promise<{ ok: boolean; jobs?: MokaJob[]; total?: number; message: string }> {
   const url = `${API_ENDPOINT}?orgId=${encodeURIComponent(orgSlug)}`;
-  const body = {
+  const limit = clampPageSize(pageSize);
+  const body: Record<string, unknown> = {
     orgId: orgSlug,
     siteId: String(siteId),
-    pageNum,
-    pageSize,
+    limit,
+    offset: (Math.max(1, pageNum) - 1) * limit,
     needStat: true,
+    locale: "zh-CN",
   };
+  if (keyword) body.keyword = keyword;
   let response: Response;
   try {
     response = await fetch(url, {
@@ -263,9 +297,26 @@ async function fetchEncryptedPage(
   return {
     ok: true,
     jobs: decoded.data.jobs ?? [],
-    total: decoded.data.jobStats?.total ?? 0,
+    // Leave total undefined when jobStats is absent so callers can keep
+    // their init-data board total instead of truncating sweeps at 0.
+    total: decoded.data.jobStats?.total,
     message: "ok",
   };
+}
+
+/** Flatten Moka's rich-text jobDescription HTML into readable plain text. */
+function htmlToText(html: string): string {
+  return htmlDecode(
+    html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|li|h[1-6]|tr|td|th|ul|ol|section)>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/gi, " ")
+  )
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function buildCityMap(groups: MokaLocationGroup[] | undefined): Record<number, string> {
@@ -281,7 +332,7 @@ function workCitiesFor(job: MokaJob, cityMap: Record<number, string>): string {
   const cities = (job.locations ?? [])
     .map((l) => {
       if (typeof l.cityId === "number" && cityMap[l.cityId]) return cityMap[l.cityId];
-      return l.country || "";
+      return l.cityName || l.country || "";
     })
     .filter((s) => s.length > 0);
   const uniq: string[] = [];
@@ -294,6 +345,17 @@ function commitmentFor(job: MokaJob): string {
   if (job.hireMode === 1) return "全职";
   if (job.hireMode === 2) return "实习";
   return "";
+}
+
+/**
+ * Some tenants' jobs/v2 rows omit `locations` entirely (megvii, probed
+ * 2026-07-11) while the SSR init-data record for the same job has them —
+ * graft the SSR locations back so `work_cities` doesn't regress to "".
+ */
+function enrichFromSsr(job: MokaJob, ssrById: Map<string, MokaJob>): MokaJob {
+  if (job.locations && job.locations.length > 0) return job;
+  const ssr = ssrById.get(String(job.id));
+  return ssr?.locations?.length ? { ...job, locations: ssr.locations } : job;
 }
 
 function matchesKeyword(job: MokaJob, kw: string): boolean {
@@ -379,9 +441,10 @@ export function createAdapter(cfg: MokaAdapterConfig) {
 
   async function searchOneChannel(ch: MokaChannel, opts: SearchOptions = {}) {
     const url = portalUrl(ch);
-    const pageSize = opts.pageSize ?? 20;
+    const pageSize = clampPageSize(opts.pageSize ?? 20);
     const page = opts.page ?? 1;
     const keyword = opts.keyword ?? "";
+    const query = { recruitType: ch.recruitType, keyword, page, pageSize };
 
     const portal = await fetchPortalHtml(url);
     if (!portal.ok || !portal.html) {
@@ -389,7 +452,7 @@ export function createAdapter(cfg: MokaAdapterConfig) {
         ok: false as const,
         source: SOURCE,
         message: portal.message,
-        query: { recruitType: ch.recruitType, keyword, page, pageSize },
+        query,
         positions: [] as PositionSummary[],
         total: 0,
       };
@@ -400,48 +463,74 @@ export function createAdapter(cfg: MokaAdapterConfig) {
         ok: false as const,
         source: SOURCE,
         message: "Moka init-data missing jobs/jobStats",
-        query: { recruitType: ch.recruitType, keyword, page, pageSize },
+        query,
         positions: [] as PositionSummary[],
         total: 0,
       };
     }
     const cityMap = buildCityMap(init.jobsGroupedByLocation);
-    let jobs = init.jobs;
-    const total = init.jobStats.total ?? jobs.length;
+    const total = init.jobStats.total ?? init.jobs.length;
 
-    if (page > 1 && init.aesIv && portal.cookieHeader) {
-      const more = await fetchEncryptedPage(
+    // The SSR init-data embeds only a prefix of the board (e.g. 15 of 36
+    // jobs on high-flyer), so client-side filtering over it silently misses
+    // positions. Prefer the encrypted jobs/v2 endpoint: server-side keyword
+    // matching over the full board + real limit/offset pagination. With a
+    // keyword its jobStats.total is the filtered count.
+    if (init.aesIv) {
+      const enc = await fetchEncryptedPage(
         cfg.orgSlug,
         ch.siteId,
         page,
         pageSize,
         init.aesIv,
-        portal.cookieHeader,
-        url
+        portal.cookieHeader ?? "",
+        url,
+        keyword
       );
-      if (!more.ok || !more.jobs) {
+      if (enc.ok && enc.jobs) {
+        const ssrById = new Map(init.jobs.map((j) => [String(j.id), j]));
+        return {
+          ok: true as const,
+          source: SOURCE,
+          query,
+          page,
+          page_size: pageSize,
+          total: enc.total ?? total,
+          positions: enc.jobs.map((j) => summarize(enrichFromSsr(j, ssrById), cityMap, ch)),
+        };
+      }
+      if (page > 1) {
         return {
           ok: false as const,
           source: SOURCE,
-          message: `pagination failed: ${more.message}`,
-          query: { recruitType: ch.recruitType, keyword, page, pageSize },
+          message: `pagination failed: ${enc.message}`,
+          query,
           positions: [] as PositionSummary[],
           total,
         };
       }
-      jobs = more.jobs;
+      // First page: degrade to the SSR prefix below rather than failing.
+    } else if (page > 1) {
+      return {
+        ok: false as const,
+        source: SOURCE,
+        message: "pagination unavailable: Moka init-data missing aesIv",
+        query,
+        positions: [] as PositionSummary[],
+        total,
+      };
     }
 
-    const filtered = jobs.filter((j) => matchesKeyword(j, keyword));
-    const sliced = filtered.slice(0, pageSize);
+    // Fallback (first page only): client-side filter over the SSR prefix.
+    const filtered = init.jobs.filter((j) => matchesKeyword(j, keyword));
     return {
       ok: true as const,
       source: SOURCE,
-      query: { recruitType: ch.recruitType, keyword, page, pageSize },
+      query,
       page,
       page_size: pageSize,
       total,
-      positions: sliced.map((j) => summarize(j, cityMap, ch)),
+      positions: filtered.slice(0, pageSize).map((j) => summarize(j, cityMap, ch)),
     };
   }
 
@@ -450,7 +539,7 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     // on post_id (Moka tenants sometimes mirror referral jobs into both
     // campus + social portals).
     if (opts.scope === "all" && cfg.channels.length > 1) {
-      const pageSize = opts.pageSize ?? 20;
+      const pageSize = clampPageSize(opts.pageSize ?? 20);
       const page = opts.page ?? 1;
       const keyword = opts.keyword ?? "";
       const results = await Promise.all(
@@ -501,7 +590,7 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     opts: SearchOptions & { maxPages?: number } = {}
   ) {
     const url = portalUrl(ch);
-    const pageSize = opts.pageSize ?? 20;
+    const pageSize = clampPageSize(opts.pageSize ?? 20);
     const maxPages = Math.max(1, opts.maxPages ?? 50);
     const keyword = opts.keyword ?? "";
 
@@ -528,11 +617,19 @@ export function createAdapter(cfg: MokaAdapterConfig) {
       };
     }
     const cityMap = buildCityMap(init.jobsGroupedByLocation);
-    const total = init.jobStats.total ?? 0;
-    const collected: MokaJob[] = [...init.jobs];
+    let total = init.jobStats.total ?? 0;
 
-    let page = 2;
-    while (collected.length < total && page <= maxPages) {
+    // Sweep the encrypted jobs/v2 endpoint from offset 0 — the SSR init-data
+    // is only a prefix of the board, and with a keyword the server matches
+    // the full board for us. Dedupe by id and stop on a page that adds
+    // nothing, so a tenant that ignores our offset can't loop us over
+    // duplicates (the pre-1.1.15 pageNum/pageSize body triggered exactly
+    // that: 15 unique jobs came back as 45 rows).
+    const seen = new Set<string>();
+    const collected: MokaJob[] = [];
+    let page = 1;
+    let firstPageError: string | null = null;
+    while (page <= maxPages) {
       const more = await fetchEncryptedPage(
         cfg.orgSlug,
         ch.siteId,
@@ -540,19 +637,45 @@ export function createAdapter(cfg: MokaAdapterConfig) {
         pageSize,
         init.aesIv,
         portal.cookieHeader ?? "",
-        url
+        url,
+        keyword
       );
-      if (!more.ok || !more.jobs || more.jobs.length === 0) break;
-      collected.push(...more.jobs);
+      if (!more.ok || !more.jobs) {
+        if (page === 1) firstPageError = more.message;
+        break;
+      }
+      if (typeof more.total === "number") total = more.total;
+      let added = 0;
+      for (const j of more.jobs) {
+        const id = String(j.id);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        collected.push(j);
+        added += 1;
+      }
+      if (added === 0 || collected.length >= total || more.jobs.length < pageSize) break;
       page += 1;
     }
-    const filtered = collected.filter((j) => matchesKeyword(j, keyword));
+
+    if (collected.length === 0 && firstPageError) {
+      // Encrypted endpoint down — degrade to the SSR prefix.
+      const filtered = init.jobs.filter((j) => matchesKeyword(j, keyword));
+      return {
+        ok: true as const,
+        source: SOURCE,
+        total,
+        fetched: filtered.length,
+        positions: filtered.map((j) => summarize(j, cityMap, ch)),
+      };
+    }
+
+    const ssrById = new Map(init.jobs.map((j) => [String(j.id), j]));
     return {
       ok: true as const,
       source: SOURCE,
       total,
-      fetched: filtered.length,
-      positions: filtered.map((j) => summarize(j, cityMap, ch)),
+      fetched: collected.length,
+      positions: collected.map((j) => summarize(enrichFromSsr(j, ssrById), cityMap, ch)),
     };
   }
 
@@ -600,17 +723,97 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     return fetchAllOneChannel(resolveChannel(opts), opts);
   }
 
-  async function fetchPositionDetail(postId: string) {
-    const ch = pickChannel();
-    return {
+  /** One /website/job probe against one channel's siteId + portal context. */
+  async function detailViaChannel(ch: MokaChannel, id: string) {
+    const url = portalUrl(ch);
+    const applyUrl = `${url}#/job/${encodeURIComponent(id)}`;
+    const fail = (message: string) => ({
       ok: false as const,
       source: SOURCE,
-      message:
-        "Moka detail endpoint requires the same encrypted-session flow; not implemented. " +
-        "Use the apply_url deeplink for the full JD.",
-      post_id: postId,
-      apply_url: `${portalUrl(ch)}#/job/${encodeURIComponent(postId)}`,
+      message,
+      post_id: id,
+      apply_url: applyUrl,
+    });
+
+    // The portal page supplies the AES IV + locale cookies the detail
+    // endpoint needs; the endpoint itself is anonymous.
+    const portal = await fetchPortalHtml(url);
+    if (!portal.ok || !portal.html) return fail(portal.message);
+    const init = parseInitData(portal.html);
+    if (!init?.aesIv) return fail("Moka init-data missing aesIv");
+
+    let response: Response;
+    try {
+      response = await fetch(`${DETAIL_ENDPOINT}?orgId=${encodeURIComponent(cfg.orgSlug)}`, {
+        method: "POST",
+        headers: {
+          ...DEFAULT_HEADERS,
+          Accept: "application/json,*/*",
+          "Content-Type": "application/json",
+          Origin: "https://app.mokahr.com",
+          Referer: url,
+          Cookie: portal.cookieHeader ?? "",
+        },
+        body: JSON.stringify({
+          orgId: cfg.orgSlug,
+          siteId: String(ch.siteId),
+          jobId: id,
+          locale: "zh-CN",
+        }),
+      });
+    } catch (err) {
+      return fail(`network error: ${err instanceof Error ? err.message : err}`);
+    }
+    if (!response.ok) return fail(`HTTP ${response.status}`);
+    let envelope: { data?: string; necromancer?: string; msg?: string };
+    try {
+      envelope = await response.json();
+    } catch {
+      return fail("bad JSON from upstream");
+    }
+    const decoded = decryptMokaEnvelope(envelope, init.aesIv) as {
+      code?: number;
+      data?: MokaJob & { job?: MokaJob };
+      msg?: string;
+    } | null;
+    if (!decoded || decoded.code !== 0 || !decoded.data) {
+      return fail(decoded?.msg || envelope?.msg || "decrypt or upstream error (job may not exist)");
+    }
+    // Some Moka responses nest the job under data.job; most return it flat.
+    const job = decoded.data.job ?? decoded.data;
+    if (!job.id) return fail("job not found");
+    const cityMap = buildCityMap(init.jobsGroupedByLocation);
+    return {
+      ok: true as const,
+      source: SOURCE,
+      post_id: String(job.id),
+      title: job.title ?? "",
+      project: job.zhineng?.name ?? "",
+      recruit_label: commitmentFor(job),
+      bgs: job.department?.name ?? "",
+      work_cities: workCitiesFor(job, cityMap),
+      description: htmlToText(job.jobDescription ?? ""),
+      apply_url: applyUrl,
     };
+  }
+
+  async function fetchPositionDetail(postId: string) {
+    const id = (postId ?? "").trim();
+    if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required" };
+    // Job ids are scoped to their channel's siteId upstream — probing the
+    // wrong channel returns 703015 job-not-found (verified on megvii,
+    // 2026-07-11) — so try the default channel first, then the rest.
+    const first = defaultChannel();
+    const channels = [first, ...cfg.channels.filter((c) => c !== first)];
+    let firstFailure: Awaited<ReturnType<typeof detailViaChannel>> | null = null;
+    for (const ch of channels) {
+      const r = await detailViaChannel(ch, id);
+      if (r.ok) return r;
+      firstFailure ??= r;
+    }
+    // All channels failed — report the default channel's failure (its
+    // apply_url is the tenant's primary portal).
+    return firstFailure ?? { ok: false as const, source: SOURCE, message: "no channels configured" };
   }
 
   async function fetchDictionaries() {
@@ -687,69 +890,6 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     };
   }
 
-  // ---------- Phase 2: fetchApplicationSchema ----------
-  //
-  // Moka apply endpoints discovered in
-  // static-ats.mokahr.com/recruitment-web-client/javascripts/recruitmentWeb-*.js
-  // (probed 2026-05-16, 4.2 MB bundle):
-  //
-  //   GET  /api/get_job_apply_form/?jobId=<uuid>&orgId=<slug>
-  //        → returns the per-job questions array (subject to org config)
-  //   POST /api/outer/ats-apply/website/applicant-limit-check
-  //        → rate-limit / dedupe pre-flight
-  //   POST /api/outer/ats-apply/website/getValidateConfig
-  //        → returns whether SMS validation is required
-  //   POST /api/outer/ats-apply/website/sendApplyValidateSmsCode
-  //        → send the candidate's phone an SMS code
-  //   POST /api/outer/ats-apply/website/apply
-  //        → final submission. Body is AES-128-CBC encrypted with the
-  //          per-response `necromancer` key + page-level aesIv (same
-  //          envelope as our existing read-side cli/src/moka.ts decrypt).
-  //
-  // The whole flow requires the candidate to be logged in via Moka's
-  // candidate-portal (email + SMS verification). Cookies for that
-  // session are captured by the browser extension and dropped under
-  // ~/.jobpro/<adapter>.session.json — see docs/auto-apply.md.
-  async function fetchApplicationSchema(postId: string): Promise<
-    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
-  > {
-    const id = (postId ?? "").trim();
-    if (!id) return { ok: false, source: SOURCE, message: "post_id is required" };
-    // Find the job title via our existing search infrastructure.
-    const r = await fetchPositionDetail(id);
-    const detailAny = r as { ok?: boolean; title?: string; message?: string };
-    // Standard contact-info questions Moka tenants always require.
-    const questions: ApplyQuestion[] = [
-      { label: "Name",   required: true, fields: [{ name: "name",   type: "input_text" }] },
-      { label: "Email",  required: true, fields: [{ name: "email",  type: "input_text" }] },
-      { label: "Phone",  required: true, fields: [{ name: "phone",  type: "input_text" }] },
-      { label: "Resume", required: true, fields: [{ name: "resume", type: "input_file" }] },
-    ];
-    return {
-      ok: true,
-      schema: {
-        source: SOURCE,
-        post_id: id,
-        job_title: detailAny.title ?? "",
-        apply_url: `${portalUrl(pickChannel())}#/job/${encodeURIComponent(id)}`,
-        submit_endpoint: "https://app.mokahr.com/api/outer/ats-apply/website/apply",
-        submit_method: "POST",
-        submit_kind: "moka-aes",
-        endpoint_verified: true,
-        submit_notes:
-          "Moka apply flow: GET /api/get_job_apply_form (questions) → " +
-          "POST /applicant-limit-check (rate-limit) → POST /getValidateConfig + " +
-          "/sendApplyValidateSmsCode (if SMS required) → POST /website/apply with " +
-          "AES-128-CBC envelope {data, necromancer} (same encryption as the read-side " +
-          "list endpoint). Endpoint URL anon-probed (returns the AES envelope rather " +
-          "than HTML fallthrough — confirms it's the real route, not a guess). " +
-          "Requires candidate session — capture via extension/, drop session.json " +
-          "under ~/.jobpro/.",
-        questions,
-      },
-    };
-  }
-
   return {
     searchPositions,
     fetchAllPositions,
@@ -760,7 +900,6 @@ export function createAdapter(cfg: MokaAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
-    fetchApplicationSchema,
   };
 }
 

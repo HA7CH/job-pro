@@ -33,9 +33,19 @@
 //
 // Probed 2026-05-16. Apply URL deep-links to the SPA detail route at
 // `/{SU…}/pb/<channel>.html#/postDetail?postId=<postId>`.
+//
+// DETAIL ENDPOINT (probed 2026-07-11 via /pb/js/posDetail.js bundle):
+//   POST https://<host>/wecruit/positionInfo/listPositionDetail/{SU…}
+//        ?iSaJAx=isAjax&request_locale=zh_CN&t=<unix-ms>
+//   Body: postId=<postId>&recruitType=<1|2>   (form-urlencoded)
+//
+//   Returns the full JD: `workContent` (主要职责) + `serviceCondition`
+//   (任职要求) plus orgName/recruitNumStr/workPlaceStr/publish dates.
+//   The lookup is global per tenant — querying a social postId through the
+//   campus channel still returns the right record (verified 2026-07-11).
+//   Unknown/closed postId → state:"1017", msg:"该职位招聘已经关闭…".
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
-import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
@@ -87,6 +97,15 @@ interface RawPosition {
   responsibility?: string;
   require?: string;
   requirement?: string;
+}
+
+/** listPositionDetail payload — RawPosition fields plus the actual JD. */
+interface RawPositionDetail extends RawPosition {
+  /** 主要职责 / job description body (plain text with \n). */
+  workContent?: string;
+  /** 任职要求 / requirements (plain text with \n). */
+  serviceCondition?: string;
+  orgName?: string;
 }
 
 interface RawPageForm {
@@ -207,6 +226,47 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     return { ok: true, pageForm: payload.data.pageForm, message: "ok" };
   }
 
+  /**
+   * Fetch the full JD via `listPositionDetail` (discovered 2026-07-11 in the
+   * `/pb/js/posDetail.js` bundle — the standalone detail page's only data
+   * XHR). Same form-urlencoded POST style as listPosition. Body carries
+   * `postId` + `recruitType`; the lookup is tenant-global, so the first
+   * channel that answers state=200 wins.
+   */
+  async function postDetail(
+    channel: WecruitChannel,
+    postId: string
+  ): Promise<{ ok: boolean; detail?: RawPositionDetail; message: string }> {
+    const ts = Date.now();
+    const url = `${SITE_ROOT}/wecruit/positionInfo/listPositionDetail/${channel.channelId}?iSaJAx=isAjax&request_locale=zh_CN&t=${ts}`;
+    const recruitType = channel.recruitType === "social" ? 2 : 1;
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        // The real SPA fires this from the standalone posDetail.html page.
+        headers: HEADERS(channel.channelId, "posDetail"),
+        body: urlEncode({ postId, recruitType }),
+      });
+    } catch (err) {
+      return { ok: false, message: `network error: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!response.ok) {
+      return { ok: false, message: `HTTP ${response.status}: ${response.statusText}` };
+    }
+    let payload: RawEnvelope<RawPositionDetail>;
+    try {
+      payload = (await response.json()) as RawEnvelope<RawPositionDetail>;
+    } catch (err) {
+      return { ok: false, message: `bad JSON: ${err instanceof Error ? err.message : err}` };
+    }
+    if (payload.state !== "200" || !payload.data) {
+      // state "1017" = 该职位招聘已经关闭 (closed / unknown postId).
+      return { ok: false, message: payload.msg ?? `upstream state=${payload.state}` };
+    }
+    return { ok: true, detail: payload.data, message: "ok" };
+  }
+
   function summarize(item: RawPosition, channel: WecruitChannel): PositionSummary {
     const id = String(item.postId ?? "");
     const labelFromRecruitType =
@@ -306,6 +366,17 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
       query: opts,
       page,
       page_size: pageSize,
+      // page_size is applied *per channel*; a merged (scope=all) page can
+      // therefore hold up to page_size × channels rows. Surface that so the
+      // metadata never understates the row count (audit 1.1.14).
+      channels: channels.length,
+      ...(channels.length > 1
+        ? {
+            page_size_note: `page_size applies per channel; a merged page may hold up to ${
+              pageSize * channels.length
+            } rows (${channels.length} channels)`,
+          }
+        : {}),
       total,
       positions,
     };
@@ -317,27 +388,58 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     const keyword = (opts.keyword ?? "").trim().slice(0, 60);
     const channels = channelsForType(effectiveRecruitType(opts));
     const bucket: PositionSummary[] = [];
+    const seen = new Set<string>();
     let total = 0;
+    let truncated = false;
     let lastMsg = "ok";
     let anyOk = false;
+
+    const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 
     for (const ch of channels) {
       let chTotal: number | undefined;
       for (let page = 1; page <= maxPages; page++) {
-        const r = await postChannel(ch, page, pageSize, keyword);
+        // Wecruit occasionally drops a page mid-run (observed 2026-07-11:
+        // one run returned 255/271 rows). Back off and retry before giving
+        // up, and never end a channel silently short — flag `truncated`.
+        let r = await postChannel(ch, page, pageSize, keyword);
+        for (let attempt = 1; (!r.ok || !r.pageForm) && attempt <= 2; attempt++) {
+          await sleep(500 * attempt);
+          r = await postChannel(ch, page, pageSize, keyword);
+        }
         if (!r.ok || !r.pageForm) {
           lastMsg = r.message;
+          truncated = true; // gave up before exhausting this channel
           break;
         }
         anyOk = true;
         if (chTotal === undefined) {
-          chTotal = (r.pageForm.totalPage ?? 0) * (r.pageForm.pageSize ?? 0) || (r.pageForm.dataCount ?? 0);
+          // Prefer dataCount: it is the exact row count, whereas
+          // totalPage*pageSize rounds the last page up (audit 1.1.14 saw
+          // total=350 reported for 271 real positions).
+          chTotal = (r.pageForm.dataCount ?? 0) || (r.pageForm.totalPage ?? 0) * (r.pageForm.pageSize ?? 0);
           total += chTotal;
         }
         const data = r.pageForm.pageData ?? [];
         if (!data.length) break;
-        for (const p of data) bucket.push(summarize(p, ch));
-        if (page >= (r.pageForm.totalPage ?? 0)) break;
+        let added = 0;
+        for (const p of data) {
+          const s = summarize(p, ch);
+          if (s.post_id) {
+            if (seen.has(s.post_id)) continue;
+            seen.add(s.post_id);
+          }
+          bucket.push(s);
+          added++;
+        }
+        const totalPages = r.pageForm.totalPage ?? 0;
+        // No new rows → upstream is repeating pages; stop rather than loop.
+        if (!added) {
+          if (page < totalPages) truncated = true;
+          break;
+        }
+        if (totalPages && page >= totalPages) break;
+        if (page === maxPages && totalPages > maxPages) truncated = true;
       }
     }
     if (!anyOk) {
@@ -350,11 +452,16 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
         positions: bucket,
       };
     }
+    // Page drift (list reordering between page fetches) can silently hide
+    // rows even when every request succeeded — never report a short result
+    // as complete.
+    if (bucket.length < total) truncated = true;
     return {
       ok: true as const,
       source: SOURCE,
       total,
       fetched: bucket.length,
+      truncated,
       positions: bucket,
     };
   }
@@ -362,42 +469,48 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
   async function fetchPositionDetail(postId: string) {
     const id = (postId ?? "").trim();
     if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required" };
-    // Wecruit's listPosition includes description-light fields only.
-    // We scan pages until we find the post.
-    const pageSize = 50;
-    const maxPages = 20;
+    // listPositionDetail carries the full JD (workContent + serviceCondition)
+    // that the description-light listPosition endpoint never had. The lookup
+    // is tenant-global, so the first channel that answers wins — one request
+    // in the common case.
+    let lastMsg = "no channels configured";
     for (const ch of cfg.channels) {
-      for (let page = 1; page <= maxPages; page++) {
-        const r = await postChannel(ch, page, pageSize, "");
-        if (!r.ok || !r.pageForm) break;
-        const found = (r.pageForm.pageData ?? []).find((p) => p.postId === id);
-        if (found) {
-          const summary = summarize(found, ch);
-          return {
-            ok: true as const,
-            source: SOURCE,
-            post_id: id,
-            title: found.postName ?? "",
-            project: summary.project,
-            recruit_label: summary.recruit_label,
-            company: found.company ?? "",
-            department: found.department ?? "",
-            work_cities: found.workPlaceStr ?? "",
-            recruit_num: found.recruitNumStr ?? "",
-            page_views: found.pageViews ?? 0,
-            publish_date: found.publishDate ?? found.publishFirstDate ?? "",
-            end_date: found.endDate ?? "",
-            apply_url: summary.apply_url,
-          };
-        }
-        if (page >= (r.pageForm.totalPage ?? 0)) break;
+      const r = await postDetail(ch, id);
+      if (!r.ok || !r.detail) {
+        lastMsg = r.message;
+        continue;
       }
+      const found = r.detail;
+      const summary = summarize(found, ch);
+      const workContent = (found.workContent ?? "").trim();
+      const serviceCondition = (found.serviceCondition ?? "").trim();
+      const description = [workContent, serviceCondition].filter(Boolean).join("\n\n");
+      return {
+        ok: true as const,
+        source: SOURCE,
+        post_id: String(found.postId ?? id),
+        title: found.postName ?? "",
+        project: summary.project,
+        recruit_label: summary.recruit_label,
+        company: found.company ?? "",
+        department: found.department ?? "",
+        work_cities: found.workPlaceStr ?? "",
+        recruit_num: found.recruitNumStr ?? "",
+        page_views: found.pageViews ?? 0,
+        publish_date: found.publishDate ?? found.publishFirstDate ?? "",
+        end_date: found.endDate ?? "",
+        /** 主要职责 + 任职要求, plain text. */
+        description,
+        work_content: workContent,
+        service_condition: serviceCondition,
+        apply_url: summary.apply_url,
+      };
     }
     return {
       ok: false as const,
       source: SOURCE,
       post_id: id,
-      message: `post ${id} not found across ${cfg.channels.length} channel(s)`,
+      message: `post ${id}: ${lastMsg}`,
     };
   }
 
@@ -431,7 +544,8 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
         continue;
       }
       anyOk = true;
-      const total = (r.pageForm.totalPage ?? 0) * (r.pageForm.pageSize ?? 0) || (r.pageForm.dataCount ?? 0);
+      // dataCount is exact; totalPage*pageSize rounds the last page up.
+      const total = (r.pageForm.dataCount ?? 0) || (r.pageForm.totalPage ?? 0) * (r.pageForm.pageSize ?? 0);
       channelInfo.push({
         channelId: ch.channelId,
         recruitType: ch.recruitType,
@@ -551,60 +665,6 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     };
   }
 
-  // ---------- Phase 2: fetchApplicationSchema ----------
-  //
-  // Beisen Wecruit apply endpoints discovered in
-  // hr.sensetime.com/pb/js/vendor.js (probed 2026-05-16, 3.8 MB bundle):
-  //
-  //   POST /wecruit/resume/upload/file/save/<channelId>  — upload resume PDF/DOCX
-  //   POST /wecruit/resume/info/add/<channelId>          — create/update profile
-  //   POST /wecruit/resume/info/get/<channelId>          — read existing profile
-  //   POST /wecruit/delivery/resume/<channelId>          — final submission
-  //
-  // The candidate session is established by Wecruit's WeChat-OAuth or
-  // phone-OTP login at /pb/<channel>/login.html. Cookies for that session
-  // are captured by the browser extension and dropped under
-  // ~/.jobpro/<adapter>.session.json.
-  async function fetchApplicationSchema(postId: string): Promise<
-    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
-  > {
-    const id = (postId ?? "").trim();
-    if (!id) return { ok: false, source: SOURCE, message: "post_id is required" };
-    const ch = cfg.channels[0];
-    if (!ch) return { ok: false, source: SOURCE, message: "no channels configured" };
-    const detail = await fetchPositionDetail(id);
-    const detailAny = detail as { ok?: boolean; title?: string; message?: string };
-    const questions: ApplyQuestion[] = [
-      { label: "Name",   required: true, fields: [{ name: "name",   type: "input_text" }] },
-      { label: "Email",  required: true, fields: [{ name: "email",  type: "input_text" }] },
-      { label: "Phone",  required: true, fields: [{ name: "phone",  type: "input_text" }] },
-      { label: "Resume", required: true, fields: [{ name: "resume", type: "input_file" }] },
-    ];
-    return {
-      ok: true,
-      schema: {
-        source: SOURCE,
-        post_id: id,
-        job_title: detailAny.title ?? "",
-        apply_url: `${SITE_ROOT}/${encodeURIComponent(ch.channelId)}/pb/${ch.pagePath}.html`,
-        submit_endpoint: `${SITE_ROOT}/wecruit/delivery/resume/${encodeURIComponent(ch.channelId)}`,
-        submit_method: "POST",
-        submit_kind: "beisen-wecruit",
-        endpoint_verified: true,
-        submit_notes:
-          "Beisen Wecruit apply flow: POST /wecruit/resume/upload/file/save/<SU> → " +
-          "POST /wecruit/resume/info/add/<SU> → POST /wecruit/delivery/resume/<SU> with " +
-          "{ post_id, resume_attachment_id, channel_id }. Endpoint verified by reading " +
-          "/pb/js/vendor.js (Beisen Wecruit's vendor bundle) which lists /delivery/resume/, " +
-          "/resume/info/add/, /resume/upload/file/save/ etc as quoted paths. Anon-probe with " +
-          "X-Requested-With:XMLHttpRequest header → HTTP 200 + {type:\"error\",state:\"809\"," +
-          "msg:\"您尚未登录...\"} = real auth gate (without that header, Nginx returns the SPA HTML). " +
-          "Requires candidate session (WeChat OAuth or phone OTP via /pb/<channel>/login.html).",
-        questions,
-      },
-    };
-  }
-
   return {
     supportedScopes,
     searchPositions,
@@ -616,6 +676,5 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
-    fetchApplicationSchema,
   };
 }

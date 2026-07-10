@@ -24,6 +24,11 @@
 // Probed 2026-05-16: 744 positions across campus / social / intern channels.
 // Category labels seen: "校园招聘", "员工社招", "员工校招", "实习生".
 //
+// RE-PROBED 2026-07-11: the Category dictionary drifted. Live labels/IDs are
+// 1=社会招聘 (695), 3=飞YOUNG实习生 (27), 4=飞星计划 (8), 5=飞凡计划 (3),
+// 6=校园大使 (1) — 734 total. GetJobAdSearchConditions now requires the
+// `{"displayFilters":[...]}` body (older `{PortalId,SpecialType}` → 400).
+//
 // Endpoint inventory (all anon, all on iflytek.zhiye.com):
 //   POST /api/Jobad/GetJobAdPageList            → paginated job list
 //   POST /api/Jobad/GetJobAdSearchConditions    → filter taxonomy
@@ -39,14 +44,28 @@ export { checkResume };
 /**
  * Beisen iTalent Category-axis mapping for the iflytek tenant.
  *
- * Confirmed by probing `GetJobAdSearchConditions` on iflytek.zhiye.com —
- * the Category dictionary uses the same numeric IDs as vivo's tenant:
+ * IMPORTANT (re-probed 2026-07-11): this tenant does NOT share vivo's
+ * Category IDs. The live dictionary (POST /api/Jobad/GetJobAdSearchConditions
+ * with `{"displayFilters":["Category"]}` — payload shape extracted from the
+ * portal SPA chunk 4934-8a8526c1…chk.js; the older `{PortalId,SpecialType}`
+ * body now 400s "parameter exception") is:
  *
- * `--scope social` → `Category: ["4"]` (员工社招)
- * `--scope campus` → `Category: ["5"]` (员工校招)
- * `--scope intern` → `Category: ["3"]` (实习生)
+ *   1 = 社会招聘   (social hire — 695 jobs on 2026-07-11)
+ *   3 = 飞YOUNG实习生 (intern program — 27 jobs)
+ *   4 = 飞星计划   (campus special program — 8 jobs)
+ *   5 = 飞凡计划   (campus special program — 3 jobs)
+ *   6 = 校园大使   (campus ambassador — 1 job)
+ *
+ * `--scope social` → `Category: ["1"]`
+ * `--scope campus` → `Category: ["4","5","6"]` (all campus-channel programs)
+ * `--scope intern` → `Category: ["3"]`
  * `--scope all` / undefined → no Category filter (mixed feed across all
  * channels, matching iFlytek's historical 1.0.93 default).
+ *
+ * Because the dictionary already drifted once (2026-05-16 labels were
+ * 员工社招/员工校招/实习生 on vivo-style IDs), `categoriesForScope` re-probes
+ * the live dictionary per process and classifies categories by label,
+ * falling back to the static snapshot above if the probe fails.
  */
 export const supportedScopes = ["social", "campus", "intern", "all"] as const;
 
@@ -61,13 +80,20 @@ function businessTypeForJob(
   categoryId?: string,
   category?: string,
 ): "campus" | "social" | "intern" {
-  // Beisen-standard numeric codes (3=intern, 4=social, 5=campus).
+  // iFlytek-tenant numeric codes (probed 2026-07-11): 1=社会招聘,
+  // 3=飞YOUNG实习生, 4=飞星计划, 5=飞凡计划, 6=校园大使.
+  if (categoryId === "1") return "social";
   if (categoryId === "3") return "intern";
-  if (categoryId === "4") return "social";
-  if (categoryId === "5") return "campus";
+  if (categoryId === "4" || categoryId === "5" || categoryId === "6") return "campus";
   const label = (category ?? "").toString();
   if (label.includes("实习")) return "intern";
-  if (label.includes("校园") || label.includes("校招")) return "campus";
+  if (
+    label.includes("校园") ||
+    label.includes("校招") ||
+    label.includes("飞星") ||
+    label.includes("飞凡")
+  )
+    return "campus";
   if (label.includes("社招") || label.includes("社会")) return "social";
   return "social";
 }
@@ -175,8 +201,9 @@ export interface SearchOptions {
   page?: number;
   pageSize?: number;
   /**
-   * Canonical CLI-side scope flag (1.1.0+). Mapped via `categoryFromScope`
-   * to the Beisen Category axis: `social`=4, `campus`=5, `intern`=3,
+   * Canonical CLI-side scope flag (1.1.0+). Mapped via `categoriesForScope`
+   * to this tenant's Beisen Category axis (live-probed, static fallback):
+   * `social`=["1"], `campus`=["4","5","6"], `intern`=["3"],
    * `all`/undefined = no filter (mixed feed).
    */
   scope?: PositionScope;
@@ -219,21 +246,54 @@ function summarize(item: RawJobAd): PositionSummary {
   };
 }
 
-// Beisen tenants encode recruit type via numeric Category IDs. The iFlytek
-// tenant uses the same triplet as the vivo tenant (probed against
-// GetJobAdSearchConditions): "3"=intern, "4"=social, "5"=campus.
-function categoryFromScope(s?: PositionScope): string[] | undefined {
-  switch (s) {
-    case "social":
-      return ["4"];
-    case "campus":
-      return ["5"];
-    case "intern":
-      return ["3"];
-    case "all":
-    default:
-      return undefined;
+// Beisen tenants encode recruit type via numeric Category IDs, but the ID
+// dictionary is PER-TENANT and has drifted on this tenant before (2026-05-16
+// it looked vivo-shaped; 2026-07-11 it is 1=社会招聘, 3=飞YOUNG实习生,
+// 4=飞星计划, 5=飞凡计划, 6=校园大使). Static snapshot used as fallback when
+// the live dictionary probe fails (offline / WAF / schema change).
+const STATIC_SCOPE_CATEGORIES: Record<"social" | "campus" | "intern", string[]> = {
+  social: ["1"],
+  campus: ["4", "5", "6"],
+  intern: ["3"],
+};
+
+// Classify a Category label into a CLI scope. On this tenant every
+// non-social non-intern category is a campus-channel program (飞星计划,
+// 飞凡计划, 校园大使 — confirmed live 2026-07-11), so campus is the default
+// bucket for unrecognized labels.
+function scopeForCategoryLabel(label: string): "social" | "campus" | "intern" {
+  if (/社会|社招/.test(label)) return "social";
+  if (/实习/.test(label)) return "intern";
+  return "campus";
+}
+
+let _scopeCategoriesCache: Record<"social" | "campus" | "intern", string[]> | null =
+  null;
+
+async function categoriesForScope(s?: PositionScope): Promise<string[] | undefined> {
+  if (!s || s === "all") return undefined;
+  if (_scopeCategoriesCache === null) {
+    const dict = await fetchDictionaries();
+    if (dict.ok) {
+      const axis = dict.conditions.find((c) => c.field === "Category");
+      if (axis && axis.options.length) {
+        const probed: Record<"social" | "campus" | "intern", string[]> = {
+          social: [],
+          campus: [],
+          intern: [],
+        };
+        for (const o of axis.options) {
+          if (o.id) probed[scopeForCategoryLabel(o.name)].push(o.id);
+        }
+        _scopeCategoriesCache = probed;
+      }
+    }
+    if (_scopeCategoriesCache === null) _scopeCategoriesCache = STATIC_SCOPE_CATEGORIES;
   }
+  const ids = _scopeCategoriesCache[s];
+  // Never send an empty Category filter — fall back to the static snapshot
+  // if the live dictionary somehow had no entries for this scope.
+  return ids && ids.length ? ids : STATIC_SCOPE_CATEGORIES[s];
 }
 
 // ---------- searchPositions ----------
@@ -250,7 +310,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
     PortalId: "",
     DisplayFields: ["Category", "Kind", "LocId", "Org", "HeadCount", "PostDate", "Salary"],
   };
-  const category = categoryFromScope(opts.scope ?? opts.recruitType);
+  const category = await categoriesForScope(opts.scope ?? opts.recruitType);
   if (category) body.Category = category;
 
   const r = await post<RawJobAd[]>("/api/Jobad/GetJobAdPageList", body);
@@ -291,7 +351,9 @@ export async function fetchAllPositions(
   const maxPages = Math.max(1, opts.maxPages ?? 30);
 
   const bucket: PositionSummary[] = [];
+  const seen = new Set<string>();
   let total: number | undefined;
+  let exhausted = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const r = await searchPositions({
@@ -304,15 +366,37 @@ export async function fetchAllPositions(
       return { ok: false as const, source: SOURCE, message: r.message, total: 0, fetched: bucket.length, positions: bucket };
     }
     if (total === undefined) total = r.total;
-    if (!r.positions.length) break;
-    bucket.push(...r.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    // Dedupe by post_id and stop when a page yields nothing new — guards
+    // against Beisen serving overlapping/repeating pages.
+    let added = 0;
+    for (const p of r.positions) {
+      const key = p.post_id || `${p.title}|${p.work_cities}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      bucket.push(p);
+      added++;
+    }
+    if (!r.positions.length || added === 0) {
+      exhausted = true;
+      break;
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
+    // Short page = upstream ran out of rows even if its Count over-reports.
+    if (r.positions.length < pageSize) {
+      exhausted = true;
+      break;
+    }
   }
+  if (total !== undefined && bucket.length >= total) exhausted = true;
   return {
     ok: true as const,
     source: SOURCE,
     total: total ?? bucket.length,
     fetched: bucket.length,
+    truncated: !exhausted,
     positions: bucket,
   };
 }
@@ -345,6 +429,16 @@ export async function fetchPositionDetail(postId: string) {
     const found = posts.find((p) => String(p.JobAdId ?? p.Id) === id);
     if (found) {
       const summary = summarize(found);
+      // Upstream does not populate PostDate/HeadCount on this feed — it
+      // returns the .NET zero-date sentinel "0001-01-01T00:00:00" and 0
+      // (confirmed live 2026-07-11). Null them out instead of forwarding
+      // the sentinels verbatim.
+      const rawDate = (found.PostDate ?? "").trim();
+      const postDate = rawDate && !rawDate.startsWith("0001-01-01") ? rawDate : null;
+      const headCount =
+        typeof found.HeadCount === "number" && found.HeadCount > 0
+          ? found.HeadCount
+          : null;
       return {
         ok: true as const,
         source: SOURCE,
@@ -354,8 +448,8 @@ export async function fetchPositionDetail(postId: string) {
         recruit_label: summary.recruit_label,
         description: found.Duty ?? "",
         requirements: found.Require ?? "",
-        head_count: found.HeadCount ?? 0,
-        post_date: found.PostDate ?? "",
+        head_count: headCount,
+        post_date: postDate,
         work_cities: found.LocNames ?? [],
         apply_url: summary.apply_url,
       };
@@ -372,11 +466,18 @@ export async function fetchPositionDetail(postId: string) {
 }
 
 // ---------- fetchDictionaries ----------
+// Payload re-probed 2026-07-11: GetJobAdSearchConditions wants
+// `{"displayFilters":["Category","LocId",...]}` (camelCase; shape lifted from
+// the portal SPA chunk 4934-8a8526c1…chk.js which calls it as
+// `{PageId, displayFilters:[...]}`). The pre-1.1.15 `{PortalId,SpecialType}`
+// body now returns Code 400 "parameter exception". Response items are
+// `{Name, Value, Data:[{Text, Value, StrValue}]}` — only the Category and
+// LocId axes carry options on this tenant (Kind/Org/etc come back empty).
 
 interface RawSearchCondition {
-  Field?: string;
-  Name?: string;
-  Options?: Array<{ Id?: string; Name?: string; Code?: string }>;
+  Name?: string | null;
+  Value?: string;
+  Data?: Array<{ Text?: string; Value?: number | string; StrValue?: string }> | null;
 }
 
 let _filterCache:
@@ -392,7 +493,7 @@ export async function fetchDictionaries() {
   if (_filterCache !== null) return _filterCache;
   const r = await post<RawSearchCondition[]>(
     "/api/Jobad/GetJobAdSearchConditions",
-    { PortalId: "", SpecialType: 0 }
+    { displayFilters: ["Category", "LocId"] }
   );
   if (!r.ok || !r.data) {
     const result = { ok: false as const, source: SOURCE, message: r.message };
@@ -400,11 +501,11 @@ export async function fetchDictionaries() {
     return result;
   }
   const conditions = r.data.map((c) => ({
-    field: c.Field ?? "",
+    field: c.Value ?? "",
     name: c.Name ?? "",
-    options: (c.Options ?? []).map((o) => ({
-      id: o.Id ?? o.Code ?? "",
-      name: o.Name ?? "",
+    options: (c.Data ?? []).map((o) => ({
+      id: o.StrValue ?? (o.Value !== undefined && o.Value !== null ? String(o.Value) : ""),
+      name: o.Text ?? "",
     })),
   }));
   const result = { ok: true as const, source: SOURCE, conditions };
@@ -511,51 +612,3 @@ export { extractResumeSignals, scoreOverlap };
 // Silence unused warning for the GET helper — kept for future taxonomy/city
 // endpoints that return BeisenEnvelope JSON via GET.
 void get;
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema, ApplyQuestion } from './apply.js';
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? '').trim();
-  if (!id) return { ok: false, source: SOURCE, message: 'post_id is required' };
-  let title = '';
-  try {
-    const detail = await fetchPositionDetail(id) as { ok?: boolean; title?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: SOURCE, message: detail.message ?? 'post not found' };
-    }
-    title = detail?.title ?? '';
-  } catch {}
-  const questions: ApplyQuestion[] = [
-    { label: 'Name',   required: true, fields: [{ name: 'name',   type: 'input_text' }] },
-    { label: 'Email',  required: true, fields: [{ name: 'email',  type: 'input_text' }] },
-    { label: 'Phone',  required: true, fields: [{ name: 'phone',  type: 'input_text' }] },
-    { label: 'Resume', required: true, fields: [{ name: 'resume', type: 'input_file' }] },
-  ];
-  return {
-    ok: true,
-    schema: {
-      source: SOURCE,
-      post_id: id,
-      job_title: title,
-      apply_url: 'https://iflytek.zhiye.com/jobs',
-      submit_endpoint: 'https://iflytek.zhiye.com/api/Apply/SubmitResume',
-      submit_method: 'POST',
-      submit_kind: 'beisen-italent',
-      endpoint_verified: true,
-      submit_notes:
-        'Beisen iTalent apply: POST /api/Resume/UploadResume (multipart) + ' +
-        'POST /api/Apply/SubmitResume with { JobAdId, ResumeId, … }. ' +
-        'Endpoint anon-probed → HTTP 500 IIS Server Error template ' +
-        '(route exists, handler threw on missing required headers/body — ' +
-        'not 404 fallthrough). Requires candidate session — Beisen iTalent ' +
-        'uses email+phone+OTP login at /login.html. Capture via extension/, ' +
-        'drop session.json under ~/.jobpro/.',
-      questions,
-    },
-  };
-}

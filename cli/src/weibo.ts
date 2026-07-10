@@ -8,7 +8,7 @@
 // career.sina.com.cn 302-loop was a red herring — that host just redirects
 // into the Moka SPA at:
 //
-//   campus: https://app.mokahr.com/campus-recruitment/sina/43536
+//   campus: https://app.mokahr.com/campus-recruitment/sina/43534 (dark)
 //   social: https://app.mokahr.com/social-recruitment/sina/43535
 //
 // Moka exposes a fully anonymous JSON endpoint for the position list:
@@ -16,8 +16,11 @@
 //   POST https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2
 //
 // Required body fields: `orgId` ("sina"), `siteId` (the trailing site id from
-// the URL — 43536 campus, 43535 social), plus pagination/keyword. The response
-// body is AES-128-CBC encrypted:
+// the URL — 43534 campus, 43535 social), plus pagination/keyword. Every
+// endpoint rejects the dark campus siteId 43534: /website/job answers inner
+// code=102 参数错误, filterFieldsAggregations answers 703002 未找到对应的官网
+// (both re-probed 2026-07-11) — always send 43535. The response body is
+// AES-128-CBC encrypted:
 //
 //   {
 //     "data": <base64 ciphertext>,
@@ -67,7 +70,8 @@ const DEFAULT_HEADERS = {
   Accept: "application/json, text/plain, */*",
   "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
   "Content-Type": "application/json",
-  Referer: CAMPUS_PAGE,
+  // Campus portal 43534 is dark — default every request to the live social page.
+  Referer: SOCIAL_PAGE,
   Origin: API_ROOT,
 };
 
@@ -81,7 +85,10 @@ function decryptResponse(b64Cipher: string, hexKey: string): unknown {
 }
 
 interface MokaEnvelope {
-  data?: string;
+  // Base64 ciphertext on encrypted replies; some endpoints (e.g.
+  // filterFieldsAggregations) answer success as plaintext with the payload
+  // object directly in `data` and no `necromancer` (probed 2026-07-11).
+  data?: string | Record<string, unknown> | unknown[];
   necromancer?: string;
   // unencrypted error envelope
   code?: number;
@@ -101,7 +108,7 @@ interface MokaPayload<T> {
 async function post<T>(
   path: string,
   body: Record<string, unknown>,
-  referer = CAMPUS_PAGE
+  referer = SOCIAL_PAGE
 ): Promise<{ ok: boolean; data?: T; message: string }> {
   let response: Response;
   try {
@@ -126,11 +133,16 @@ async function post<T>(
     return { ok: false, message: `bad JSON: ${err instanceof Error ? err.message : err}` };
   }
 
+  // Plaintext success envelope: code 0 with the payload object inline
+  // (filterFieldsAggregations replies this way — probed 2026-07-11).
+  if (env.code === 0 && env.data !== undefined && typeof env.data !== "string") {
+    return { ok: true, data: env.data as T, message: env.msg || "ok" };
+  }
   // Error envelope (no ciphertext): code != 0.
   if (env.code !== undefined && (!env.data || typeof env.data !== "string")) {
     return { ok: false, message: env.msg || `moka error code=${env.code}` };
   }
-  if (!env.data || !env.necromancer) {
+  if (!env.data || typeof env.data !== "string" || !env.necromancer) {
     return { ok: false, message: "missing ciphertext or key in moka response" };
   }
   let plain: MokaPayload<T>;
@@ -164,11 +176,11 @@ export interface SearchOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  /** "campus" (校招, default) or "social" (社招) */
+  /** "social" (社招, default — campus site 43534 is dark) or "campus" (校招) */
   channel?: "campus" | "social";
   /** CLI-level scope flag; translated to `channel` internally.
    *  scope=social → siteId 43535, scope=campus → siteId 43534.
-   *  scope=all and undefined preserve the historical (campus) default. */
+   *  scope=all and undefined default to social (the only live site). */
   scope?: PositionScope;
 }
 
@@ -281,7 +293,9 @@ export async function fetchAllPositions(
   const maxPages = Math.max(1, opts.maxPages ?? 20);
 
   const bucket: PositionSummary[] = [];
+  const seen = new Set<string>();
   let total: number | undefined;
+  let exhausted = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const r = await searchPositions({
@@ -302,35 +316,86 @@ export async function fetchAllPositions(
       };
     }
     if (total === undefined) total = r.total;
-    if (!r.positions.length) break;
-    bucket.push(...r.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    // Dedupe by post_id and stop when a page adds nothing new — guards
+    // against upstream ignoring offset (seen on other Moka tenants).
+    let added = 0;
+    for (const p of r.positions) {
+      if (!p.post_id || seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      bucket.push(p);
+      added++;
+    }
+    if (added === 0) {
+      exhausted = true;
+      break;
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
+    // Short page ⇒ upstream has no more rows.
+    if (r.positions.length < pageSize) {
+      exhausted = true;
+      break;
+    }
   }
   return {
     ok: true as const,
     source: SOURCE,
     total: total ?? bucket.length,
     fetched: bucket.length,
+    // True only when we hit maxPages with rows still unread upstream.
+    ...(exhausted ? {} : { truncated: true as const }),
     positions: bucket,
   };
 }
 
 // ---------- fetchPositionDetail ----------
 
+/** Flatten Moka's rich-text jobDescription HTML into readable plain text. */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6]|tr|td|th|ul|ol|section)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+// /website/job response shape verified against the live API (2026-07-11):
+// the JD lives in `jobDescription` (HTML, 职位描述+任职资格 in one blob);
+// there are NO description/requirement/responsibility fields. Job function
+// comes back as `zhineng` ({id, name}); projectFolder is absent.
 interface RawJobDetail extends RawJob {
-  description?: string;
-  requirement?: string;
-  responsibility?: string;
+  jobDescription?: string;
+  zhineng?: { id?: number; name?: string };
 }
 
 export async function fetchPositionDetail(postId: string) {
   const id = (postId ?? "").trim();
   if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required", post_id: id };
-  const r = await post<RawJobDetail>("/api/outer/ats-apply/website/job", {
-    orgId: ORG_ID,
-    siteId: CAMPUS_SITE_ID,
-    jobId: id,
-  });
+  // Campus siteId 43534 is dark and makes /website/job answer inner code=102
+  // 参数错误 for every jobId; all live postings hang off social 43535
+  // (verified 2026-07-11 — same body with siteId "43535" returns the full job).
+  const r = await post<RawJobDetail>(
+    "/api/outer/ats-apply/website/job",
+    {
+      orgId: ORG_ID,
+      siteId: String(SOCIAL_SITE_ID),
+      jobId: id,
+      locale: "zh-CN",
+    },
+    SOCIAL_PAGE
+  );
   if (!r.ok || !r.data) {
     return { ok: false as const, source: SOURCE, message: r.message || "no detail returned", post_id: id };
   }
@@ -343,25 +408,27 @@ export async function fetchPositionDetail(postId: string) {
     source: SOURCE,
     post_id: String(raw.id ?? id),
     title: raw.title ?? "",
-    project: raw.projectFolder?.name ?? "",
+    project: raw.projectFolder?.name ?? raw.zhineng?.name ?? "",
     department: raw.department?.name ?? "",
-    description: (raw.description ?? raw.responsibility ?? "").trim(),
-    requirements: (raw.requirement ?? "").trim(),
+    // Upstream ships one combined JD blob (职位描述 + 任职资格) — there is no
+    // separate requirements field to split out.
+    description: htmlToText(raw.jobDescription ?? ""),
     work_cities: cities,
     commitment: raw.commitment ?? "",
     published_at: raw.publishedAt ?? raw.openedAt ?? "",
-    apply_url: `https://app.mokahr.com/campus-recruitment/sina/${CAMPUS_SITE_ID}#/job/${encodeURIComponent(
-      String(raw.id ?? id)
-    )}`,
+    apply_url: `${SOCIAL_PAGE}#/job/${encodeURIComponent(String(raw.id ?? id))}`,
   };
 }
 
 // ---------- fetchDictionaries ----------
 
 export async function fetchDictionaries() {
+  // Campus siteId 43534 answers 703002 未找到对应的官网; the live social site
+  // 43535 replies with a plaintext success envelope (probed 2026-07-11).
   const r = await post<unknown>(
     "/api/outer/ats-apply/website/jobs/v2/filterFieldsAggregations",
-    { orgId: ORG_ID, siteId: CAMPUS_SITE_ID }
+    { orgId: ORG_ID, siteId: String(SOCIAL_SITE_ID), locale: "zh-CN" },
+    SOCIAL_PAGE
   );
   return {
     ok: r.ok,
@@ -433,40 +500,3 @@ export async function matchResume(text: string, opts: { topN?: number; candidate
 }
 
 export { extractResumeSignals, scoreOverlap };
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_weibo } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_weibo } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_weibo } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "career.sina.com.cn", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://career.sina.com.cn";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "career.sina.com.cn", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_weibo({
-      source: "career.sina.com.cn",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://app.mokahr.com/api/outer/ats-apply/website/apply",
-      submitKind: "moka-aes",
-      endpointVerified: true,
-      submitNotes:
-        "Weibo (Sina careers) — POST /api/outer/ats-apply/website/apply on app.mokahr.com (career.sina.com.cn proxies to Moka under tenant `sina`; read endpoints already at app.mokahr.com). Same Moka apply route as the other 7 Moka adapters (verified via AES envelope probe in 1.0.39). Session captured at career.sina.com.cn flows through to Moka. Body shape still needs validation.",
-    }),
-  };
-}

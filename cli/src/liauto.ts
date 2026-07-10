@@ -306,10 +306,17 @@ export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-  const maxPages = Math.max(1, opts.maxPages ?? 10);
+  // Social hire alone is ~2065 posts = 21 pages at page_size=100 (probed
+  // 2026-07-11: total_count=2065, total_pages=21). The old default of 10
+  // silently capped `all --scope social` at 1000 rows, so default high
+  // enough to exhaust every scope with headroom. `--max-pages` flows
+  // through the CLI's generic opts parser for manual override.
+  const maxPages = Math.max(1, opts.maxPages ?? 30);
 
   const bucket: PositionSummary[] = [];
+  const seen = new Set<string>();
   let total: number | undefined;
+  let truncated = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({ ...opts, page, pageSize });
@@ -324,15 +331,38 @@ export async function fetchAllPositions(
     }
     if (total === undefined) total = result.total;
     if (!result.positions.length) break;
-    bucket.push(...result.positions);
+    let added = 0;
+    for (const p of result.positions) {
+      if (p.post_id) {
+        if (seen.has(p.post_id)) continue;
+        seen.add(p.post_id);
+      }
+      bucket.push(p);
+      added++;
+    }
+    // No new rows → upstream is repeating pages; stop rather than loop.
+    if (!added) {
+      if (total !== undefined && bucket.length < total) truncated = true;
+      break;
+    }
     if (total !== undefined && bucket.length >= total) break;
+    if (result.positions.length < pageSize) break; // short page = last page
+    if (page === maxPages && (total === undefined || bucket.length < total)) {
+      truncated = true;
+    }
   }
+
+  // Page drift (list reordering between page fetches) can silently hide
+  // rows even when every request succeeded — never report a short result
+  // as complete.
+  if (total !== undefined && bucket.length < total) truncated = true;
 
   return {
     ok: true as const,
     source: "www.lixiang.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
+    truncated,
     positions: bucket,
   };
 }
@@ -549,42 +579,5 @@ export async function matchResume(
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
       "The only authority on selection is HR.",
-  };
-}
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_liauto } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_liauto } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_liauto } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "www.lixiang.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://www.lixiang.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "www.lixiang.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_liauto({
-      source: "www.lixiang.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://www.lixiang.com/api/career/apply",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "Li Auto — POST /api/career/apply with session cookie. Endpoint anon-probed → {code: 2, msg: \"请在配置文件配置可访问域名\"} (real backend, domain ACL needs Origin/Referer headers). Body shape still needs validation.",
-    }),
   };
 }

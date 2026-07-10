@@ -14,8 +14,15 @@
 //
 //   POST https://talent.baidu.com/httservice/getPostListNew
 //        Content-Type: application/x-www-form-urlencoded  ← CRITICAL: JSON body returns 400
-//        Params: recruitType, keyWord, pageNum, pageSize,
+//        Params: recruitType, keyWord, curPage, pageSize,
 //                workPlace (repeatable), postType (repeatable), projectType
+//        ← CRITICAL (re-probed 2026-07-11): the page param is `curPage`, NOT
+//          `pageNum`. Sending `pageNum` is silently ignored and every request
+//          serves page 1 (curl with pageNum=2 returned the same postIds as
+//          page 1; curPage=2 returned items 6-10). The RESPONSE echoes the
+//          served page as `pageNum` — asymmetric naming, don't copy it back.
+//        ← pageSize hard cap 20 (re-probed 2026-07-11): pageSize=20 → ok,
+//          pageSize=21/30/50 → status:"fail","Illegal argument : pageSize".
 //        Response: { status:"ok", data:{ total:"<int>", pages:<int>, pageNum:<int>,
 //                    pageSize:<int>, list:[...], hasNextPage:<bool> } }
 //        Note: total is a STRING in the response ("100", "416", …)
@@ -59,12 +66,19 @@
 //   For INTERN:    "" = 9 (social/misc), "-1" = 日常实习项目 (~416), "9" = 暑期实习项目 (~362)
 //
 // ============================================================
-// Pagination gotcha:
-//   - total is returned as a STRING ("100"), not a number.
-//   - GRADUATE without filters: server caps total at 100 (UI shows 100 positions).
+// Pagination gotchas (re-probed 2026-07-11 with curl):
+//   - The REQUEST page param is `curPage`; `pageNum` in the request is an
+//     unknown param the server silently drops (→ always page 1). The response
+//     echoes the served page as `pageNum`. Verified: curPage=2&pageSize=5 with
+//     keyWord=工程师 returned postIds 6b3882fe/983bf64b/… (items 6-10), while
+//     pageNum=2 returned the identical page-1 postIds (df1e79e6/…).
+//   - pageSize is hard-capped at 20: 21/30/50 all fail with
+//     status:"fail" message:"Illegal argument : pageSize". We clamp to 20.
+//   - total is returned as a STRING ("158"), not a number.
+//   - GRADUATE without filters: total 158 as of 2026-07-11 (was ~100 in 2026-05).
 //   - INTERN total depends on projectType: must set projectType to get realistic counts.
-//   - Server does NOT support offset-based pagination above the total cap;
-//     requesting pageNum > ceil(total/pageSize) silently resets to page 1.
+//   - Requesting curPage > ceil(total/pageSize) returns an EMPTY list
+//     (hasNextPage:false), it does NOT reset to page 1 — safe stop signal.
 //
 // ============================================================
 // ---- PositionSummary field mapping (Baidu → canonical) ----
@@ -285,6 +299,9 @@ function summarizePosition(item: RawPosition, recruitType: string): PositionSumm
 export interface SearchOptions {
   keyword?: string;
   page?: number;
+  /** Upstream hard-caps pageSize at 20 (probed 2026-07-11: >20 fails with
+   *  "Illegal argument : pageSize"). Larger values are clamped to 20 and the
+   *  clamped value is echoed in the result. */
   pageSize?: number;
   /**
    * CLI scope axis (1.1.0+). Translates to `recruitType` per
@@ -336,11 +353,21 @@ export type SearchResult =
       positions: PositionSummary[];
     };
 
+/** Upstream hard cap on pageSize (probed 2026-07-11: 21+ → status:"fail"
+ *  "Illegal argument : pageSize"). Values above it are clamped to 20 and the
+ *  CLAMPED value is echoed back in `query.pageSize` / `page_size` so output
+ *  always reflects what was actually sent upstream. */
+const MAX_PAGE_SIZE = 20;
+
+function clampPageSize(requested: number | undefined, fallback: number): number {
+  return Math.max(1, Math.min(MAX_PAGE_SIZE, requested ?? fallback));
+}
+
 export async function searchPositions(opts: SearchOptions = {}): Promise<SearchResult> {
   // `scope:"all"` fans out — delegate to a fan-out helper.
   if (opts.scope === "all") return searchPositionsAcrossAllScopes(opts);
 
-  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 10));
+  const pageSize = clampPageSize(opts.pageSize, 10);
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
   const scopeRT = recruitTypeForScope(opts.scope);
@@ -350,7 +377,10 @@ export async function searchPositions(opts: SearchOptions = {}): Promise<SearchR
   const params: Record<string, string | string[]> = {
     recruitType,
     keyWord: keyword,
-    pageNum: String(page),
+    // NOT `pageNum` — the request param is `curPage`; `pageNum` is silently
+    // ignored by upstream and every page serves page-1 data (probed 2026-07-11,
+    // see "Pagination gotchas" above).
+    curPage: String(page),
     pageSize: String(pageSize),
   };
 
@@ -405,7 +435,7 @@ export async function searchPositions(opts: SearchOptions = {}): Promise<SearchR
 // the results, de-duplicated by post_id. Each channel's total is preserved
 // in the merged `query.totals` string for callers that care.
 async function searchPositionsAcrossAllScopes(opts: SearchOptions): Promise<SearchResult> {
-  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 10));
+  const pageSize = clampPageSize(opts.pageSize, 10);
   const page = Math.max(1, opts.page ?? 1);
   const channels: Array<"GRADUATE" | "INTERN" | "SOCIAL"> = ["GRADUATE", "INTERN", "SOCIAL"];
   const merged: PositionSummary[] = [];
@@ -458,6 +488,9 @@ export type FetchAllResult =
       source: string;
       total: number;
       fetched: number;
+      /** Present (true) only when the sweep stopped at maxPages before
+       *  exhausting `total` — the caller got a prefix, not the full board. */
+      truncated?: true;
       positions: PositionSummary[];
     };
 
@@ -468,6 +501,7 @@ async function fetchAllPositionsAcrossAllScopes(
   const merged: PositionSummary[] = [];
   const seen = new Set<string>();
   let totalSum = 0;
+  let anyTruncated = false;
   for (const rt of channels) {
     const r = await fetchAllPositions({ ...opts, scope: undefined, recruitType: rt });
     if (!r.ok) {
@@ -480,6 +514,7 @@ async function fetchAllPositionsAcrossAllScopes(
       };
     }
     totalSum += r.total;
+    if (r.truncated) anyTruncated = true;
     for (const p of r.positions) {
       if (seen.has(p.post_id)) continue;
       seen.add(p.post_id);
@@ -491,6 +526,7 @@ async function fetchAllPositionsAcrossAllScopes(
     source: "talent.baidu.com",
     total: totalSum,
     fetched: merged.length,
+    ...(anyTruncated ? { truncated: true as const } : {}),
     positions: merged,
   };
 }
@@ -501,11 +537,16 @@ export async function fetchAllPositions(
   // `scope:"all"` fans out across GRADUATE/INTERN/SOCIAL.
   if (opts.scope === "all") return fetchAllPositionsAcrossAllScopes(opts);
 
-  const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-  const maxPages = Math.max(1, opts.maxPages ?? 5);
+  // pageSize is upstream-capped at 20, so exhausting the largest channel
+  // (SOCIAL, ~1641 as of 2026-07) needs ~83 pages — default maxPages 100
+  // covers every channel while still bounding a runaway sweep.
+  const pageSize = clampPageSize(opts.pageSize, MAX_PAGE_SIZE);
+  const maxPages = Math.max(1, opts.maxPages ?? 100);
 
   const bucket: PositionSummary[] = [];
+  const seen = new Set<string>();
   let total: number | undefined;
+  let exhausted = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({ ...opts, page, pageSize });
@@ -519,16 +560,39 @@ export async function fetchAllPositions(
       };
     }
     if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    // Dedupe by post_id and stop as soon as a page adds nothing new — a
+    // server that ever ignored our page param can't loop us over duplicates
+    // (pre-1.1.15 `pageNum` did exactly that: each page re-served page 1).
+    let added = 0;
+    for (const p of result.positions) {
+      if (seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      bucket.push(p);
+      added += 1;
+    }
+    if (result.positions.length === 0 || added === 0) {
+      exhausted = true; // past the last page / nothing new — board is done
+      break;
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
+    // Short page = last page (probed 2026-07-11: pages past the end return
+    // an empty list, so a partial page can only be the final one).
+    if (result.positions.length < pageSize) {
+      exhausted = true;
+      break;
+    }
   }
 
+  const truncated = !exhausted && total !== undefined && bucket.length < total;
   return {
     ok: true,
     source: "talent.baidu.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
+    ...(truncated ? { truncated: true as const } : {}),
     positions: bucket,
   };
 }
@@ -756,42 +820,5 @@ export async function matchResume(
     note:
       "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
       "The only authority on selection is HR.",
-  };
-}
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-
-import type { ApplyFormSchema as _ApplyFormSchema_baidu } from "./apply.js";
-import { buildBespokeApplySchema as _buildBespokeApplySchema_baidu } from "./apply.js";
-
-export async function fetchApplicationSchema(postId: string): Promise<
-  { ok: true; schema: _ApplyFormSchema_baidu } | { ok: false; source: string; message: string }
-> {
-  const id = (postId ?? "").trim();
-  if (!id) return { ok: false, source: "talent.baidu.com", message: "post_id is required" };
-  let title = "";
-  let applyUrl = "https://talent.baidu.com";
-  try {
-    const detail = (await fetchPositionDetail(id)) as { ok?: boolean; title?: string; apply_url?: string; message?: string };
-    if (detail?.ok === false) {
-      return { ok: false, source: "talent.baidu.com", message: detail.message ?? "post not found" };
-    }
-    title = detail?.title ?? "";
-    if (detail?.apply_url) applyUrl = detail.apply_url;
-  } catch {}
-  return {
-    ok: true,
-    schema: _buildBespokeApplySchema_baidu({
-      source: "talent.baidu.com",
-      postId: id,
-      jobTitle: title,
-      applyUrl,
-      submitEndpoint: "https://talent.baidu.com/applyJob.json",
-      submitKind: "multipart-session",
-      endpointVerified: true,
-      submitNotes:
-        "Baidu — POST /applyJob.json (host root) with session cookie. Endpoint anon-probed → HTTP 200 + {status:\"need-login\",message:\"need login!\"} (real auth-middleware gateway; the original /external/baidu/ prefix returns 404 HTML but the gateway lives at host root). Body shape still needs validation.",
-    }),
   };
 }
