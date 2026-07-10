@@ -44,7 +44,6 @@ export const {
   findNoticesByQuestion,
   matchResume,
   checkResume,
-  fetchApplicationSchema,
 } = createAdapter({
   host: "vrfi1sk8a0.jobs.feishu.cn",
   channel: "379481",

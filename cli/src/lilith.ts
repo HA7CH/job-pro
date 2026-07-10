@@ -13,19 +13,214 @@
 // session-bound and short-lived.
 //
 // Reverse-engineering verifycenter is non-trivial. We work around it by
-// using `puppeteer-core` to drive the user's real Chrome (see cli/src/cdp.ts):
-// navigate to the careers page, wait for the SPA's own `search/job/posts`
-// XHR, and read the JSON straight off the network response. Same data
-// shape as `cli/src/feishu.ts`, just sourced through a real browser.
+// using `puppeteer-core` to drive the user's real Chrome (see the inlined
+// headless-browser helper below): navigate to the careers page, wait for
+// the SPA's own `search/job/posts` XHR, and read the JSON straight off the
+// network response. Same data shape as `cli/src/feishu.ts`, just sourced
+// through a real browser.
 //
 // Probed 2026-05-16: portal_type=6, channel id 7055353811552127239, default
 // limit=10. The career page filters by `location_code_list` query string;
 // we pass through search options the same way.
 
+import { existsSync } from "node:fs";
 import { extractResumeSignals, scoreOverlap, checkResume } from "./tencent.js";
-import { withPage } from "./cdp.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
+
+// ---------- minimal headless-browser helper ----------
+//
+// Lilith is the only adapter whose READ side needs a real browser (the
+// `_signature` anti-bot token can't be minted from raw HTTP). This helper
+// was inlined from the former shared cdp.ts module when the auto-apply
+// surface was removed in 1.2.0 — only the pieces the read path uses
+// survive: Chrome discovery, a process-singleton puppeteer-core launch,
+// and `withPage`.
+//
+// Why puppeteer-core (not puppeteer): we attach to the user's existing
+// Chrome installation; no 100MB Chromium download.
+
+interface BrowserResponse {
+  url: () => string;
+  status: () => number;
+  json: () => Promise<unknown>;
+}
+interface BrowserPage {
+  setUserAgent: (ua: string) => Promise<void>;
+  goto: (url: string, opts?: { waitUntil?: string; timeout?: number }) => Promise<unknown>;
+  waitForResponse: (
+    predicate: (r: BrowserResponse) => boolean,
+    opts?: { timeout?: number }
+  ) => Promise<BrowserResponse>;
+  close: () => Promise<void>;
+}
+interface HeadlessBrowser {
+  newPage: () => Promise<BrowserPage>;
+  close: () => Promise<void>;
+}
+type BrowserError =
+  | { reason: "puppeteer-not-installed"; message: string }
+  | { reason: "chrome-not-found"; message: string }
+  | { reason: "launch-failed"; message: string };
+
+const CHROME_PATHS = [
+  // macOS
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  // Linux
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  // Windows (when running under WSL / Git Bash)
+  "/c/Program Files/Google/Chrome/Application/chrome.exe",
+];
+
+const USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+
+let _browser: HeadlessBrowser | null = null;
+let _browserError: BrowserError | null = null;
+let _launching: Promise<HeadlessBrowser | BrowserError> | null = null;
+
+function findChrome(): string | null {
+  if (process.env.JOB_PRO_CHROME && existsSync(process.env.JOB_PRO_CHROME)) {
+    return process.env.JOB_PRO_CHROME;
+  }
+  for (const p of CHROME_PATHS) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+async function launchOnce(): Promise<HeadlessBrowser | BrowserError> {
+  let launch: (opts: unknown) => Promise<HeadlessBrowser>;
+  try {
+    // Dynamic import; if puppeteer-core was tree-shaken or uninstalled,
+    // this rejects with ERR_MODULE_NOT_FOUND.
+    const mod = (await import("puppeteer-core")) as unknown as {
+      default: { launch: (opts: unknown) => Promise<HeadlessBrowser> };
+    };
+    launch = mod.default.launch.bind(mod.default);
+  } catch (err) {
+    return {
+      reason: "puppeteer-not-installed",
+      message:
+        "`puppeteer-core` is not installed. Install it locally with " +
+        "`npm i puppeteer-core` (or `pnpm add puppeteer-core`). " +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const chrome = findChrome();
+  if (!chrome) {
+    return {
+      reason: "chrome-not-found",
+      message:
+        "No Chrome/Chromium executable found. Tried: " +
+        CHROME_PATHS.join(", ") +
+        ". Set $JOB_PRO_CHROME=/path/to/chrome to override.",
+    };
+  }
+  // Optional egress proxy — useful for geo-fenced upstreams. Set
+  // `$JOB_PRO_HTTPS_PROXY=http://user:pass@host:port` or `socks5://host:port`.
+  const proxy = process.env.JOB_PRO_HTTPS_PROXY?.trim();
+  const proxyArg = proxy ? [`--proxy-server=${proxy}`] : [];
+  try {
+    return await launch({
+      executablePath: chrome,
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        ...proxyArg,
+      ],
+    });
+  } catch (err) {
+    return {
+      reason: "launch-failed",
+      message: `Chrome failed to launch: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+async function getBrowser(): Promise<
+  { ok: true; browser: HeadlessBrowser } | { ok: false; error: BrowserError }
+> {
+  if (_browser) return { ok: true, browser: _browser };
+  if (_browserError) return { ok: false, error: _browserError };
+  if (!_launching) {
+    _launching = launchOnce();
+  }
+  const result = await _launching;
+  _launching = null;
+  if ("reason" in result) {
+    _browserError = result;
+    return { ok: false, error: result };
+  }
+  _browser = result;
+  return { ok: true, browser: result };
+}
+
+// On Node exit, best-effort close the browser to avoid zombie processes.
+let _exitHookInstalled = false;
+function ensureExitHook(): void {
+  if (_exitHookInstalled) return;
+  _exitHookInstalled = true;
+  const cleanup = () => {
+    if (_browser) {
+      try {
+        // best-effort kill; puppeteer launches Chrome as a child process
+        // tracked by the Browser object, so close() handles SIGTERM.
+        void _browser.close().catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+  process.on("exit", cleanup);
+  process.on("SIGINT", () => {
+    cleanup();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    cleanup();
+    process.exit(143);
+  });
+}
+
+/** Open a page, run fn against it, and close the page. The singleton browser stays open. */
+async function withPage<T>(
+  fn: (page: BrowserPage) => Promise<T>
+): Promise<{ ok: true; value: T } | { ok: false; error: BrowserError }> {
+  ensureExitHook();
+  const b = await getBrowser();
+  if (!b.ok) return b;
+  let page: BrowserPage | null = null;
+  try {
+    page = await b.browser.newPage();
+    await page.setUserAgent(USER_AGENT);
+    const value = await fn(page);
+    return { ok: true, value };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        reason: "launch-failed",
+        message: `page operation failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
 
 /**
  * Lilith's feishu board (`lilithgames.jobs.feishu.cn`) is a single-portal
@@ -401,16 +596,3 @@ export async function matchResume(
 }
 
 export { extractResumeSignals, scoreOverlap };
-
-
-// ---------- Phase 2: fetchApplicationSchema ----------
-import { makeFeishuApplyFn } from "./feishu.js";
-
-export const fetchApplicationSchema = makeFeishuApplyFn({
-  host: "lilithgames.jobs.feishu.cn",
-  source: "lilithgames.jobs.feishu.cn",
-  channel: "career",
-  applyUrlPrefix: "https://lilithgames.jobs.feishu.cn/career/position",
-  fetchTitle: (id) => fetchPositionDetail(id),
-  submitKind: "cdp-real-browser",
-});

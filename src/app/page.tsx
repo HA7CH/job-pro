@@ -10,7 +10,6 @@ type Company = {
   href: string;
   campus: Status;
   social: Status;
-  autoApply: Status;
   /**
    * Recruit channels this adapter can query in 1.1.0+ — `social` /
    * `campus` / `intern` / `all`. Optional: when omitted, the landing
@@ -28,371 +27,318 @@ const COMPANIES: Company[] = [
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/tencent.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "ByteDance",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/bytedance.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Alibaba",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/alibaba.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "Meituan",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/meituan.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Xiaohongshu",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xiaohongshu.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Google",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Google+adapter",
     campus: "building",
     social: "building",
-    autoApply: "building",
   },
   {
     name: "JD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/jd.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "Kuaishou",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/kuaishou.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "Xiaomi",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xiaomi.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Baidu",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/baidu.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "NetEase",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/netease.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Didi",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/didi.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Bilibili",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/bilibili.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "PDD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/pdd.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "NIO",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/nio.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "MiniMax",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/minimax.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "Huawei",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/huawei.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "Weibo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/weibo.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "miHoYo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/mihoyo.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Ping An",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/pingan.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "SenseTime",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/sensetime.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Trip.com",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/trip.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Unitree",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/unitree.ts",
     campus: "live",
     social: "building",
-    autoApply: "building",
   },
   {
     name: "BYD",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/byd.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Ant Group",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/antgroup.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Li Auto",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/liauto.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Moonshot",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/moonshot.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Zhipu",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/zhipu.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "iQIYI",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/iqiyi.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Hikvision",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/hikvision.ts",
     campus: "building",
     social: "live",
-    autoApply: "building",
   },
   {
     name: "Megvii",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/megvii.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Lilith Games",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/lilith.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Agibot",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/agibot.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "DeepSeek",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/deepseek.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "01.AI",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/zerooneai.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Galaxy Universal",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/galaxyuniversal.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "StepFun",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/stepfun.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "CICC",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cicc.ts",
     campus: "building",
     social: "live",
-    autoApply: "building",
   },
   {
     name: "Baichuan",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/baichuan.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "XPeng",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/xpeng.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "WeRide",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/weride.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "HoYoverse",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/hoyoverse.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "iFlytek",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/iflytek.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "OPPO",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/oppo.ts",
     campus: "live",
     social: "building",
-    autoApply: "live",
   },
   {
     name: "vivo",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/vivo.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "SF Express",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/sf.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Cainiao",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cainiao.ts",
     campus: "building",
     social: "live",
-    autoApply: "building",
   },
   {
     name: "Geely",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/geely.ts",
     campus: "building",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "WeBank",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/webank.ts",
     campus: "building",
     social: "live",
-    autoApply: "building",
   },
   {
     name: "Horizon Robotics",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/horizonrobotics.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Cambricon",
     href: "https://github.com/HA7CH/job-pro/blob/main/cli/src/cambricon.ts",
     campus: "live",
     social: "live",
-    autoApply: "live",
   },
   {
     name: "Meta",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Meta+adapter",
     campus: "building",
     social: "building",
-    autoApply: "building",
   },
   {
     name: "Apple",
     href: "https://github.com/HA7CH/job-pro/issues/new?title=Add+Apple+adapter",
     campus: "building",
     social: "building",
-    autoApply: "building",
   },
 ];
 
@@ -475,7 +421,7 @@ export default function Home() {
   return (
     <main className="page">
       <h1 className="font-serif text-4xl md:text-5xl tracking-tight leading-[1.1]">
-        Apply jobs w/ <span className="whitespace-nowrap">your Claude Code</span>
+        Find jobs w/ <span className="whitespace-nowrap">your Claude Code</span>
       </h1>
       <p className="lede">
         <span className="lede-prefix">$</span> npx @ha7ch/job-pro help
@@ -524,7 +470,6 @@ export default function Home() {
           <span className="col-label">Company</span>
           <span className="col-label">Campus Info</span>
           <span className="col-label">Social Info</span>
-          <span className="col-label">Auto-apply</span>
         </div>
         {COMPANIES.map((c) => (
           <a
@@ -540,9 +485,6 @@ export default function Home() {
             </span>
             <span className={statusClass(c.social)} aria-label={`Social: ${c.social}`}>
               <StatusIcon kind={c.social} />
-            </span>
-            <span className={statusClass(c.autoApply)} aria-label={`Auto-apply: ${c.autoApply}`}>
-              <StatusIcon kind={c.autoApply} />
             </span>
           </a>
         ))}

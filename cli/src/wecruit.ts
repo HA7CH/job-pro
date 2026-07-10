@@ -35,7 +35,6 @@
 // `/{SU…}/pb/<channel>.html#/postDetail?postId=<postId>`.
 
 import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
-import type { ApplyFormSchema, ApplyQuestion } from "./apply.js";
 import type { PositionScope } from "./adapter.js";
 export { checkResume };
 
@@ -551,60 +550,6 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     };
   }
 
-  // ---------- Phase 2: fetchApplicationSchema ----------
-  //
-  // Beisen Wecruit apply endpoints discovered in
-  // hr.sensetime.com/pb/js/vendor.js (probed 2026-05-16, 3.8 MB bundle):
-  //
-  //   POST /wecruit/resume/upload/file/save/<channelId>  — upload resume PDF/DOCX
-  //   POST /wecruit/resume/info/add/<channelId>          — create/update profile
-  //   POST /wecruit/resume/info/get/<channelId>          — read existing profile
-  //   POST /wecruit/delivery/resume/<channelId>          — final submission
-  //
-  // The candidate session is established by Wecruit's WeChat-OAuth or
-  // phone-OTP login at /pb/<channel>/login.html. Cookies for that session
-  // are captured by the browser extension and dropped under
-  // ~/.jobpro/<adapter>.session.json.
-  async function fetchApplicationSchema(postId: string): Promise<
-    { ok: true; schema: ApplyFormSchema } | { ok: false; source: string; message: string }
-  > {
-    const id = (postId ?? "").trim();
-    if (!id) return { ok: false, source: SOURCE, message: "post_id is required" };
-    const ch = cfg.channels[0];
-    if (!ch) return { ok: false, source: SOURCE, message: "no channels configured" };
-    const detail = await fetchPositionDetail(id);
-    const detailAny = detail as { ok?: boolean; title?: string; message?: string };
-    const questions: ApplyQuestion[] = [
-      { label: "Name",   required: true, fields: [{ name: "name",   type: "input_text" }] },
-      { label: "Email",  required: true, fields: [{ name: "email",  type: "input_text" }] },
-      { label: "Phone",  required: true, fields: [{ name: "phone",  type: "input_text" }] },
-      { label: "Resume", required: true, fields: [{ name: "resume", type: "input_file" }] },
-    ];
-    return {
-      ok: true,
-      schema: {
-        source: SOURCE,
-        post_id: id,
-        job_title: detailAny.title ?? "",
-        apply_url: `${SITE_ROOT}/${encodeURIComponent(ch.channelId)}/pb/${ch.pagePath}.html`,
-        submit_endpoint: `${SITE_ROOT}/wecruit/delivery/resume/${encodeURIComponent(ch.channelId)}`,
-        submit_method: "POST",
-        submit_kind: "beisen-wecruit",
-        endpoint_verified: true,
-        submit_notes:
-          "Beisen Wecruit apply flow: POST /wecruit/resume/upload/file/save/<SU> → " +
-          "POST /wecruit/resume/info/add/<SU> → POST /wecruit/delivery/resume/<SU> with " +
-          "{ post_id, resume_attachment_id, channel_id }. Endpoint verified by reading " +
-          "/pb/js/vendor.js (Beisen Wecruit's vendor bundle) which lists /delivery/resume/, " +
-          "/resume/info/add/, /resume/upload/file/save/ etc as quoted paths. Anon-probe with " +
-          "X-Requested-With:XMLHttpRequest header → HTTP 200 + {type:\"error\",state:\"809\"," +
-          "msg:\"您尚未登录...\"} = real auth gate (without that header, Nginx returns the SPA HTML). " +
-          "Requires candidate session (WeChat OAuth or phone OTP via /pb/<channel>/login.html).",
-        questions,
-      },
-    };
-  }
-
   return {
     supportedScopes,
     searchPositions,
@@ -616,6 +561,5 @@ export function createAdapter(cfg: WecruitAdapterConfig) {
     findNoticesByQuestion,
     matchResume,
     checkResume,
-    fetchApplicationSchema,
   };
 }
