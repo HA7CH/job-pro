@@ -90,10 +90,12 @@ const VERSION = ((): string => {
 type CompanyFamily =
   | "Bespoke"
   | "Feishu"
+  | "Feishu Hire"
   | "Beisen Wecruit"
   | "Beisen iTalent"
   | "Moka"
   | "Greenhouse / Lever (intl arm)"
+  | "SmartRecruiters"
   | "Liepin (third-party)";
 
 interface CompanyDirEntry {
@@ -117,7 +119,7 @@ const COMPANIES: CompanyDirEntry[] = [
   { key: "bilibili",        family: "Bespoke",                       source: "jobs.bilibili.com",           label: "Bilibili / 哔哩哔哩" },
   { key: "pdd",             family: "Bespoke",                       source: "careers.pinduoduo.com",       label: "PDD / 拼多多" },
   { key: "huawei",          family: "Bespoke",                       source: "career.huawei.com",           label: "Huawei / 华为" },
-  { key: "weibo",           family: "Bespoke",                       source: "career.sina.com.cn",          label: "Weibo / 微博" },
+  { key: "weibo",           family: "Bespoke",                       source: "app.mokahr.com/sina",         label: "Weibo / 微博" },
   { key: "mihoyo",          family: "Bespoke",                       source: "ats.openout.mihoyo.com",      label: "miHoYo / 米哈游" },
   { key: "pingan",          family: "Bespoke",                       source: "campus.pingan.com",           label: "Ping An / 平安" },
   { key: "trip",            family: "Bespoke",                       source: "careers.ctrip.com",           label: "Trip.com / 携程" },
@@ -139,7 +141,7 @@ const COMPANIES: CompanyDirEntry[] = [
   { key: "baichuan",        family: "Feishu",                        source: "cq6qe6bvfr6.jobs.feishu.cn",  label: "Baichuan / 百川智能" },
   { key: "sensetime",       family: "Feishu Hire",                   source: "hr.sensetime.com",            label: "SenseTime / 商汤" },
   { key: "horizonrobotics", family: "Beisen Wecruit",                source: "wecruit.hotjob.cn",           label: "Horizon Robotics / 地平线" },
-  { key: "vivo",            family: "Beisen iTalent",                source: "vivo.zhiye.com",              label: "vivo" },
+  { key: "vivo",            family: "Bespoke",                       source: "hr.vivo.com + hr-campus.vivo.com", label: "vivo" },
   { key: "iflytek",         family: "Beisen iTalent",                source: "iflytek.zhiye.com",           label: "iFlytek / 科大讯飞" },
   { key: "megvii",          family: "Moka",                          source: "app.mokahr.com/megviihr",     label: "Megvii / 旷视" },
   { key: "deepseek",        family: "Moka",                          source: "app.mokahr.com/high-flyer",   label: "DeepSeek / 深度求索" },
@@ -147,9 +149,9 @@ const COMPANIES: CompanyDirEntry[] = [
   { key: "stepfun",         family: "Moka",                          source: "app.mokahr.com/step",         label: "StepFun / 阶跃星辰" },
   { key: "cambricon",       family: "Moka",                          source: "app.mokahr.com/cambricon",    label: "Cambricon / 寒武纪" },
   { key: "geely",           family: "Moka",                          source: "app.mokahr.com/geely",        label: "Geely / 吉利" },
-  { key: "xpeng",           family: "Greenhouse / Lever (intl arm)", source: "boards.greenhouse.io/xpengmotors", label: "XPeng / 小鹏汽车 — US AI" },
-  { key: "weride",          family: "Greenhouse / Lever (intl arm)", source: "jobs.lever.co/weride",        label: "WeRide / 文远知行 — US / 广州" },
-  { key: "hoyoverse",       family: "Greenhouse / Lever (intl arm)", source: "boards.greenhouse.io/hoyoverse", label: "HoYoverse / 米哈游国际" },
+  { key: "xpeng",           family: "Feishu",                        source: "xiaopeng.jobs.feishu.cn",     label: "XPeng / 小鹏汽车" },
+  { key: "weride",          family: "Moka",                          source: "app.mokahr.com/jingchi + jobs.lever.co/weride", label: "WeRide / 文远知行" },
+  { key: "hoyoverse",       family: "SmartRecruiters",               source: "api.smartrecruiters.com/HoYoverse", label: "HoYoverse / 米哈游国际" },
   { key: "hikvision",       family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "Hikvision / 海康威视" },
   { key: "cicc",            family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "CICC / 中金" },
   { key: "cainiao",         family: "Liepin (third-party)",          source: "api-c.liepin.com",            label: "Cainiao / 菜鸟" },
@@ -444,6 +446,14 @@ async function runCompany(
   const [verb, ...rest] = rawArgs;
   if (!verb) die(`expected a verb. Try \`job-pro help\`.`);
 
+  // `--help` anywhere in a company command prints help instead of running the
+  // verb — previously unknown flags were silently swallowed by popAllOpts, so
+  // `job-pro <company> all --help` kicked off a full network sweep.
+  if (verb === "--help" || verb === "-h" || rest.includes("--help") || rest.includes("-h")) {
+    console.log(HELP);
+    return;
+  }
+
   const { args, compact } = popCompactFlag(rest);
 
   // 1.1.0 — validate `--scope` against the adapter's declared supportedScopes
@@ -487,7 +497,11 @@ async function runCompany(
   }
 
   if (verb === "detail") {
-    const postId = args[0];
+    // Strip flags (e.g. a stray --scope) so the first POSITIONAL token is the
+    // post_id — previously `detail --scope social <id>` sent "--scope"
+    // upstream as the id.
+    const { args: positional } = popAllOpts(args);
+    const postId = positional[0];
     if (!postId) die(`usage: job-pro ${company} detail <post_id>`);
     return emit(await adapter.fetchPositionDetail(postId), compact);
   }
@@ -700,10 +714,12 @@ function printCompanyList(compact: boolean): void {
   const order: CompanyFamily[] = [
     "Bespoke",
     "Feishu",
+    "Feishu Hire",
     "Beisen Wecruit",
     "Beisen iTalent",
     "Moka",
     "Greenhouse / Lever (intl arm)",
+    "SmartRecruiters",
     "Liepin (third-party)",
   ];
   const keyWidth = Math.max(...COMPANIES.map((c) => c.key.length));
@@ -807,7 +823,7 @@ async function main() {
     if (compact) {
       console.log(JSON.stringify({ ok: fails === 0, checks }));
     } else {
-      console.log(`\njob-pro selftest — using xpeng (Greenhouse board)\n`);
+      console.log(`\njob-pro selftest — using xpeng (Feishu board)\n`);
       for (const c of checks) {
         const icon = c.ok ? "✓" : "✗";
         const detail = c.detail ? `  ${c.detail}` : "";

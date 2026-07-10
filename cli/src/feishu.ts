@@ -406,38 +406,101 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
 
   // ---------- fetchAllPositions ----------
 
-  async function fetchAllPositions(
-    opts: SearchOptions & { maxPages?: number } = {}
-  ) {
+  /** Enumerate one scope's channel to exhaustion with post_id dedupe. */
+  async function fetchAllOneScope(
+    scope: PositionScope | undefined,
+    opts: SearchOptions & { maxPages?: number },
+    seen: Set<string>,
+    bucket: PositionSummary[]
+  ): Promise<{ ok: boolean; message?: string; total: number; truncated: boolean }> {
     const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-    const maxPages = Math.max(1, opts.maxPages ?? 5);
-
-    const bucket: PositionSummary[] = [];
+    const maxPages = Math.max(1, opts.maxPages ?? 50);
     let total: number | undefined;
 
     for (let page = 1; page <= maxPages; page++) {
-      const result = await searchPositions({ ...opts, page, pageSize });
-      if (!result.ok) {
-        return {
-          ok: false,
-          message: result.message,
-          source,
-          fetched: bucket.length,
-          positions: bucket,
-        };
-      }
+      const result = await searchPositions({ ...opts, scope, page, pageSize });
+      if (!result.ok) return { ok: false, message: result.message, total: total ?? 0, truncated: true };
       if (total === undefined) total = result.total;
-      if (!result.positions.length) break;
-      bucket.push(...result.positions);
-      if (total !== undefined && bucket.length >= total) break;
+      if (!result.positions.length) return { ok: true, total: total ?? 0, truncated: false };
+      let added = 0;
+      for (const p of result.positions) {
+        if (seen.has(p.post_id)) continue;
+        seen.add(p.post_id);
+        bucket.push(p);
+        added += 1;
+      }
+      // No fresh ids = upstream replaying pages; stop instead of looping.
+      if (added === 0) return { ok: true, total: total ?? 0, truncated: false };
+      if (total !== undefined && bucket.length >= total) return { ok: true, total, truncated: false };
+      if (result.positions.length < pageSize) return { ok: true, total: total ?? 0, truncated: false };
+    }
+    return { ok: true, total: total ?? 0, truncated: true };
+  }
+
+  async function fetchAllPositions(
+    opts: SearchOptions & { maxPages?: number } = {}
+  ) {
+    const seen = new Set<string>();
+    const bucket: PositionSummary[] = [];
+
+    // scope === "all" sweeps every distinct configured channel (deduped by
+    // post_id) — a Feishu post only exists on its own portal channel, so a
+    // single-channel sweep silently misses the other portals (audit: minimax
+    // `all` returned 77 campus posts while 190 social posts existed).
+    // Other scopes (or none) keep the historical single-channel behaviour.
+    const sweeps: Array<PositionScope | undefined> =
+      opts.scope === "all"
+        ? (() => {
+            const chs = new Set<string>();
+            const order: Array<PositionScope | undefined> = [];
+            const pairs: Array<[PositionScope | undefined, string | undefined]> = [
+              [undefined, cfg.channel],
+              ["social", cfg.socialChannel],
+              ["campus", cfg.campusChannel],
+              ["intern", cfg.internChannel],
+            ];
+            for (const [sc, ch] of pairs) {
+              if (ch === undefined || chs.has(ch)) continue;
+              chs.add(ch);
+              order.push(sc);
+            }
+            return order;
+          })()
+        : [opts.scope];
+
+    let totalSum = 0;
+    let truncated = false;
+    const errors: string[] = [];
+    for (const sweep of sweeps) {
+      const r = await fetchAllOneScope(sweep, opts, seen, bucket);
+      if (!r.ok) {
+        errors.push(r.message ?? "unknown error");
+        truncated = true;
+        continue;
+      }
+      totalSum += r.total;
+      if (r.truncated) truncated = true;
+    }
+    if (bucket.length === 0 && errors.length === sweeps.length) {
+      return {
+        ok: false,
+        message: errors.join("; "),
+        source,
+        fetched: 0,
+        positions: bucket,
+      };
     }
 
     return {
       ok: true,
       source,
-      total: total ?? bucket.length,
+      // Dedupe can make unique count < per-channel total sum; report the sum
+      // as the upstream-declared total and fetched as unique rows harvested.
+      total: totalSum || bucket.length,
       fetched: bucket.length,
       positions: bucket,
+      ...(truncated ? { truncated: true as const } : {}),
+      ...(errors.length ? { errors } : {}),
     };
   }
 

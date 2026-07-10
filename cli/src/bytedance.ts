@@ -589,10 +589,19 @@ export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
-  const maxPages = Math.max(1, opts.maxPages ?? 5); // cap at 5 pages (500 posts)
+  // 1.2.x: default raised 5 → 100 pages so `all` can actually exhaust every
+  // channel (campus ~2057, intern ~5767, social ~10000 posts at pageSize 100;
+  // deep offsets verified live — offset 9900 on the society channel still
+  // returns code:0 with 100 rows, probed 2026-07-11). The old 5-page cap
+  // silently dropped 26/276 campus posts at --page-size 50. If we still stop
+  // before reaching `total` (user-supplied --max-pages), the result now
+  // carries truncated:true instead of failing silently.
+  const maxPages = Math.max(1, opts.maxPages ?? 100);
 
+  const seen = new Set<string>();
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
+  let exhausted = false;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({
@@ -610,16 +619,52 @@ export async function fetchAllPositions(
       };
     }
     if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    if (!result.positions.length) {
+      exhausted = true; // upstream ran out of rows
+      break;
+    }
+    // Dedupe across pages by post_id — live re-sorting between page fetches
+    // can repeat a row on a page boundary; count only unique positions.
+    let added = 0;
+    for (const p of result.positions) {
+      if (p.post_id) {
+        if (seen.has(p.post_id)) continue;
+        seen.add(p.post_id);
+      }
+      bucket.push(p);
+      added++;
+    }
+    if (total !== undefined && bucket.length >= total) {
+      exhausted = true;
+      break;
+    }
+    // A whole page of already-seen rows means we are re-reading shifted
+    // pages — stop instead of hammering the API.
+    if (added === 0) {
+      exhausted = true;
+      break;
+    }
+    // Short page on a single channel = last page (scope=all merges two
+    // channels per page, where one channel finishing first also shrinks the
+    // page, so the shortcut only applies off the merged path).
+    if (opts.scope !== "all" && result.positions.length < pageSize) {
+      exhausted = true;
+      break;
+    }
   }
 
+  const truncated = !exhausted;
   return {
     ok: true,
     source: "jobs.bytedance.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
+    truncated,
+    ...(truncated
+      ? {
+          note: `stopped at --max-pages ${maxPages} before reaching total; pass --max-pages N (pageSize ${pageSize}) to fetch the rest`,
+        }
+      : {}),
     positions: bucket,
   };
 }

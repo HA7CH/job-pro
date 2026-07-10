@@ -8,13 +8,24 @@
 //
 // Filter taxonomy (all IDs are for the searchPosition POST body):
 //
-//   projectIdList  — leaf codes from getAllProject; controls recruit type
-//     1   应届生
-//     2   实习生
-//     12  项目实习生
-//     14  青云计划-应届生
-//     16  技术研发提前批
-//     20  青云计划-实习生
+//   projectMappingIdList  — mappingId values from getProjectMapping; this is
+//     the LIVE recruit-channel filter. The legacy `projectIdList` field is
+//     deprecated upstream (the SPA bundle p_zh-cn_post.build.js literally
+//     annotates it "该字段已废弃，只是为了兼容，不做删除") and the server
+//     ignores it entirely — verified 2026-07-11: projectIdList [1], [2],
+//     [12], [14], [16], [20], [] and the full set all return the identical
+//     654-position pool.
+//     Live mapping (getProjectMapping, fetched 2026-07-11):
+//       mappingId 1    2026校园招聘    recruitType 1 应届毕业生  → campus
+//       mappingId 2    应届实习        recruitType 2 实习生      → intern
+//       mappingId 104  日常实习        recruitType 2 实习生      → intern  (projectId "4,12")
+//       mappingId 14   青云计划-应届生 recruitType 999 人才专项  → campus
+//       mappingId 20   青云计划-实习生 recruitType 999 人才专项  → intern
+//       mappingId 5    Pre留学生实习   recruitType 999 人才专项  → intern
+//     Server-side filtering verified 2026-07-11: campus [1,14] → count 110,
+//     intern [2,104,20,5] → count 544, all/[] → count 654 = 110 + 544; with
+//     keyword 工程师: campus 26 + intern 44 = all 70. Empty list [] means
+//     "no filter" (same as the full set).
 //
 //   bgList  — BusinessGroup codes (data.count is accurate per BG)
 //     953    CDG 企业发展事业群         ~100 positions
@@ -50,13 +61,18 @@
 //   recruitCityList  — codes from getRecruitCity (interview city, not work city)
 //     1:成都, 3:广州, 5:上海, 11:北京, 13:中国香港, 14:深圳, 27:武汉, 47:远程面试
 //
-// NOTE: data.count is unreliable when projectIdList is the ONLY filter
-// (always returns 695). It IS accurate when bgList or positionFidList are set.
+// NOTE: data.count is accurate for projectMappingIdList / bgList /
+// positionFidList / keyword filters (verified 2026-07-11: the campus /
+// intern / all counts above are mutually consistent and match row counts
+// when pageSize covers the pool). The old "always returns 695" caveat
+// applied to the now-ignored projectIdList field.
 //
 // All endpoints are unauthenticated; the server just checks Referer/Origin
 // to discourage cross-site embedding. Endpoint inventory:
 //
-//   GET  /api/v1/position/getAllProject
+//   GET  /api/v1/position/getAllProject         (legacy tree; filter codes it
+//                                                yields are IGNORED by search)
+//   GET  /api/v1/position/getProjectMapping     (live recruit-channel filter)
 //   GET  /api/v1/position/getPositionFamily?lang=zh-cn
 //   GET  /api/v1/position/getPositionWorkCities?lang=zh-cn
 //   GET  /api/v1/position/getRecruitCity?lang=zh-cn
@@ -134,13 +150,8 @@ async function call<T>(
 /** Retrieve the full filter catalog for join.qq.com, including live position
  *  counts per BusinessGroup and per PositionFamily sub-category.
  *
- *  Counts are fetched in parallel (one POST per BG / family sub-id).
- *  The projectIdList used for count probes is the full set [1,2,12,14,16,20]
- *  so counts reflect the whole campus pool.
- *
- *  Note: counts under recruit_types are NOT probed here because
- *  data.count is unreliable when projectIdList is the sole filter
- *  (always returns 695 regardless of which projects are listed).
+ *  Counts are fetched in parallel (one POST per BG / family sub-id) with an
+ *  empty projectMappingIdList so they reflect the whole campus pool.
  */
 import type { PositionScope } from "./adapter.js";
 
@@ -149,8 +160,134 @@ import type { PositionScope } from "./adapter.js";
 // dispatcher fails fast on `--scope social`.
 export const supportedScopes: ReadonlyArray<PositionScope> = ["campus", "intern", "all"] as const;
 
+// ---------- recruit-channel mapping (scope → projectMappingIdList) ----------
+
+/** One selectable second-level option in join.qq.com's 招聘项目 filter. */
+export interface ProjectMappingSub {
+  mappingId?: number;
+  recruitType?: number;
+  /** Legacy project code(s) this option covers, CSV — e.g. 日常实习 = "4,12". */
+  projectId?: string;
+  projectName?: string;
+  recruitYear?: string;
+  recruitRangDesc?: string | null;
+}
+
+export interface ProjectMappingGroup {
+  id?: number;
+  recruitType?: number;
+  recruitTypeName?: string;
+  recruitRangDesc?: string | null;
+  subProjectList?: ProjectMappingSub[] | null;
+}
+
+/**
+ * Classify a mapping sub-project as graduate hire (campus) or internship
+ * (intern). Group-level recruitType settles the two plain groups directly
+ * (1 = 应届毕业生, 2 = 实习生). The 人才专项 group (recruitType 999) mixes
+ * both — 青云计划-应届生 is a graduate hire while 青云计划-实习生 and
+ * Pre留学生实习 are internships — so its subs are split on the 实习 token
+ * in the project name (verified against getProjectMapping 2026-07-11; every
+ * current 999 sub is unambiguous under this rule).
+ */
+function classifyMappingScope(
+  group: ProjectMappingGroup,
+  sub: ProjectMappingSub
+): "campus" | "intern" {
+  if (group.recruitType === 2) return "intern";
+  if (group.recruitType === 1) return "campus";
+  return /实习/.test(sub.projectName ?? "") ? "intern" : "campus";
+}
+
+/** Fetch the live 招聘项目 filter dictionary (the SPA's queryProjectMappingData). */
+export async function fetchProjectMapping(): Promise<
+  { ok: true; groups: ProjectMappingGroup[] } | { ok: false; message: string }
+> {
+  const response = await call<ProjectMappingGroup[]>("GET", "/position/getProjectMapping");
+  if (!response.ok || !Array.isArray(response.data)) {
+    return { ok: false, message: response.message || "getProjectMapping returned no data" };
+  }
+  return { ok: true, groups: response.data };
+}
+
+interface ScopedMappingEntry {
+  mapping_id: number;
+  name: string;
+  scope: "campus" | "intern";
+  legacy_project_ids: number[];
+}
+
+function flattenMapping(groups: ProjectMappingGroup[]): ScopedMappingEntry[] {
+  const out: ScopedMappingEntry[] = [];
+  for (const group of groups) {
+    for (const sub of group.subProjectList ?? []) {
+      if (sub.mappingId === undefined) continue;
+      out.push({
+        mapping_id: Number(sub.mappingId),
+        name: sub.projectName ?? "",
+        scope: classifyMappingScope(group, sub),
+        legacy_project_ids: (sub.projectId ?? "")
+          .split(",")
+          .map((s) => Number(s.trim()))
+          .filter((n) => Number.isFinite(n)),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve the caller's scope / legacy projectIds / explicit projectMappingIds
+ * into the projectMappingIdList the searchPosition endpoint actually honors.
+ *
+ * `ids: []` means "no filter" (upstream treats an empty list as the full
+ * pool — verified 2026-07-11), so unscoped calls skip the mapping fetch.
+ * When a filter IS requested but the mapping can't be fetched or matches
+ * nothing, we return ok:false rather than silently searching every channel.
+ */
+async function resolveProjectMappingIds(opts: {
+  scope?: PositionScope;
+  projectIds?: number[];
+  projectMappingIds?: number[];
+}): Promise<
+  | { ok: true; ids: number[]; projects: ScopedMappingEntry[] }
+  | { ok: false; message: string }
+> {
+  if (opts.projectMappingIds?.length) {
+    return { ok: true, ids: opts.projectMappingIds.map(Number), projects: [] };
+  }
+  const scope = opts.scope === "all" ? undefined : opts.scope;
+  const legacyIds = (opts.projectIds ?? []).map(Number).filter((n) => Number.isFinite(n));
+  if (!scope && !legacyIds.length) return { ok: true, ids: [], projects: [] };
+
+  const mapping = await fetchProjectMapping();
+  if (!mapping.ok) {
+    return {
+      ok: false,
+      message: `cannot resolve recruit-channel filter (scope/project-ids): ${mapping.message}`,
+    };
+  }
+  let picked = flattenMapping(mapping.groups);
+  if (scope === "campus" || scope === "intern") {
+    picked = picked.filter((e) => e.scope === scope);
+  }
+  if (legacyIds.length) {
+    picked = picked.filter((e) => e.legacy_project_ids.some((id) => legacyIds.includes(id)));
+  }
+  if (!picked.length) {
+    const available = flattenMapping(mapping.groups)
+      .map((e) => `${e.mapping_id}:${e.name}(${e.scope})`)
+      .join(", ");
+    return {
+      ok: false,
+      message: `no recruit project matches scope=${opts.scope ?? "-"} projectIds=[${legacyIds.join(",")}]; available: ${available}`,
+    };
+  }
+  return { ok: true, ids: picked.map((e) => e.mapping_id), projects: picked };
+}
+
 export async function fetchDictionaries() {
-  const [projects, families, workCities, recruitCities, shared] = await Promise.all([
+  const [projects, families, workCities, recruitCities, shared, mapping] = await Promise.all([
     call<unknown[]>("GET", "/position/getAllProject"),
     call<unknown>("GET", "/position/getPositionFamily?lang=zh-cn"),
     call<unknown>("GET", "/position/getPositionWorkCities?lang=zh-cn"),
@@ -159,14 +296,16 @@ export async function fetchDictionaries() {
       "GET",
       "/dictionary/?types=RecruitType,BusinessGroup,RecruitProjectPostList"
     ),
+    fetchProjectMapping(),
   ]);
 
-  const allProjectIds = [1, 2, 12, 14, 16, 20];
-
   // Helper: call searchPosition with a single extra filter, return count.
+  // projectMappingIdList [] = whole campus pool (see file header), so
+  // counts reflect all recruit channels.
   async function countWith(extra: Record<string, unknown>): Promise<number> {
     const body = {
-      projectIdList: allProjectIds,
+      projectIdList: [], // deprecated upstream; ignored by the server
+      projectMappingIdList: [],
       keyword: "",
       bgList: [],
       workCountryType: 0,
@@ -215,12 +354,21 @@ export async function fetchDictionaries() {
     family_counts[f.id] = { ...f, count: familyCounts[i] };
   }
 
+  const scopeEntries = mapping.ok ? flattenMapping(mapping.groups) : [];
+
   return {
-    ok: [projects, families, workCities, recruitCities, shared].every((r) => r.ok),
+    ok: [projects, families, workCities, recruitCities, shared].every((r) => r.ok) && mapping.ok,
     source: "join.qq.com",
     api_host: API_ROOT,
     verified_at: new Date().toISOString(),
     campus_only: true,
+    // Live recruit-channel filter (searchPosition's projectMappingIdList)
+    // and how the CLI maps `--scope campus|intern` onto it.
+    project_mapping: mapping.ok ? mapping.groups : [],
+    scope_mapping: {
+      campus: scopeEntries.filter((e) => e.scope === "campus"),
+      intern: scopeEntries.filter((e) => e.scope === "intern"),
+    },
     recruit_types: (shared.data as { RecruitType?: unknown[] })?.RecruitType ?? [],
     recruit_project_post_list:
       (shared.data as { RecruitProjectPostList?: unknown[] })?.RecruitProjectPostList ?? [],
@@ -241,6 +389,11 @@ interface ProjectNode {
   subDictionary?: ProjectNode[];
 }
 
+/**
+ * Leaf codes of the legacy getAllProject tree. NOTE: searchPosition IGNORES
+ * these codes since the upstream move to projectMappingIdList (see file
+ * header) — kept only as a dictionary helper; not used for filtering.
+ */
 export async function collectAllProjectIds(): Promise<number[]> {
   const response = await call<ProjectNode[]>("GET", "/position/getAllProject");
   if (!response.ok || !response.data) return [];
@@ -296,7 +449,25 @@ function summarizePosition(item: RawPositionListEntry): PositionSummary {
 
 export interface SearchOptions {
   keyword?: string;
+  /**
+   * Recruit channel (1.1.0+): `campus` → graduate-hire mapping ids
+   * (应届毕业生, 青云计划-应届生), `intern` → internship mapping ids
+   * (应届实习, 日常实习, 青云计划-实习生, Pre留学生实习), `all`/unset → the
+   * whole campus pool. Resolved live from getProjectMapping and enforced
+   * SERVER-SIDE via projectMappingIdList (verified 2026-07-11).
+   */
+  scope?: PositionScope;
+  /**
+   * Legacy project codes from getAllProject (1=应届生, 2=实习生, 4/12=日常实习,
+   * 14/20=青云计划, 16=提前批). The upstream projectIdList field that used to
+   * carry these is deprecated and IGNORED by the server, so we translate them
+   * to the mappingIds of the getProjectMapping options covering those codes.
+   * Codes not currently selectable upstream (e.g. 16 as of 2026-07) error out
+   * cleanly instead of silently returning the unfiltered pool.
+   */
   projectIds?: number[];
+  /** mappingIds from getProjectMapping, sent as projectMappingIdList verbatim. */
+  projectMappingIds?: number[];
   /** BG (事业群) codes, e.g. 953=CDG, 29294=CSIG, 956=IEG, 29292=PCG, 14129=WXG, 958=TEG */
   bgIds?: number[];
   /** Sub-family ids from getPositionFamily, e.g. 75=软件开发类, 93=算法研究类, 85=游戏美术类 */
@@ -314,9 +485,19 @@ export interface SearchOptions {
 export async function searchPositions(opts: SearchOptions = {}) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
-  const projectIds = opts.projectIds ?? (await collectAllProjectIds());
+  const resolved = await resolveProjectMappingIds(opts);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      message: resolved.message,
+      positions: [] as PositionSummary[],
+    };
+  }
   const body = {
-    projectIdList: projectIds,
+    // Deprecated upstream and ignored by the server (see file header); the
+    // official SPA still sends the key "为了兼容", so we do too.
+    projectIdList: [] as number[],
+    projectMappingIdList: resolved.ids,
     keyword: (opts.keyword ?? "").trim().slice(0, 30),
     bgList: opts.bgIds ?? [],
     workCountryType: opts.workCountryType ?? 0,
@@ -345,27 +526,42 @@ export async function searchPositions(opts: SearchOptions = {}) {
     ok: true,
     source: "join.qq.com",
     query: body,
+    scope: opts.scope,
+    // Which recruit projects the scope/projectIds filter resolved to —
+    // empty when unfiltered or when explicit projectMappingIds were given.
+    scope_projects: resolved.projects.length
+      ? resolved.projects.map((e) => ({ mapping_id: e.mapping_id, name: e.name, scope: e.scope }))
+      : undefined,
     page,
     page_size: pageSize,
+    // count is the server-side total for THIS filter combination (scope +
+    // keyword + bg/city/family) — verified accurate 2026-07-11.
     total: response.data.count ?? rows.length,
     positions: rows.map(summarizePosition),
   };
 }
 
 export async function fetchAllPositions(
-  opts: { keyword?: string; maxPages?: number; pageSize?: number } = {}
+  opts: { keyword?: string; scope?: PositionScope; maxPages?: number; pageSize?: number } = {}
 ) {
   const pageSize = Math.max(1, Math.min(100, opts.pageSize ?? 100));
   const maxPages = Math.max(1, opts.maxPages ?? 20);
-  const projectIds = await collectAllProjectIds();
+  // Resolve the scope filter ONCE so all pages query the same channel set
+  // (and so a broken mapping endpoint fails loudly instead of degrading to
+  // the unfiltered pool page by page).
+  const resolved = await resolveProjectMappingIds({ scope: opts.scope });
+  if (!resolved.ok) {
+    return { ok: false, message: resolved.message, fetched: 0, positions: [] as PositionSummary[] };
+  }
 
+  const seen = new Set<string>();
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({
       keyword: opts.keyword,
-      projectIds,
+      projectMappingIds: resolved.ids.length ? resolved.ids : undefined,
       page,
       pageSize,
     });
@@ -373,15 +569,30 @@ export async function fetchAllPositions(
       return { ok: false, message: result.message, fetched: bucket.length, positions: bucket };
     }
     if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    const before = bucket.length;
+    for (const p of result.positions) {
+      if (!p.post_id || seen.has(p.post_id)) continue;
+      seen.add(p.post_id);
+      bucket.push(p);
+    }
+    if (!result.positions.length) break; // empty page → exhausted
+    if (bucket.length === before) break; // no new unique ids → upstream is repeating
+    if (total !== undefined && bucket.length >= total) break; // pool exhausted
+    if (result.positions.length < pageSize) break; // short page → last page
   }
+  const reportedTotal = total ?? bucket.length;
   return {
     ok: true,
     source: "join.qq.com",
-    total: total ?? bucket.length,
+    scope: opts.scope,
+    scope_projects: resolved.projects.length
+      ? resolved.projects.map((e) => ({ mapping_id: e.mapping_id, name: e.name, scope: e.scope }))
+      : undefined,
+    total: reportedTotal,
     fetched: bucket.length,
+    // true when we stopped before reaching the server-reported total
+    // (maxPages cap hit, or upstream repeated/short-paged early).
+    truncated: bucket.length < reportedTotal,
     positions: bucket,
   };
 }

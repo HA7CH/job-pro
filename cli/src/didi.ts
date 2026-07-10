@@ -286,6 +286,18 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const rawRows = response.data.items ?? [];
   // 1.1.0+: --scope is a client-side filter on jdNo prefix (no server-side recruit filter).
   const rows = rawRows.filter((r) => jdNoMatchesScope(r.jdNo, opts.scope));
+  const notes: string[] = [];
+  if (opts.pageSize !== undefined && opts.pageSize !== 16) {
+    // Verified live: the server returns exactly 16 rows regardless of `size`.
+    notes.push(
+      "Didi's API enforces a fixed page size of 16 — --page-size has no effect."
+    );
+  }
+  if (opts.scope && opts.scope !== "all") {
+    notes.push(
+      "total is the upstream unfiltered feed count; --scope is filtered client-side per page (jdNo prefix), so positions may hold fewer rows."
+    );
+  }
   return {
     ok: true,
     source: "talent.didiglobal.com",
@@ -293,6 +305,7 @@ export async function searchPositions(opts: SearchOptions = {}) {
     page,
     page_size: rows.length, // actual count after scope filter (always ≤ 16)
     total: response.data.total ?? rawRows.length,
+    ...(notes.length ? { note: notes.join(" ") } : {}),
     positions: rows.map(summarizePosition),
   };
 }
@@ -302,9 +315,17 @@ export async function searchPositions(opts: SearchOptions = {}) {
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
-  const maxPages = Math.max(1, opts.maxPages ?? 10); // default: up to 160 posts
+  // 1.2.x: default raised 10 → 80 pages. The server hard-codes 16 rows/page,
+  // so the full feed (~1110 posts, probed 2026-07-11) needs ~70 pages; the
+  // old 10-page default silently stopped at 160/1110. If `total` needs more
+  // pages than maxPages allows we stop and report truncated:true.
+  const maxPages = Math.max(1, opts.maxPages ?? 80);
+  const SERVER_PAGE_SIZE = 16; // fixed server-side; `size` param is ignored
+  const seen = new Set<string>();
   const bucket: PositionSummary[] = [];
   let total: number | undefined;
+  let pagesNeeded: number | undefined;
+  let duplicatesRemoved = 0;
 
   for (let page = 1; page <= maxPages; page++) {
     const result = await searchPositions({ ...opts, page });
@@ -317,17 +338,56 @@ export async function fetchAllPositions(
         positions: bucket,
       };
     }
-    if (total === undefined) total = result.total;
-    if (!result.positions.length) break;
-    bucket.push(...result.positions);
-    if (total !== undefined && bucket.length >= total) break;
+    if (total === undefined) {
+      total = result.total;
+      // `total` is the upstream unfiltered feed size and the server always
+      // pages by 16, so this bounds the crawl correctly even when a --scope
+      // filter shrinks the per-page row count below 16.
+      pagesNeeded = Math.max(1, Math.ceil((total ?? 0) / SERVER_PAGE_SIZE));
+    }
+    // Dedupe by post_id: Didi's own API can repeat a jdId across pages
+    // (verified live 2026-06: jdId 61688 appeared on two of the first 10
+    // pages). Count only unique positions.
+    for (const p of result.positions) {
+      if (p.post_id) {
+        if (seen.has(p.post_id)) {
+          duplicatesRemoved++;
+          continue;
+        }
+        seen.add(p.post_id);
+      }
+      bucket.push(p);
+    }
+    // Without a scope filter an empty page means the feed ended early
+    // (total shrank mid-crawl). With a scope filter a page can legitimately
+    // filter down to 0 rows, so rely on the page-count bound instead.
+    if (!result.positions.length && (!opts.scope || opts.scope === "all")) break;
+    if (pagesNeeded !== undefined && page >= pagesNeeded) break; // upstream exhausted
   }
 
+  const truncated = pagesNeeded !== undefined && pagesNeeded > maxPages;
+  const notes: string[] = [];
+  if (duplicatesRemoved > 0) {
+    notes.push(`${duplicatesRemoved} duplicate post_id(s) from the upstream feed were removed.`);
+  }
+  if (truncated) {
+    notes.push(
+      `upstream has ${pagesNeeded} pages of ${SERVER_PAGE_SIZE}; stopped at --max-pages ${maxPages} — pass a larger --max-pages to fetch the rest.`
+    );
+  }
+  if (opts.scope && opts.scope !== "all") {
+    notes.push(
+      "total is the upstream unfiltered feed count; fetched counts only rows matching --scope (client-side jdNo-prefix filter)."
+    );
+  }
   return {
     ok: true,
     source: "talent.didiglobal.com",
     total: total ?? bucket.length,
     fetched: bucket.length,
+    truncated,
+    ...(duplicatesRemoved > 0 ? { duplicates_removed: duplicatesRemoved } : {}),
+    ...(notes.length ? { note: notes.join(" ") } : {}),
     positions: bucket,
   };
 }

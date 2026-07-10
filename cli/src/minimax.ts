@@ -1,38 +1,48 @@
-// Thin adapter for MiniMax / MiniMax智能 campus recruiting via Feishu Recruiting (ATSX).
+// Thin adapter for MiniMax / MiniMax智能 recruiting via Feishu Recruiting (ATSX).
 //
-// MiniMax uses the Feishu multi-tenant portal. Their career page is:
-//   https://vrfi1sk8a0.jobs.feishu.cn/379481/
-//   (linked from https://www.minimax.io/careers)
+// MiniMax uses the Feishu multi-tenant portal with TWO portal channels
+// (both linked from https://www.minimax.io/careers):
+//   https://vrfi1sk8a0.jobs.feishu.cn/379481/  → 校招/实习 portal
+//   https://vrfi1sk8a0.jobs.feishu.cn/index/   → 社招 portal ("Social Recruitment")
 //
-// API (probed 2026-05):
+// API (probed 2026-05, re-probed 2026-07-11):
 //   POST https://vrfi1sk8a0.jobs.feishu.cn/api/v1/search/job/posts
-//        Total: ~83 posts (intern + full-time combined; no separate channel scoping)
-//   GET  https://vrfi1sk8a0.jobs.feishu.cn/api/v1/config/job/filters/379481
+//        portal-channel "379481" → 77 posts (校招 正式 + 实习 mixed feed)
+//        portal-channel "index"  → 190 posts (社招, all recruit_type 全职)
+//   GET  https://vrfi1sk8a0.jobs.feishu.cn/api/v1/config/job/filters/<channel>
+//        filters/379481 declares recruitment_type {id:"2", 校招} only;
+//        filters/index  declares recruitment_type {id:"1", 社招/Experienced} only.
 //
 // ---- Critical discovery: multi-tenant portal-channel ----
 // Unlike company-dedicated subdomains (e.g. nio.jobs.feishu.cn uses "campus"),
-// multi-tenant portals use the COMPANY PATH as the portal-channel value.
-// For MiniMax (path "379481"):
-//   portal-channel: "379481"   ← NOT "campus"
-//   website-path:   "379481"   ← NOT "campus"
+// multi-tenant portals use the SITE PATH as the portal-channel value.
+// For MiniMax:
+//   campus portal: portal-channel/website-path = "379481" (the company path)
+//   social portal: portal-channel/website-path = "index"  (root site; the
+//                  empty-string channel "" resolves to the same social pool)
 // Using "campus" returns {"code":-9000003,"message":"site not exist"}.
 //
 // Field notes:
 //   - job_function is null; project ← job_category.name
 //   - city_info is null; work_cities ← city_list (may have multiple cities)
-//   - Recruit types include both 实习 and 正式 in the same pool (no channel split)
+//   - Campus channel mixes 实习 and 正式 in one pool (recruitment_id_list
+//     "201"/"202" splits them); social lives on its own channel entirely.
 //
 // apply_url pattern: https://vrfi1sk8a0.jobs.feishu.cn/379481/position/<id>/detail
+// (verified 2026-07-11: the /379481/ detail page server-renders social-channel
+//  posts too, so one prefix works for every scope)
 
 import { createAdapter } from "./feishu.js";
 
-/** Recruit scopes MiniMax can serve.
- *  Probed 2026-05-21: /api/v1/config/job/filters/379481 declares exactly one
- *  recruitment_type — {id:"2", name:"校招"}. Posts label themselves 正式 or
- *  实习 in the mixed feed, but there is no 社招/Experienced top-level type on
- *  this tenant; the factory's social fallback (recruitment_id_list=["101"])
- *  returns 0 unconditionally. Drop social so dispatcher fail-fasts. */
-export const supportedScopes = ["campus", "intern", "all"] as const;
+/** Recruit scopes MiniMax can serve — all four.
+ *  A 2026-05-21 probe of filters/379481 (校招 portal only) wrongly concluded
+ *  the tenant had no 社招; the social pool actually lives on the sibling
+ *  "index" portal-channel. Re-probed 2026-07-11: POST /api/v1/search/job/posts
+ *  with portal-channel:index → code:0, count:190 (e.g. "Forward Deployed
+ *  Engineer（前沿部署工程师）"); keyword=工程师 → count:68. Wired below as
+ *  socialChannel so the factory swaps channels for --scope social instead of
+ *  the recruitment_id_list=["101"] fallback (which returns 0 on 379481). */
+export const supportedScopes = ["social", "campus", "intern", "all"] as const;
 
 export const {
   searchPositions,
@@ -47,6 +57,7 @@ export const {
 } = createAdapter({
   host: "vrfi1sk8a0.jobs.feishu.cn",
   channel: "379481",
+  socialChannel: "index",
   label: "MiniMax / MiniMax智能",
   applyUrlPrefix: "https://vrfi1sk8a0.jobs.feishu.cn/379481/position",
   supportedScopes,

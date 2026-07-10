@@ -14,6 +14,10 @@ import { createAdapter } from "./liepin.js";
 
 const adapter = createAdapter({
   companyName: "微众银行",
+  // Liepin company id + exact card compName (probed 2026-07-11:
+  // https://www.liepin.com/company/8312365/).
+  compId: 8312365,
+  liepinCompName: "微众银行",
   label: "WeBank / 微众银行",
 });
 

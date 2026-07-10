@@ -7,13 +7,17 @@
 // Endpoint inventory (probed 2026-05, commons.288fd140.chunk.js):
 //
 //   POST https://hr.163.com/api/hr163/position/queryPage
-//        Payload: { pageNum, pageSize, workType, keyword, ... }
+//        Payload: { currentPage, pageSize, workType, keyword, ... }
 //        Response: { code:200, data:{ total, pages, list:[...], lastPage } }
 //        Verified fields in payload:
-//          workType  "0"=社招 (social hire)  "1"=校园/实习 (campus+intern)
-//          keyword   free-text search — the only filter that actually narrows results
-//          pageNum   accepted but IGNORED — server always returns same top N records
-//          pageSize  works; max=200 (code 402 if exceeded)
+//          workType     "0"=社招 (social hire)  "1"=校园/实习 (campus+intern)
+//          keyword      free-text search — the only filter that actually narrows results
+//          currentPage  WORKS anonymously (verified 2026-07-11: currentPage 1/2/3
+//                       with pageSize=200 workType="1" returned 200+200+14 rows,
+//                       0 overlap, union of ids == total=414). `pageNum` is silently
+//                       IGNORED — the earlier "pagination needs auth" note was a
+//                       mis-diagnosis caused by sending the wrong param name.
+//          pageSize     works; max=200 (code 402 if exceeded)
 //        All other filter params (positionTypeCode, firstPostTypeCode,
 //        workPlaceId, workPlaceList, etc.) are accepted with 200 but have NO
 //        effect on the result set without an authenticated session cookie.
@@ -38,12 +42,13 @@
 //        ▶ Not usable without credentials; we fall back to hr.163.com.
 //
 // ============================================================
-// Pagination caveat:
-//   pageNum is sent but IGNORED by the server without auth.
-//   The API returns the top N (up to pageSize ≤ 200) positions sorted by relevance.
-//   fetchAllPositions() transparently makes multiple keyword-scoped calls when
-//   the caller requests many pages, but because the underlying sort is fixed, pages
-//   beyond the first will repeat the same records. We document this honestly.
+// Pagination:
+//   The pagination field is `currentPage` (1-based). Anonymous multi-page
+//   iteration works — verified 2026-07-11 against the live endpoint:
+//     {currentPage:1|2|3, pageSize:200, workType:"1"} → 200+200+14 unique rows,
+//     union == total (414 campus); social (workType:"0") behaves the same.
+//   fetchAllPositions() sweeps currentPage=1..N at pageSize=200, dedupes by
+//   post_id, and stops on a short page / no-new-ids page / total reached.
 //
 // ============================================================
 // DIMENSION 1 — positionType codes (GET /options/positionType/queryItemList):
@@ -254,12 +259,11 @@ export interface SearchOptions {
   page?: number;
   pageSize?: number;
   /**
-   * Recruit type. Default "1" = 校园/实习 (campus + intern, ~417 posts).
-   * Use "0" for 社招 (social/experienced hire, ~1952 posts).
+   * Recruit type. Default "1" = 校园/实习 (campus + intern, ~414 posts).
+   * Use "0" for 社招 (social/experienced hire, ~2035 posts).
    *
-   * NOTE: The server ignores pageNum without auth; all unauthenticated requests
-   * return the same top-N sorted-by-relevance records regardless of pageNum.
-   * The only effective filter is `keyword`.
+   * Pagination is server-side via `currentPage` (works anonymously —
+   * verified 2026-07-11). The only content filter is `keyword`.
    */
   workType?: "0" | "1";
   /** CLI `--scope` echo (1.1.0+). When set and `workType` is omitted, scope
@@ -275,8 +279,11 @@ export async function searchPositions(opts: SearchOptions = {}) {
   const keyword = (opts.keyword ?? "").trim().slice(0, 80);
   const workType = opts.workType ?? workTypeForScope(opts.scope);
 
+  // The server's pagination field is `currentPage` — `pageNum` is accepted
+  // but silently ignored (probed 2026-07-11: pageNum 1 vs 2 returned identical
+  // ids; currentPage 1 vs 2 returned disjoint ids and exhausts total).
   const payload = {
-    pageNum: page,
+    currentPage: page,
     pageSize,
     workType,
     keyword,
@@ -302,45 +309,93 @@ export async function searchPositions(opts: SearchOptions = {}) {
     page_size: pageSize,
     total: response.data.total ?? rows.length,
     positions: rows.map(summarizePosition),
-    note:
-      "pageNum is ignored by the server without auth; results are always top-N by relevance. " +
-      "Use `keyword` to narrow the result set.",
   };
 }
 
 // ---------- fetchAllPositions ----------
-// Because pageNum is ignored, we cannot truly paginate.
-// We fetch the maximum allowed pageSize=200 in one call and return it.
-// When keyword is provided, narrow set may fit in one call.
+// Sweeps currentPage=1..N at the server-max pageSize=200 (anonymous pagination
+// works — see header notes, verified 2026-07-11). Dedupes by post_id so a page
+// that unexpectedly repeats records cannot inflate the result, and stops on:
+//   - collected >= server-reported total (corpus exhausted)
+//   - a short page (rows < pageSize)
+//   - a page that adds no new ids (guard against a server that loops)
+// If maxPages is hit while positions remain, `truncated: true` is emitted.
 
 export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
-  const pageSize = 200; // server max
+  const pageSize = 200; // server max (code 402 above this)
+  // 2035 social posts / 200 per page ≈ 11 pages today; 25 leaves headroom.
+  const maxPages = Math.max(1, opts.maxPages ?? 25);
   const workType = opts.workType ?? workTypeForScope(opts.scope);
   const keyword = (opts.keyword ?? "").trim();
 
-  const result = await searchPositions({ keyword, pageSize, workType, page: 1 });
-  if (!result.ok) {
-    return {
-      ok: false as const,
-      source: SOURCE,
-      message: result.message,
-      fetched: 0,
-      positions: [] as PositionSummary[],
-    };
+  const seen = new Set<string>();
+  const positions: PositionSummary[] = [];
+  let total = 0;
+  let page = 1;
+  let duplicates = 0;
+  let sawShortOrStalePage = false;
+
+  while (page <= maxPages) {
+    const result = await searchPositions({ keyword, pageSize, workType, page });
+    if (!result.ok) {
+      if (page === 1) {
+        return {
+          ok: false as const,
+          source: SOURCE,
+          message: result.message,
+          total: 0,
+          fetched: 0,
+          positions: [] as PositionSummary[],
+        };
+      }
+      // Mid-sweep failure: return what we have, flagged as truncated.
+      return {
+        ok: true as const,
+        source: SOURCE,
+        total,
+        fetched: positions.length,
+        positions,
+        truncated: true,
+        note: `stopped early at page ${page}: ${result.message}`,
+      };
+    }
+
+    total = result.total;
+    let added = 0;
+    for (const p of result.positions) {
+      if (!p.post_id || seen.has(p.post_id)) {
+        duplicates += 1;
+        continue;
+      }
+      seen.add(p.post_id);
+      positions.push(p);
+      added += 1;
+    }
+
+    if (added === 0 || result.positions.length < pageSize || positions.length >= total) {
+      sawShortOrStalePage = true;
+      break;
+    }
+    page += 1;
   }
+
+  // Truncated only if we ran out of page budget while the server still had more.
+  const truncated = !sawShortOrStalePage && positions.length < total;
 
   return {
     ok: true as const,
     source: SOURCE,
-    total: result.total,
-    fetched: result.positions.length,
-    positions: result.positions,
-    note:
-      "fetchAllPositions returns up to 200 positions in a single call (server max). " +
-      "True multi-page iteration is not available without authentication. " +
-      `Reported total: ${result.total}`,
+    total,
+    fetched: positions.length,
+    positions,
+    ...(truncated ? { truncated: true as const } : {}),
+    // The server's `total` counts raw rows, and the corpus itself can contain
+    // duplicate rows (observed 2026-07-11: social ids 74208 & 75683 listed
+    // twice, so total=2035 vs 2033 unique). Surface how many we collapsed so
+    // fetched < total is explained.
+    ...(duplicates > 0 ? { duplicates_removed: duplicates } : {}),
   };
 }
 

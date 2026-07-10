@@ -61,6 +61,14 @@ const DETAIL_URL = (recruitType: "campus" | "social", id: string) =>
     ? `https://talent.antgroup.com/campus-position?positionId=${encodeURIComponent(id)}`
     : `https://talent.antgroup.com/off-campus-position?positionId=${encodeURIComponent(id)}`;
 
+// Max usable pageSize, re-probed 2026-07-11 via curl against both endpoints:
+//   pageSize 49 → success:true (campus totalCount 494 / social 969; deep pages
+//   work too — social pageIndex 20 @ 49 returns the exact 38-row remainder).
+//   pageSize 50 → success:false, totalCount:0, errorMsg "系统繁忙，请稍后重试"
+//   on both endpoints, deterministically (not load-related).
+// So 50 is a hard upstream rejection boundary; clamp every request below it.
+const MAX_PAGE_SIZE = 49;
+
 const DEFAULT_HEADERS: Record<string, string> = {
   "User-Agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
@@ -105,22 +113,41 @@ interface RawPosition {
   positionType?: string;
 }
 
+const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
+
 async function post<T>(path: string, body: unknown, referer: string): Promise<{
   ok: boolean;
   content?: T;
   totalCount?: number;
   message: string;
 }> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_ROOT}${path}`, {
-      method: "POST",
-      headers: { ...DEFAULT_HEADERS, Referer: referer },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    return { ok: false, message: `network error: ${err instanceof Error ? err.message : err}` };
+  // Full `all` drains issue ~50 rapid sequential requests; back off and retry
+  // (twice) on network errors / 429 / 5xx instead of failing the whole drain.
+  // `success:false` JSON envelopes are NOT retried — those are deterministic
+  // (e.g. the pageSize>=50 rejection), not transient throttling.
+  let response: Response | null = null;
+  let lastErr = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(attempt === 1 ? 500 : 1500);
+    try {
+      response = await fetch(`${API_ROOT}${path}`, {
+        method: "POST",
+        headers: { ...DEFAULT_HEADERS, Referer: referer },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      response = null;
+      lastErr = `network error: ${err instanceof Error ? err.message : err}`;
+      continue;
+    }
+    if (response.status === 429 || response.status >= 500) {
+      lastErr = `HTTP ${response.status}`;
+      response = null;
+      continue;
+    }
+    break;
   }
+  if (!response) return { ok: false, message: lastErr || "network error" };
   if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
   let env: AntEnvelope<T>;
   try {
@@ -185,7 +212,7 @@ async function searchSingle(
   positions: PositionSummary[];
   message: string;
 }> {
-  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 20));
+  const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
   const keyword = (opts.keyword ?? "").trim().slice(0, 60);
 
@@ -220,7 +247,7 @@ async function searchSingle(
 
 export async function searchPositions(opts: SearchOptions = {}) {
   const recruitType = opts.recruitType ?? recruitTypeFromScope(opts.scope);
-  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 20));
+  const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, opts.pageSize ?? 20));
   const page = Math.max(1, opts.page ?? 1);
 
   if (recruitType === "campus" || recruitType === "social") {
@@ -277,26 +304,44 @@ export async function fetchAllPositions(
   opts: SearchOptions & { maxPages?: number } = {}
 ) {
   const recruitType = opts.recruitType ?? recruitTypeFromScope(opts.scope);
-  const pageSize = Math.max(1, Math.min(50, opts.pageSize ?? 30));
-  const maxPages = Math.max(1, opts.maxPages ?? 40);
+  const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, opts.pageSize ?? 30));
+  // maxPages is a per-feed cap. The old default (40) capped a --page-size 20
+  // run of the social feed (969 posts as of 2026-07-11) at 800 rows with no
+  // warning. 120 exhausts both feeds at any pageSize >= 13; anything that
+  // still stops early is flagged `truncated: true`.
+  const maxPages = Math.max(1, opts.maxPages ?? 120);
 
-  async function drain(rt: "campus" | "social"): Promise<{ ok: boolean; total: number; positions: PositionSummary[]; message: string }> {
+  async function drain(rt: "campus" | "social"): Promise<{ ok: boolean; total: number; positions: PositionSummary[]; truncated: boolean; message: string }> {
     const bucket: PositionSummary[] = [];
+    const seen = new Set<string>();
     let total = 0;
     let lastMsg = "ok";
     for (let page = 1; page <= maxPages; page++) {
       const r = await searchSingle(rt, { ...opts, page, pageSize });
       if (!r.ok) {
         lastMsg = r.message;
-        if (bucket.length === 0) return { ok: false, total: 0, positions: [], message: r.message };
-        break;
+        if (bucket.length === 0) return { ok: false, total: 0, positions: [], truncated: false, message: r.message };
+        break; // keep the partial scan; `truncated` is derived below
       }
       if (total === 0) total = r.total;
       if (!r.positions.length) break;
-      bucket.push(...r.positions);
-      if (bucket.length >= total) break;
+      // Upstream reorders results between page requests, so page N+1 can
+      // repeat rows already seen on page N (audit: 8 duplicate post_ids on a
+      // --page-size 20 scan). Dedup by post_id while accumulating, and stop
+      // once a page contributes nothing new.
+      let added = 0;
+      for (const p of r.positions) {
+        const key = p.post_id || `${rt}:${p.title}:${p.work_cities}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        bucket.push(p);
+        added += 1;
+      }
+      if (total > 0 && bucket.length >= total) break;
+      if (added === 0) break;
+      if (r.positions.length < pageSize) break; // short page = last page
     }
-    return { ok: true, total, positions: bucket, message: lastMsg };
+    return { ok: true, total, positions: bucket, truncated: bucket.length < total, message: lastMsg };
   }
 
   if (recruitType === "campus" || recruitType === "social") {
@@ -316,15 +361,32 @@ export async function fetchAllPositions(
       source: SOURCE,
       total: r.total,
       fetched: r.positions.length,
+      ...(r.truncated ? { truncated: true as const } : {}),
       positions: r.positions,
     };
   }
   const [c, s] = await Promise.all([drain("campus"), drain("social")]);
+  if (!c.ok && !s.ok) {
+    // Don't report a misleading ok:true/total:0 when both feeds errored
+    // (e.g. network blocked): 0 must mean "upstream says zero positions".
+    return {
+      ok: false as const,
+      source: SOURCE,
+      message: c.message,
+      total: 0,
+      fetched: 0,
+      positions: [] as PositionSummary[],
+    };
+  }
+  // If one feed failed outright its positions are missing, so the merged
+  // result is incomplete — surface that as truncated too.
+  const truncated = c.truncated || s.truncated || !c.ok || !s.ok;
   return {
     ok: true as const,
     source: SOURCE,
     total: (c.ok ? c.total : 0) + (s.ok ? s.total : 0),
     fetched: c.positions.length + s.positions.length,
+    ...(truncated ? { truncated: true as const } : {}),
     positions: [...c.positions, ...s.positions],
   };
 }
@@ -338,12 +400,12 @@ export async function fetchPositionDetail(postId: string) {
   if (!id) return { ok: false as const, source: SOURCE, message: "post_id is required" };
 
   for (const rt of ["campus", "social"] as const) {
-    // pageSize >= 50 triggers a silent upstream rejection (returns
-    // {totalCount: 0, content: []}). 20 is the SPA's own default and the
-    // largest size that reliably returns data. Compensate by widening
-    // maxPages from 20 → 50 to preserve ~the same scan depth.
-    const pageSize = 20;
-    const maxPages = 50;
+    // pageSize >= 50 triggers upstream rejection (success:false, 系统繁忙);
+    // re-probed 2026-07-11: 49 is the max that works, incl. deep pages (see
+    // MAX_PAGE_SIZE). Scan at 40 (comfortably below the boundary) x 40 pages
+    // = 1600 depth per feed, above the current 969-post social feed.
+    const pageSize = 40;
+    const maxPages = 40;
     for (let page = 1; page <= maxPages; page++) {
       const body: Record<string, unknown> = {
         key: "",
@@ -461,7 +523,8 @@ export async function matchResume(
     };
   }
   const keyword = terms.slice(0, 3).join(" ");
-  const list = await searchPositions({ keyword, page: 1, pageSize: 50, recruitType: "all" });
+  // NB: pageSize 50 is the upstream rejection boundary — stay at MAX_PAGE_SIZE.
+  const list = await searchPositions({ keyword, page: 1, pageSize: MAX_PAGE_SIZE, recruitType: "all" });
   if (!list.ok) {
     return { ok: false as const, source: SOURCE, message: list.message, positions: [] };
   }

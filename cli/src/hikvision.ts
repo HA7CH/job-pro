@@ -17,6 +17,10 @@ import { createAdapter } from "./liepin.js";
 
 const adapter = createAdapter({
   companyName: "海康威视",
+  // Liepin company id + exact card compName (probed 2026-07-11:
+  // https://www.liepin.com/company/1033486/).
+  compId: 1033486,
+  liepinCompName: "海康威视",
   label: "Hikvision / 海康威视",
 });
 
