@@ -55,8 +55,13 @@ export interface FeishuAdapterConfig {
    *  Treated as the adapter's historical default channel. */
   channel: string;
   /** Optional dedicated channel for `scope=social`. If absent, the factory
-   *  falls back to `channel` + `recruitment_id_list:["101"]` semantics. */
+   *  falls back to `channel` + `recruitment_id_list:["101"]` semantics.
+   *  `""` is a valid value — custom-domain portals (hr.sensetime.com) use
+   *  the empty channel for their main site. */
   socialChannel?: string;
+  /** Optional dedicated channel for `scope=campus`. If absent, the factory
+   *  falls back to `channel` + `recruitment_id_list:["201"]` semantics. */
+  campusChannel?: string;
   /** Optional dedicated channel for `scope=intern`. If absent, the factory
    *  falls back to `channel` + `recruitment_id_list:["202"]` semantics. */
   internChannel?: string;
@@ -230,16 +235,21 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
   function channelForScope(
     s: PositionScope | undefined
   ): { channel: string; recruitmentIdList?: string[] } {
+    // NOTE: `!== undefined`, not truthiness — `""` is a real channel value
+    // on custom-domain portals (hr.sensetime.com main site).
     if (s === undefined || s === "all") return { channel: cfg.channel };
     if (s === "social") {
-      if (cfg.socialChannel) return { channel: cfg.socialChannel };
+      if (cfg.socialChannel !== undefined) return { channel: cfg.socialChannel };
       return { channel: cfg.channel, recruitmentIdList: ["101"] };
     }
     if (s === "intern") {
-      if (cfg.internChannel) return { channel: cfg.internChannel };
+      if (cfg.internChannel !== undefined) return { channel: cfg.internChannel };
       return { channel: cfg.channel, recruitmentIdList: ["202"] };
     }
-    if (s === "campus") return { channel: cfg.channel, recruitmentIdList: ["201"] };
+    if (s === "campus") {
+      if (cfg.campusChannel !== undefined) return { channel: cfg.campusChannel };
+      return { channel: cfg.channel, recruitmentIdList: ["201"] };
+    }
     return { channel: cfg.channel };
   }
 
@@ -442,36 +452,47 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     const pageSize = 100;
     const maxPages = 5;
 
-    for (let page = 1; page <= maxPages; page++) {
-      const offset = (page - 1) * pageSize;
-      const payload = {
-        keyword: "",
-        limit: pageSize,
-        offset,
-        portal_type: 3,
-        portal_entrance: 1,
-        language: "zh",
-      };
-      const response = await call<RawSearchData>("/search/job/posts", payload);
-      if (!response.ok || !response.data) break;
+    // A post only exists on its own portal channel, so sweep every distinct
+    // configured channel (default first) — otherwise detail fails for any
+    // job that lives on a non-default channel (e.g. hr.sensetime.com campus
+    // jobs on "edu" while the default channel is the social main site).
+    const channels: string[] = [];
+    for (const c of [cfg.channel, cfg.socialChannel, cfg.campusChannel, cfg.internChannel]) {
+      if (c !== undefined && !channels.includes(c)) channels.push(c);
+    }
 
-      const posts = response.data.job_post_list ?? [];
-      const found = posts.find((p) => String(p.id) === id);
-      if (found) {
-        const summary = summarizePosition(found);
-        return {
-          ok: true,
-          source,
-          post_id: id,
-          title: found.title ?? "",
-          direction: found.sub_title ?? "",
-          description: found.description ?? "",
-          requirements: found.requirement ?? "",
-          work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
-          apply_url: summary.apply_url,
+    for (const channel of channels) {
+      for (let page = 1; page <= maxPages; page++) {
+        const offset = (page - 1) * pageSize;
+        const payload = {
+          keyword: "",
+          limit: pageSize,
+          offset,
+          portal_type: 3,
+          portal_entrance: 1,
+          language: "zh",
         };
+        const response = await call<RawSearchData>("/search/job/posts", payload, channel);
+        if (!response.ok || !response.data) break;
+
+        const posts = response.data.job_post_list ?? [];
+        const found = posts.find((p) => String(p.id) === id);
+        if (found) {
+          const summary = summarizePosition(found);
+          return {
+            ok: true,
+            source,
+            post_id: id,
+            title: found.title ?? "",
+            direction: found.sub_title ?? "",
+            description: found.description ?? "",
+            requirements: found.requirement ?? "",
+            work_cities: found.city_list ?? (found.city_info ? [found.city_info] : []),
+            apply_url: summary.apply_url,
+          };
+        }
+        if (posts.length < pageSize) break;
       }
-      if (posts.length < pageSize) break;
     }
 
     return {

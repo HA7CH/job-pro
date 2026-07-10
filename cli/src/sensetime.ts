@@ -1,48 +1,47 @@
 // 商汤 (SenseTime) careers adapter for `job-pro`.
 //
 // ============================================================
-// API DISCOVERY (probed 2026-05-16 via puppeteer-core network capture)
+// MIGRATION (re-probed 2026-07-11)
 //
-// hr.sensetime.com hosts a Beisen Wecruit (北森招聘云) tenant. The published
-// SPA bundles at `/SU…/pb/<channel>.html` ALWAYS return nginx 405 on
-// anonymous POST, regardless of headers; that path is GET-only at the LB.
+// hr.sensetime.com was a Beisen Wecruit (北森招聘云) tenant until mid-2026;
+// the old `/wecruit/positionInfo/listPosition/<SU…>` endpoints now 404 and
+// the SU channel pages are gone. The domain now serves a Feishu Hire
+// (飞书招聘, atsx "saas-career") portal on a custom domain — same
+// `POST /api/v1/search/job/posts` surface as *.jobs.feishu.cn, with two
+// portal channels (`portal-channel` / `website-path` headers):
 //
-// The SPA's real XHR target (uncovered by intercepting page traffic in a
-// headless Chrome instance) is on a sibling `/wecruit/...` prefix:
+//   ""     → main site   = 社招 (72 positions at probe time)
+//   "edu"  → campus site = 校招/实习 (128 positions at probe time)
 //
-//   POST https://hr.sensetime.com/wecruit/positionInfo/listPosition/<SU…>
-//        ?iSaJAx=isAjax&request_locale=zh_CN&t=<unix-ms>
+// The empty-string channel is real: the main portal sends empty
+// portal-channel headers. Campus jobs are NOT reachable from the main
+// channel (recruitment_id_list ["201"] there returns 0), hence the
+// dedicated campusChannel/internChannel below. Anonymous, no token.
+// Note: the host sits behind an Aliyun WAF that briefly 405s bursts of
+// rapid anonymous requests — back off and retry if that happens.
 //
-// Content-Type: application/x-www-form-urlencoded (NOT JSON)
-// Body:         isFrompb=true&recruitType=2&pageSize=15&currentPage=1
-//
-// Anonymous, no token, no cookie, no captcha. Probed 2026-05-16: the
-// social channel `SU60fa3bdabef57c1023fc1cbc` returns ~89 pages × 12 ≈
-// 1068 active social-hire positions across SenseTime and its subsidiaries.
-//
-// hr.sensetime.com root redirects to the social channel (302); the campus
-// SU referenced in earlier reconnaissance notes (`SU6710d7c21c240e54e1f82a1b`)
-// has been reassigned to a different tenant ("安徽新华发行集团" appears in
-// its responses), so we only wire the social channel. If SenseTime
-// rebroadcasts a campus channel later, add it to the `channels` array.
-//
-// See cli/src/wecruit.ts for the shared factory.
+// See cli/src/feishu.ts for the shared factory.
 
-import { createAdapter } from "./wecruit.js";
+import { createAdapter } from "./feishu.js";
+import type { PositionScope } from "./adapter.js";
 
 const adapter = createAdapter({
   host: "hr.sensetime.com",
   label: "SenseTime",
-  channels: [
-    {
-      channelId: "SU60fa3bdabef57c1023fc1cbc",
-      recruitType: "social",
-      pagePath: "social",
-    },
-  ],
+  channel: "",
+  socialChannel: "",
+  campusChannel: "edu",
+  internChannel: "edu",
+  applyUrlPrefix: "https://hr.sensetime.com/position",
+  supportedScopes: ["social", "campus", "intern", "all"] as const,
 });
 
-export const supportedScopes = ["social", "all"] as const;
+export const supportedScopes: ReadonlyArray<PositionScope> = [
+  "social",
+  "campus",
+  "intern",
+  "all",
+] as const;
 
 export const searchPositions = adapter.searchPositions;
 export const fetchAllPositions = adapter.fetchAllPositions;

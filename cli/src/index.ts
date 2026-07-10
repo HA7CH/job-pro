@@ -137,7 +137,7 @@ const COMPANIES: CompanyDirEntry[] = [
   { key: "lilith",          family: "Feishu",                        source: "lilithgames.jobs.feishu.cn",  label: "Lilith Games / 莉莉丝 — needs local Chrome" },
   { key: "zerooneai",       family: "Feishu",                        source: "01ai.jobs.feishu.cn",         label: "01.AI / 零一万物" },
   { key: "baichuan",        family: "Feishu",                        source: "cq6qe6bvfr6.jobs.feishu.cn",  label: "Baichuan / 百川智能" },
-  { key: "sensetime",       family: "Beisen Wecruit",                source: "hr.sensetime.com",            label: "SenseTime / 商汤" },
+  { key: "sensetime",       family: "Feishu Hire",                   source: "hr.sensetime.com",            label: "SenseTime / 商汤" },
   { key: "horizonrobotics", family: "Beisen Wecruit",                source: "wecruit.hotjob.cn",           label: "Horizon Robotics / 地平线" },
   { key: "vivo",            family: "Beisen iTalent",                source: "vivo.zhiye.com",              label: "vivo" },
   { key: "iflytek",         family: "Beisen iTalent",                source: "iflytek.zhiye.com",           label: "iFlytek / 科大讯飞" },
