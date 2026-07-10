@@ -2,12 +2,13 @@
   "manifest_version": 3,
   "name": "job-pro session bridge",
   "short_name": "job-pro",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Capture careers-site session cookies + CSRF headers for use by the job-pro CLI auto-apply.",
   "permissions": [
     "cookies",
     "storage",
     "activeTab",
+    "webRequest",
     "scripting",
     "downloads"
   ],
