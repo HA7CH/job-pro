@@ -23,7 +23,9 @@
 // For MiniMax (vrfi1sk8a0.jobs.feishu.cn / company path 379481):
 //   host    = "vrfi1sk8a0.jobs.feishu.cn"
 //   channel = "379481"            ← company PATH is the portal-channel!
-//   apply_url prefix = "https://vrfi1sk8a0.jobs.feishu.cn/379481/position"
+//   apply_url prefix is channel-specific:
+//     campus = "https://vrfi1sk8a0.jobs.feishu.cn/379481/position"
+//     social = "https://vrfi1sk8a0.jobs.feishu.cn/index/position"
 //
 // ---- PositionSummary field mapping (Feishu → canonical) ----
 //   post_id       ← String(item.id)
@@ -69,6 +71,10 @@ export interface FeishuAdapterConfig {
   label: string;
   /** URL prefix for detail pages: `${applyUrlPrefix}/${id}/detail` */
   applyUrlPrefix: string;
+  /** Optional per-channel detail URL prefixes. Use this when one Feishu
+   *  tenant exposes multiple portals and each portal only renders jobs from
+   *  its own channel. Keys are raw portal-channel values, including "". */
+  applyUrlPrefixByChannel?: Readonly<Record<string, string>>;
   /** Scopes this adapter can actually query. `undefined` = accepts all four. */
   supportedScopes?: ReadonlyArray<PositionScope>;
 }
@@ -303,7 +309,10 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
     };
   }
 
-  function summarizePosition(item: RawJobPost): PositionSummary {
+  function summarizePosition(
+    item: RawJobPost,
+    channel: string = cfg.channel
+  ): PositionSummary {
     const id = String(item.id ?? "");
     const cityList = item.city_list ?? [];
     let work_cities: string;
@@ -318,6 +327,8 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
       item.job_category?.name ??
       item.job_function?.name ??
       "";
+    const applyUrlPrefix =
+      cfg.applyUrlPrefixByChannel?.[channel] ?? cfg.applyUrlPrefix;
     return {
       post_id: id,
       title: item.title ?? "",
@@ -325,7 +336,7 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
       recruit_label: item.recruit_type?.name ?? "",
       bgs: "",
       work_cities,
-      apply_url: id ? `${cfg.applyUrlPrefix}/${encodeURIComponent(id)}/detail` : `https://${cfg.host}/${cfg.channel}/position`,
+      apply_url: id ? `${applyUrlPrefix}/${encodeURIComponent(id)}/detail` : `https://${cfg.host}/${channel}/position`,
     };
   }
 
@@ -400,7 +411,7 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
       page,
       page_size: pageSize,
       total: response.data.count ?? rows.length,
-      positions: rows.map(summarizePosition),
+      positions: rows.map((item) => summarizePosition(item, scopeTranslation.channel)),
     };
   }
 
@@ -541,7 +552,7 @@ export function createAdapter(cfg: FeishuAdapterConfig) {
         const posts = response.data.job_post_list ?? [];
         const found = posts.find((p) => String(p.id) === id);
         if (found) {
-          const summary = summarizePosition(found);
+          const summary = summarizePosition(found, channel);
           return {
             ok: true,
             source,
