@@ -1,10 +1,12 @@
 // Pure unit smoke — no network. Exercises the read-side profile loader
-// (cli/src/profile.ts) that `match` / `resume-check` / `status` depend on:
+// (cli/src/profile.ts) that `match` / `resume-check` / `status` depend on,
+// plus deterministic factory-level regressions that do not need upstream:
 //
 //   * loadProfileRaw missing-file → ok:false with the path surfaced
 //   * loadProfileRaw valid-JSON round-trip (resume_path / degree survive)
 //   * loadProfileRaw malformed-JSON → ok:false (no throw)
 //   * profilePath honors $JOB_PRO_PROFILE_PATH
+//   * Feishu multi-portal apply URLs follow the channel used for each result
 //
 // Designed to run in CI alongside `tsc` — no upstream calls, no Chrome.
 // Fast (sub-second) and deterministic.
@@ -85,6 +87,70 @@ async function main(): Promise<void> {
       bad.ok === false && /could not parse/.test(bad.message),
       bad.ok === false ? bad.message : ""
     );
+
+    // 5. Feishu multi-portal URL routing. MiniMax exposes campus on 379481
+    // and social on index; the wrong portal renders a false "position down"
+    // page even though the search API still returns the live job.
+    const originalFetch = globalThis.fetch;
+    try {
+      let detailMode = false;
+      globalThis.fetch = async (_input, init) => {
+        const channel = String((init?.headers as Record<string, string>)?.["portal-channel"] ?? "");
+        const rows =
+          detailMode && channel === "379481"
+            ? []
+            : [{
+                id: "7598036042735110446",
+                title: "Forward Deployed Engineer（前沿部署工程师）",
+                city_list: [{ name: "北京" }],
+                recruit_type: { name: "全职" },
+              }];
+        return new Response(JSON.stringify({
+          code: 0,
+          message: "ok",
+          data: { job_post_list: rows, count: rows.length },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      };
+
+      const { createAdapter } = await import("../src/feishu.js");
+      const feishu = createAdapter({
+        host: "example.jobs.feishu.cn",
+        channel: "379481",
+        socialChannel: "index",
+        label: "fixture",
+        applyUrlPrefix: "https://example.jobs.feishu.cn/379481/position",
+        applyUrlPrefixByChannel: {
+          index: "https://example.jobs.feishu.cn/index/position",
+        },
+      });
+
+      const social = await feishu.searchPositions({ scope: "social" });
+      record(
+        "Feishu social search uses social portal URL",
+        social.ok && social.positions[0]?.apply_url ===
+          "https://example.jobs.feishu.cn/index/position/7598036042735110446/detail",
+        social.ok ? social.positions[0]?.apply_url : social.message
+      );
+
+      const campus = await feishu.searchPositions({ scope: "campus" });
+      record(
+        "Feishu campus search keeps default portal URL",
+        campus.ok && campus.positions[0]?.apply_url ===
+          "https://example.jobs.feishu.cn/379481/position/7598036042735110446/detail",
+        campus.ok ? campus.positions[0]?.apply_url : campus.message
+      );
+
+      detailMode = true;
+      const detail = await feishu.fetchPositionDetail("7598036042735110446");
+      record(
+        "Feishu detail uses the channel where the post was found",
+        detail.ok && detail.apply_url ===
+          "https://example.jobs.feishu.cn/index/position/7598036042735110446/detail",
+        detail.ok ? detail.apply_url : detail.message
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

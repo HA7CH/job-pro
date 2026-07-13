@@ -28,9 +28,12 @@
 //   - Campus channel mixes 实习 and 正式 in one pool (recruitment_id_list
 //     "201"/"202" splits them); social lives on its own channel entirely.
 //
-// apply_url pattern: https://vrfi1sk8a0.jobs.feishu.cn/379481/position/<id>/detail
-// (verified 2026-07-11: the /379481/ detail page server-renders social-channel
-//  posts too, so one prefix works for every scope)
+// apply_url patterns (re-probed 2026-07-14):
+//   campus/intern → https://vrfi1sk8a0.jobs.feishu.cn/379481/position/<id>/detail
+//   social        → https://vrfi1sk8a0.jobs.feishu.cn/index/position/<id>/detail
+// Feishu returns HTTP 200 for the wrong portal too, but the rendered page says
+// “该职位已下线”. The URL must therefore follow the channel that produced the
+// job rather than relying on a single tenant-wide prefix.
 
 import { createAdapter } from "./feishu.js";
 
@@ -60,5 +63,8 @@ export const {
   socialChannel: "index",
   label: "MiniMax / MiniMax智能",
   applyUrlPrefix: "https://vrfi1sk8a0.jobs.feishu.cn/379481/position",
+  applyUrlPrefixByChannel: {
+    index: "https://vrfi1sk8a0.jobs.feishu.cn/index/position",
+  },
   supportedScopes,
 });
